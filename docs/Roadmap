@@ -1,0 +1,126 @@
+# penv build roadmap
+
+This roadmap is sequenced by **which risk each milestone retires**, not by feature count. penv's design risk is well understood and mostly settled; its two live risks are (1) whether provider portability actually holds against a real provider, and (2) whether the market wants this at all. The ordering below spends engineering effort against the non-contestable advantage first and defers everything that competes on terrain penv cannot win.
+
+Guiding rule: **do not build IDE tooling or onboarding polish before the provider story is proven.** That terrain competes directly with t3-env, where penv loses structurally. The provider adapter is where the defensible advantage lives, so it goes first among the hard problems.
+
+---
+
+## Milestone map
+
+| Milestone | Theme | Retires the risk that… | Gate to advance |
+|---|---|---|---|
+| **v0.1** | Filesystem core | penv's storage model is unworkable in practice | Import/generate round-trips a real project losslessly |
+| **v0.2** | Schema + types | typed access and validation are hollow claims | One schema drives both runtime checks and inferred types |
+| **v0.3** | Encryption + rotation | rotation semantics are hand-wavy | Both rotation modes proven; keys are provider-backed |
+| **v0.4** | Provider proof | "zero lock-in" is an unearned assertion | Vault adapter passes the same suite as filesystem |
+| **v0.5** | Second + third providers | portability was a one-off fluke | SSM and Kubernetes reuse the adapter contract unchanged |
+| **v1.0** | Stable SDK | the provider interface is not safe to build on | Public provider SDK frozen; docs and exit path complete |
+
+---
+
+## v0.1 — Filesystem core
+
+**Retires:** the risk that the many-files storage model is unworkable day to day.
+
+- Filesystem provider: read, write, list, remove against the parameter tree.
+- Filename grammar and reserved-token validation.
+- Resolution order (`local` → `<env>` → unscoped) with loud fallback surfacing.
+- `penv init`, `penv import`, `penv generate`, `penv get`, `penv set`, `penv remove`, `penv list`.
+- Runtime loader (`import { config }`) and the `process.env` compatibility path.
+- `.gitignore` automation so value files are never committed by default.
+
+**Done when:** `penv import .env` on a real 30+ variable project, then `penv generate`, produces a byte-faithful `.env` (modulo declared name overrides). If the round-trip is not lossless, nothing downstream matters.
+
+---
+
+## v0.2 — Schema and types
+
+**Retires:** the risk that "type-safe" and "validated" are claims penv cannot actually back.
+
+- Single-schema loading from `.penv/schema.ts`.
+- `penv validate` — builds the config object, checks against Zod, exits non-zero on failure.
+- TypeScript inference for the typed `import { env }` surface, including nested namespaces.
+- Schema draft generation on import — explicitly labelled as a draft for review.
+- Deterministic name transform (`path → key → ENV_VAR`) with collision detection.
+- Watch mode for local dev.
+
+**Done when:** one schema visibly drives both a failing `penv validate` and a compile-time type error from the same source, with no duplicated type declarations.
+
+---
+
+## v0.3 — Encryption and rotation
+
+**Retires:** the risk that penv's security and rotation stories are decoration rather than mechanism.
+
+- Per-parameter encryption via the `.enc` marker, validated against meta policy (not filename alone).
+- **Provider-backed keys** — OS keychain locally, KMS-derived in CI/production, never repo-adjacent. Until this ships, docs state plainly that encryption is organizational, not cryptographic.
+- Plaintext-secret detection in `penv doctor`.
+- Rotation state machine: `dual-valid` and `atomic-cutover` as distinct mechanisms.
+- Rotation meta fields including `rotatingSince` (separate clock from `lastRotated`).
+- `penv doctor` rotation checks: overdue (`now - lastRotated > rotationPolicy`) and stuck (`now - rotatingSince > stuckThreshold`, gated to `dual-valid`).
+
+**Done when:** a `dual-valid` rotation runs through `active → rotating → active` with grace-window overlap on a mock provider, `atomic-cutover` flips without a penv-layer grace window, and doctor correctly flags a stuck external rotation *without* false-positiving on atomic-cutover passwords.
+
+> Note the built-in asymmetry, documented rather than discovered: filesystem-backed environments cannot exercise true dual-valid rotation, because dual validity is a property of a live system. Local rehearsal uses the mock provider.
+
+---
+
+## v0.4 — Provider proof (the pivotal milestone)
+
+**Retires:** the single highest-risk claim in the whole project — that switching providers is a config change, not a rewrite.
+
+- Vault adapter implementing the full provider contract: read, write, list, remove, encrypted values, and provider-side rotation retention for the grace window.
+- Explicit `(env, namespace, name) → provider path` mapping driven by `providers.*.path` config.
+- `penv doctor` cross-provider drift detection against a live Vault instance — the go-to-market wedge, running for real.
+- The provider contract itself, extracted and documented as the interface the next adapters must satisfy.
+
+**Done when:** the Vault adapter passes the *same* behavioural suite the filesystem provider passes, and flipping an environment from `filesystem` to `vault` requires zero application code changes. Only after this passes may the portability claim be stated as a capability rather than a roadmap item.
+
+> This milestone gates the marketing. Portability is amber — a promise — until v0.4 turns it green.
+
+---
+
+## v0.5 — Second and third providers
+
+**Retires:** the risk that Vault worked only because the contract was quietly shaped around Vault.
+
+- AWS SSM Parameter Store adapter.
+- Kubernetes Secrets adapter.
+- Both built against the frozen-in-practice v0.4 contract, with no contract changes permitted to accommodate them. Any change forced here means the abstraction was wrong and v0.4's proof was partial.
+
+**Done when:** SSM and Kubernetes adapters satisfy the existing contract without modifying it. If the contract has to bend, that is a finding, not a footnote — it reopens v0.4.
+
+---
+
+## v1.0 — Stable SDK
+
+**Retires:** the risk that third parties cannot safely build providers on penv.
+
+- Public, versioned provider SDK — the contract frozen and documented.
+- Plugin architecture for community providers (Azure Key Vault, Google Secret Manager, Cloudflare Secrets as the first external targets).
+- Complete documentation, including the **documented exit path**: exactly what a team gets back if they leave penv, and how portable `penv.config.ts` and `schema.ts` are to plain tooling.
+- IDE integration and framework-aware onboarding — deliberately last, because this is t3-env's terrain and only worth investing in once the provider advantage is real.
+
+**Done when:** an external contributor ships a working provider against the public SDK without core changes, and a team can read a documented, honest answer to "what happens if we leave."
+
+---
+
+## Explicitly deferred
+
+Not on the critical path, and deferred on purpose:
+
+- **VS Code extension / IDE tooling.** Competes on t3-env's ground; follows the provider proof, never precedes it.
+- **Framework-aware onboarding.** Same reasoning.
+- **Broad provider matrix marketing.** No provider is claimed as supported until its adapter passes the contract suite.
+- **Team key-sharing UX and automated rotation scheduling.** Valuable, but only meaningful once provider-backed keys (v0.3) and a proven provider (v0.4) exist.
+
+---
+
+## The two risks this roadmap cannot close by itself
+
+Sequencing retires engineering risk. Two risks sit outside it and must be addressed in parallel, not by building:
+
+1. **Provider portability (amber until v0.4).** Every capability the design implies is buildable from v0.1–v0.3. Portability is the one claim that is a promise until the Vault adapter proves it. The roadmap is arranged so that promise becomes a fact as early as the hard problems allow.
+
+2. **Market demand (unmeasured).** Everything here is buildability, not demand. The failure mode is not "it doesn't work" — it is "it works beautifully and eleven people adopt it," which is invisible from inside a design or build plan. **Before v0.4 engineering begins, validate demand with real teams:** find teams who describe the local↔production seam pain unprompted and say they would change their source of truth to fix it — measured against what they have already spent making their existing glue tolerable, not against the raw pain. Five concrete yeses de-risks the market question the way the rotation prototype de-risked the rotation question. If they cannot be found, the honest move is to ship penv as a tool for its authors and let adoption be a bonus, rather than resourcing v0.4+ against an inferred market.
