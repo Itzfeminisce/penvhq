@@ -13,8 +13,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "citty";
 import { afterEach, describe, expect, it } from "vitest";
+import { openProject } from "../project.js";
 import type { ValidateIssueKind, ValidateResult } from "./validate.js";
-import { runValidate, validateCommand } from "./validate.js";
+import { loadSchema, runValidate, validateCommand } from "./validate.js";
 
 /**
  * Fixture projects live under the workspace's `node_modules` so that the
@@ -86,6 +87,47 @@ afterEach(() => {
   for (const dir of created.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+/**
+ * `PENV_ENV` is how the environment reaches the user's own `.penv/env.ts`, and
+ * it is a process global pinned across an `await`. Two loads in flight at once
+ * used to interleave on it: the second read the first's value as the one to put
+ * back, so the global survived both calls pointing at an environment nobody
+ * asked for, and every later load in the process inherited it.
+ */
+describe("two schema loads at once", () => {
+  it("leaves PENV_ENV exactly as it found it", async () => {
+    const root = makeProject({
+      schema: "databaseUrl: z.url()",
+      tree: { "database-url": "postgres://localhost/app" },
+    });
+    const project = openProject(root);
+
+    const before = process.env.PENV_ENV;
+    expect(before).toBeUndefined();
+
+    // Both in flight together — the interleave needs the overlap.
+    await Promise.all([loadSchema(project, "development"), loadSchema(project, "production")]);
+
+    expect(process.env.PENV_ENV).toBeUndefined();
+  });
+
+  it("gives each caller its own environment's schema", async () => {
+    const root = makeProject({
+      schema: "databaseUrl: z.url()",
+      tree: { "database-url": "postgres://localhost/app" },
+    });
+
+    const [development, production] = await Promise.all([
+      runValidate({ cwd: root, environment: "development" }),
+      runValidate({ cwd: root, environment: "production" }),
+    ]);
+
+    expect(development?.environment).toBe("development");
+    expect(production?.environment).toBe("production");
+    expect(process.env.PENV_ENV).toBeUndefined();
+  });
 });
 
 describe("a configuration the schema accepts", () => {

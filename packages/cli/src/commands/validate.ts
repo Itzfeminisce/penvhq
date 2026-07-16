@@ -145,6 +145,33 @@ function validationIssuesOf(cause: unknown): readonly ValidateIssue[] | undefine
 }
 
 /**
+ * Serialises the `PENV_ENV` pin in {@link loadSchema}.
+ *
+ * The environment reaches the user's module through a process global, because
+ * that is the only channel their scaffolded `load(schema)` reads. A global
+ * pinned across an `await` is not re-entrant: two overlapping loads interleave,
+ * the second captures the first's value as `previous`, and restoring it on the
+ * way out leaves the global pinned to an environment nobody asked for — every
+ * later cycle then silently validates the wrong one. The window is real because
+ * `runValidate` is exported and nothing stops a caller validating two
+ * environments at once; `watch` is safe only by accident of its single-flight.
+ *
+ * A queue rather than a fix to the channel: the global *is* the contract with
+ * the user's module, so the pin cannot go away. Only one load may hold it.
+ */
+let schemaLoads: Promise<unknown> = Promise.resolve();
+
+function exclusively<T>(work: () => Promise<T>): Promise<T> {
+  const result = schemaLoads.then(work, work);
+  // Never let a rejection break the chain for the next caller.
+  schemaLoads = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+/**
  * The one schema, read from `.penv/env.ts`.
  *
  * Only the `schema` export is read, never `env` — a command whose job is to
@@ -160,9 +187,17 @@ function validationIssuesOf(cause: unknown): readonly ValidateIssue[] | undefine
  * reported on, and a load that fails validation is unwrapped back into the
  * per-parameter issues it was built from, so the report still names parameters
  * instead of blaming the file.
+ *
+ * The pin is a process global, so only one load may hold it at a time — see
+ * {@link exclusively}. Loads queue rather than overlap.
  */
-export async function loadSchema(project: Project, environment: string): Promise<SchemaLoad> {
+export function loadSchema(project: Project, environment: string): Promise<SchemaLoad> {
   const file = pathToFileURL(`${project.penvDir}/${SCHEMA_FILE}`).href;
+  return exclusively(() => loadSchemaExclusively(file, environment));
+}
+
+/** {@link loadSchema}'s body, run only while it holds the `PENV_ENV` pin. */
+async function loadSchemaExclusively(file: string, environment: string): Promise<SchemaLoad> {
   // Resolved from the user's own file: `zod` and `penv` are their dependencies,
   // not the CLI's. `moduleCache` is off so an edited schema is the schema penv reads.
   const jiti = createJiti(file, { interopDefault: false, moduleCache: false });
