@@ -34,11 +34,11 @@ Run `pnpm typecheck && pnpm test && pnpm lint` before proposing a change as done
 
 3. **`load` must stay generic.** `load<T extends z.ZodType>(schema: T): z.infer<T>`. If it ever returns a non-inferred type, the entire type-safety story collapses to `unknown`. Keep a type-level test asserting the return type.
 
-4. **Value resolution is the `.env` cascade, flat override.** `<name>.local` > `<name>.<env>` > `<name>`, most-specific wins, no merging of values. `.local` is skipped in the `test` environment. Do not invent a different order or add value merging.
+4. **Value resolution is the `.env` cascade, flat override.** `<name>.<env>.local` > `<name>.local` > `<name>.<env>` > `<name>`, most-specific wins, no merging of values. These are the four levels Next.js and Vite already use (`.env.[mode].local` > `.env.local` > `.env.[mode]` > `.env`), one parameter at a time — matching them is the whole point, so do not drop a level or invent a different order. Both `.local` scopes are skipped in the `test` environment. Do not add value merging.
 
 5. **Meta merges shallow, base→env only.** Env block overrides base per top-level key; nested objects replace wholesale (no deep-merge); `.local` does not participate in meta. The effective meta for an env must be computable by reading exactly two objects. Do not add deep-merge.
 
-6. **`.enc` is a terminal marker, orthogonal to scope.** Grammar: `<scope>` then `.enc`, always last. `<name>.enc`, `<name>.<env>.enc`, `<name>.local.enc` are all valid. `<name>.enc.<env>` is an error. Meta is always plaintext — never `.enc` a meta file.
+6. **`.enc` is a terminal marker, orthogonal to scope.** Grammar: `<scope>` then `.enc`, always last. `<name>.enc`, `<name>.<env>.enc`, `<name>.local.enc`, `<name>.<env>.local.enc` are all valid. `<name>.enc.<env>` is an error. Within a scope, `.local` follows the environment (`<name>.production.local`), never precedes it. Meta is always plaintext — never `.enc` a meta file.
 
 7. **Rotation state never lives in value filenames.** No `.current`/`.previous` value suffixes. Current value is the value file; previous value lives in the provider during the grace window; rotation phase lives in meta. Do not change the tree's shape mid-rotation.
 

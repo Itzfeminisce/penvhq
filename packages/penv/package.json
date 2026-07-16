@@ -37,5 +37,8 @@
     "@penv/provider-filesystem": "workspace:*",
     "@penv/runtime": "workspace:*",
     "zod": "4.4.3"
+  },
+  "dependencies": {
+    "jiti": "2.7.0"
   }
 }

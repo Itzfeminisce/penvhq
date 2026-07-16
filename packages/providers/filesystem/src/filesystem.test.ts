@@ -109,6 +109,56 @@ describe("FilesystemProvider", () => {
     });
   });
 
+  describe("environment-local scope", () => {
+    it("writes the environment before local, so .enc stays terminal", async () => {
+      const provider = makeProvider();
+      const file: ValueFile = {
+        ...redisPassword,
+        scope: { kind: "environment-local", environment: "production" },
+        encrypted: true,
+      };
+
+      await provider.write(file, "ciphertext");
+
+      expect(existsSync(join(provider.root, "redis", "password.production.local.enc"))).toBe(true);
+      expect(await provider.read(file)).toBe("ciphertext");
+    });
+
+    it("keeps .production.local and .staging.local as distinct files", async () => {
+      const provider = makeProvider();
+      const forProduction: ValueFile = {
+        ...redisPassword,
+        scope: { kind: "environment-local", environment: "production" },
+      };
+      const forStaging: ValueFile = {
+        ...redisPassword,
+        scope: { kind: "environment-local", environment: "staging" },
+      };
+
+      await provider.write(forProduction, "personal-production");
+      await provider.write(forStaging, "personal-staging");
+
+      expect(await provider.read(forProduction)).toBe("personal-production");
+      expect(await provider.read(forStaging)).toBe("personal-staging");
+      expect(await provider.list()).toHaveLength(2);
+    });
+
+    it("parses a hand-written .development.local back to the scope that wrote it", async () => {
+      const provider = makeProvider();
+      mkdirSync(join(provider.root, "redis"), { recursive: true });
+      writeFileSync(join(provider.root, "redis", "password.development.local"), "mine\n", "utf8");
+
+      expect(await provider.list()).toEqual([
+        {
+          namespace: ["redis"],
+          name: "password",
+          scope: { kind: "environment-local", environment: "development" },
+          encrypted: false,
+        },
+      ]);
+    });
+  });
+
   describe("empty-directory cleanup on remove", () => {
     it("removes the namespace directory once its last parameter is gone", async () => {
       const provider = makeProvider();

@@ -9,20 +9,21 @@
   },
   "scripts": {
     "build": "pnpm -r --filter \"./packages/**\" run build",
-    "typecheck": "tsc --build --pretty",
+    "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "changeset": "changeset",
-    "release": "pnpm build && changeset publish"
+    "release": "pnpm build && changeset publish",
+    "test:artifact": "vitest run --config vitest.artifact.config.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",
     "@changesets/cli": "2.31.1",
     "@types/node": "26.1.1",
     "tsup": "8.5.1",
-    "typescript": "7.0.2",
+    "typescript": "5.9.3",
     "vitest": "4.1.10"
   }
 }

@@ -13,6 +13,7 @@ export {
   findConfigFile,
   loadConfig,
   loadConfigFrom,
+  lookupEnvironment,
   resolveEnvironment,
   validateConfig,
 } from "./config.js";
@@ -64,4 +65,4 @@ export type {
   Scope,
   ValueFile,
 } from "./types.js";
-export { META_FORMATS, RESERVED_TOKENS } from "./types.js";
+export { assertNever, META_FORMATS, RESERVED_TOKENS } from "./types.js";

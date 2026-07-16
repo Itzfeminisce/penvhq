@@ -16,7 +16,7 @@ export default defineConfig({
   },
   test: {
     include: ["packages/**/*.test.ts"],
-    exclude: ["**/node_modules/**", "**/dist/**", "**/fixtures/**"],
+    exclude: ["**/node_modules/**", "**/dist/**", "**/fixtures/**", "**/*.smoke.test.ts"],
     typecheck: {
       enabled: true,
       include: ["packages/**/*.test-d.ts"],

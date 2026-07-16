@@ -9,9 +9,9 @@
 import type { ValueFile } from "@penv/core";
 import { formatValueFile } from "@penv/core";
 import { defineCommand } from "citty";
-import { openProject, PENV_DIR, refFromKey, targetEnvironment } from "../project.js";
+import { openProject, PENV_DIR, refFromKey } from "../project.js";
 import { CHECK, formatRows, guard, type Row, WARN, write } from "../ui.js";
-import { type ScopeOptions, scopeFrom } from "./set.js";
+import { type ScopeOptions, targetScope } from "./set.js";
 
 export interface RemoveOptions extends ScopeOptions {
   readonly cwd: string;
@@ -30,11 +30,9 @@ export async function runRemove(options: RemoveOptions): Promise<RemoveResult> {
   const project = openProject(options.cwd);
   const ref = refFromKey(options.key);
 
-  if (options.environment !== undefined && options.local !== true) {
-    targetEnvironment(project, options.environment);
-  }
-
-  const scope = scopeFrom(options);
+  // The same scope selection `set` writes through, for the same reason: the file
+  // `remove` names has to be the file `set` named, byte for byte.
+  const scope = targetScope(project, options, options.key);
   // `.enc` is orthogonal to scope: the encrypted file at this scope is the same
   // parameter at the same precedence, so removing the scope removes both.
   const files: ValueFile[] = [false, true].map((encrypted) => ({
@@ -85,7 +83,10 @@ export const removeCommand = defineCommand({
   args: {
     key: { type: "positional", required: true, description: "The parameter, e.g. redis/password" },
     env: { type: "string", description: "Remove the <name>.<env> scope" },
-    local: { type: "boolean", description: "Remove the <name>.local personal override" },
+    local: {
+      type: "boolean",
+      description: "Remove the personal override: <name>.<env>.local with --env, else <name>.local",
+    },
   },
   run({ args }) {
     return guard(async () => {

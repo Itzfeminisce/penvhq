@@ -225,33 +225,26 @@ describe("load", () => {
       },
     };
 
-    it("refuses to answer a vault-declared environment from the local tree", () => {
-      // The whole point: this local file must never reach the caller for an
-      // environment the operator declared Vault-backed.
+    it("reads the tree for a vault-declared environment, because a provider is a sync target", () => {
+      // A provider is where an environment's source of truth lives, not where
+      // the runtime reads from: `penv pull` materialises the tree, and `load`
+      // reads what is on disk. So a vault-declared environment resolves through
+      // exactly the path a filesystem-declared one does — that identity is what
+      // makes changing provider a config change rather than a rewrite, and it is
+      // why `load` never inspects `providers.*.type`.
       const cwd = makeProject(
         {
           "database-url.production": "postgres://production/app",
           "redis/host": "127.0.0.1",
-          "redis/password.production": "LOCAL-FILESYSTEM-VALUE",
+          "redis/password.production": "pulled-from-vault",
         },
         VAULT_CONFIG,
       );
 
-      let thrown: unknown;
-      try {
-        load(schema, { cwd, environment: "production" });
-      } catch (error) {
-        thrown = error;
-      }
+      const env = load(schema, { cwd, environment: "production" });
 
-      expect(thrown).toBeInstanceOf(PenvError);
-      const error = thrown as PenvError;
-      expect(error.code).toBe("PROVIDER_UNSUPPORTED");
-      expect(error.message).toContain("production");
-      expect(error.message).toContain("vault");
-      expect(error.message).toContain("filesystem");
-      // Loud, not a fallback: the local value never surfaces.
-      expect(error.message).not.toContain("LOCAL-FILESYSTEM-VALUE");
+      expect(env.databaseUrl).toBe("postgres://production/app");
+      expect(env.redis.password).toBe("pulled-from-vault");
     });
 
     it("still serves a filesystem-declared environment from the same project", () => {

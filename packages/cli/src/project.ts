@@ -11,6 +11,7 @@ import type {
   Provider,
   Resolution,
   ResolutionCandidate,
+  Scope,
   ValueFile,
 } from "@penv/core";
 import {
@@ -100,28 +101,43 @@ function isEncryptedWinner(error: unknown): boolean {
 }
 
 /**
- * Any environment that is not `test`, used only to ask `candidatesFor` what the
- * `.local` scope expands to. Which files `.local` names does not vary by
- * environment — whether they are *considered* does, and that is the one thing
- * being recovered here.
+ * The personal-override scopes of the cascade, highest precedence first — both
+ * `.local` kinds, which are the scopes `test` skips (invariant 4).
+ *
+ * Named here rather than recovered from `candidatesFor` under some other
+ * environment: `<name>.<env>.local` carries the environment in the filename, so
+ * another environment's cascade no longer yields *these* files, it yields that
+ * environment's. The order mirrors the cascade because these rows are printed
+ * above the rows that were read.
  */
-const ANY_NON_TEST_ENVIRONMENT = "not-test";
+function personalOverrideScopes(environment: string): Scope[] {
+  return [{ kind: "environment-local", environment }, { kind: "local" }];
+}
+
+/** Plaintext before encrypted, matching the order the cascade considers a scope's pair. */
+function scopedPair(ref: ParameterRef, scope: Scope): ValueFile[] {
+  return [false, true].map((encrypted) => ({
+    namespace: ref.namespace,
+    name: ref.name,
+    scope,
+    encrypted,
+  }));
+}
 
 /**
  * The `.local` rows the cascade removed before it ever read anything.
  *
  * Only reached for an encrypted winner: on every other path core reports these
- * itself. The files are recovered from `candidatesFor` rather than restated, so
- * what `.local` expands to stays a single definition — invariant 4's "`.local`
- * is skipped in `test`" is the one fact stated here, and it is stated as the
- * reason the rows exist.
+ * itself. Both `.local` scopes appear — a developer whose `<name>.<env>.local`
+ * is being ignored in `test` is exactly the person running `--explain`, and a
+ * missing row is an unanswered question.
  */
 function skippedLocalCandidates(ref: ParameterRef, environment: string): ResolutionCandidate[] {
   if (environment !== TEST_ENVIRONMENT) {
     return [];
   }
-  return candidatesFor(ref, ANY_NON_TEST_ENVIRONMENT)
-    .filter((file) => file.scope.kind === "local")
+  return personalOverrideScopes(environment)
+    .flatMap((scope) => scopedPair(ref, scope))
     .map((file) => ({
       file,
       location: formatValueFile(file),

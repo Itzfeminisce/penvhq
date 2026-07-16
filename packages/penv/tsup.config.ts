@@ -8,6 +8,10 @@ import { defineConfig } from "tsup";
  * The workspace packages are bundled in rather than declared as dependencies, so
  * the CLI's weight lands in this tarball and never in a consuming app's
  * dependency graph. `zod` stays external — it is the user's own peer.
+ *
+ * `jiti` stays external because it is CommonJS: bundling it into the ESM output
+ * leaves esbuild's `__require` shim to service its `require("os")`, and that shim
+ * throws. Node resolves it as CJS natively when it is a real dependency.
  */
 export default defineConfig({
   entry: {
@@ -16,10 +20,14 @@ export default defineConfig({
     cli: "src/cli.ts",
   },
   format: ["esm", "cjs"],
-  dts: true,
+  // `noExternal` governs the JS bundle only, so the declaration bundler needs
+  // telling separately. Without `resolve`, index.d.ts re-exports from
+  // `@penv/runtime` — a package the consumer never installs — so the JS works
+  // and the types dangle.
+  dts: { resolve: [/^@penv\//] },
   clean: true,
   sourcemap: true,
   target: "node20",
-  external: ["zod"],
+  external: ["zod", "jiti"],
   noExternal: [/^@penv\//],
 });

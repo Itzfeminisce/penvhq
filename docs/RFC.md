@@ -49,11 +49,13 @@ Each subsection records a decision and *why* it was made that way, including the
 
 ### Value resolution follows the established `.env` cascade
 
-**Decision.** Values resolve by scope, most-specific first: `<name>.local` > `<name>.<env>` > `<name>`. This is flat override — a more specific scope replaces a less specific one wholesale. `.local` is skipped in the `test` environment.
+**Decision.** Values resolve by scope, most-specific first: `<name>.<env>.local` > `<name>.local` > `<name>.<env>` > `<name>`. This is flat override — a more specific scope replaces a less specific one wholesale. Both `.local` scopes are skipped in the `test` environment.
 
-**Why.** dotenv, Next.js, and Vite already converged on exactly this cascade, and developers have it in muscle memory. Inventing a different resolution order would impose a learning cost for no benefit. Adopting the known cascade means "if you understand how `.env.local` beats `.env`, you understand penv's value resolution." Skipping `.local` in test is borrowed from the same tools, which solved test-reproducibility this way already.
+**Why.** dotenv, Next.js, and Vite already converged on exactly this cascade, and developers have it in muscle memory. Inventing a different resolution order would impose a learning cost for no benefit. Adopting the known cascade means "if you understand how `.env.development.local` beats `.env.local` beats `.env.development` beats `.env`, you understand penv's value resolution." Skipping `.local` in test is borrowed from the same tools, which solved test-reproducibility this way already.
 
-**Rejected.** A penv-specific precedence scheme, and any form of value *merging*. Values are opaque; there is nothing to merge, and merging opaque values would be a novelty with no precedent and no upside.
+**On keeping all four levels.** An earlier draft of this RFC claimed the ecosystem cascade while specifying only three levels — it dropped `.env.[mode].local`, the environment-scoped personal override. That was not a simplification, it was a mistake, and a self-refuting one: the entire argument for adopting the cascade is that developers already know it, which a subset does not deliver. It surfaced the first time penv was pointed at an ordinary Next.js project, whose `.env.development.local` had nowhere in the tree to go. `import` papered over the gap by flattening the file to unscoped defaults — which then served *every* environment, so a value scoped to one developer's development machine became the shared fallback for production. Three levels do not just lose expressiveness; they silently widen scope, which is the failure penv exists to delete. All four levels are kept.
+
+**Rejected.** A penv-specific precedence scheme, and any form of value *merging*. Values are opaque; there is nothing to merge, and merging opaque values would be a novelty with no precedent and no upside. Also rejected: mapping `.env.[mode].local` onto `.local` or onto `.[mode]` on import — both silently change a value's scope, and the second promotes a personal override into a shared environment value.
 
 ### Meta merges hierarchically and shallowly
 
@@ -92,6 +94,22 @@ Each subsection records a decision and *why* it was made that way, including the
 **Why.** The type must come from the user's schema, but a published package cannot know the user's schema. Three mechanisms were weighed. Module augmentation (`declare module "penv"`) works but hides a coupling the reader cannot see at the callsite. Codegenerating a `.d.ts` from the schema was rejected outright: a generated type is a *second representation* that can drift from the schema, which is precisely the disease penv treats — using `z.infer` directly means the schema is the only representation and the type cannot disagree with it. The chosen mechanism — a generic `load` applied to a schema the user imports from their own project — is honest at the callsite (the import path points at the file the type comes from), requires no augmentation, and involves no codegen. `penv init` scaffolds `env.ts` once and never regenerates it; it is the user's file. The alias is generated, the file is not.
 
 **A note on why the type is trustworthy.** `z.infer` is a compile-time promise. It is made true by `load` validating the loaded values against the same schema at runtime and throwing on mismatch. Inference and validation from one schema is what makes "type-safe" a guarantee rather than an aspiration. `load` is eager — importing `env` loads and validates immediately — so invalid configuration fails at startup, not at first use; type-only consumers import `schema` instead to avoid triggering the load.
+
+### A provider is a sync target, not a runtime source
+
+**Decision.** A provider is where an environment's values *live*; it is not what the application reads at boot. `penv pull` materialises the parameter tree from the provider, and the runtime reads that tree. Resolution is always local, always synchronous, and never branches on provider type.
+
+**Why.** Four commitments looked individually reasonable and turned out to be jointly impossible: `load` returns `z.infer<T>` (not a promise); `env.ts` says `export const env = load(schema)` at module top level; changing provider is a config change with no application edit; and Vault, SSM, and Kubernetes are network reads. A synchronous `load` cannot make a network call, so on the obvious reading — the provider is what the runtime reads — the `@env` path simply cannot be backed by Vault, and the provider-portability claim would be false for the very surface penv leads with.
+
+Separating the two halves dissolves the conflict rather than trading one commitment away. Reading stays local, so `load` stays synchronous and `z.infer<T>` survives untouched. Nothing in the resolution path branches on provider type, so there is genuinely no code path Vault takes that the filesystem does not — which makes "changing provider is a config change" *stronger* than it would be under an async runtime read, where at minimum `env.ts` would have to change.
+
+It is also how these systems are actually operated. The Vault Agent Injector writes files; the Secrets Store CSI driver mounts them; External Secrets Operator syncs into Kubernetes Secrets. In-process Vault reads on the hot path are rare. The tree penv already stores is the same shape those tools produce, so `penv pull` is penv's own version of a step most deploys already have — not a workaround for a limitation.
+
+Two pieces of the design already assumed this reading before it was written down, which is part of why it is the right one: `penv set` *pushes* to the provider, and `doctor` reports *drift* between local configuration and a live provider. Both describe penv as a sync engine. Drift is only a coherent idea if there are two copies.
+
+**Accepted cost, stated not hidden.** A deploy must pull before it starts, or mount a tree something else has materialised. penv does not fetch secrets at import time. A tree that was never pulled resolves to whatever is on disk, which is exactly what `doctor`'s drift check exists to catch.
+
+**Rejected.** *Top-level await* (`export const env = await load(schema)`) preserves the inferred type, since `await` unwraps the promise — but it makes `env.ts` an async module, which infects every importer, breaks CJS `require`, and reintroduces the ordering hazard that makes `import "penv/config"` compat-only rather than blessed. It also is not zero-edit: adopting Vault would mean hand-editing the one file penv scaffolds once and never regenerates. *A `prefetch()` cache* filled before first read is the same ordering hazard wearing a different hat. *An async `loadAsync` sibling* creates two resolution paths that will drift apart — the disease penv exists to treat, practised in penv's own code.
 
 ### Migration is one-directional
 

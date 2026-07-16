@@ -21,7 +21,7 @@ import type {
   Scope,
   ValueFile,
 } from "./types.js";
-import { META_FORMATS, RESERVED_TOKENS } from "./types.js";
+import { assertNever, META_FORMATS, RESERVED_TOKENS } from "./types.js";
 
 /** A segment penv can plausibly read as an environment name, for the better error. */
 const BARE_WORD = /^[A-Za-z][A-Za-z0-9_-]*$/;
@@ -77,8 +77,14 @@ export function formatValueFile(file: ValueFile): string {
     case "local":
       out += `.${LOCAL}`;
       break;
+    case "environment-local":
+      // The environment precedes `local`, mirroring `.env.[mode].local`.
+      out += `.${file.scope.environment}.${LOCAL}`;
+      break;
     case "unscoped":
       break;
+    default:
+      assertNever(file.scope, "scope");
   }
   if (file.encrypted) {
     out += `.${ENC}`;
@@ -95,6 +101,97 @@ function declaredList(config: PenvConfig): string {
     return "no environments are declared in penv.config.ts";
   }
   return `declared environments are ${config.environments.map((e) => `\`${e}\``).join(", ")}`;
+}
+
+/**
+ * Resolves one dot segment to a declared environment. A segment is an
+ * environment only because `config.environments` declares it (invariant 10), so
+ * an undeclared segment is an error at every scope position — including the one
+ * before `local`.
+ */
+function asEnvironment(segment: string, relativePath: string, config: PenvConfig): string {
+  if (config.environments.includes(segment)) {
+    return segment;
+  }
+  if (BARE_WORD.test(segment)) {
+    throw new UnknownEnvironmentError(segment, config.environments);
+  }
+  throw new FilenameGrammarError(
+    relativePath,
+    `\`${segment}\` is not an environment, \`local\`, \`enc\`, or a meta format`,
+    `A dot segment must be one of those — ${declaredList(config)}. Rename the file.`,
+  );
+}
+
+/**
+ * Reads the scope segments that sit between the name and the terminal `.enc`.
+ *
+ * `<env>.local` is the only two-segment scope, and the order is fixed: the
+ * environment always precedes `local`, mirroring `.env.[mode].local`. The
+ * reverse spelling is an error, never a synonym — accepting both would make one
+ * cascade level addressable by two names.
+ */
+function parseScope(
+  rest: readonly string[],
+  ref: ParameterRef,
+  encrypted: boolean,
+  relativePath: string,
+  config: PenvConfig,
+): Scope {
+  const tooManyScopeSegments = (): FilenameGrammarError =>
+    new FilenameGrammarError(
+      relativePath,
+      `\`${rest.join("` and `")}\` are ${rest.length} scope segments`,
+      "A value file carries exactly one scope: `<name>`, `<name>.<env>`, `<name>.local`, or " +
+        "`<name>.<env>.local`. Write one file per environment.",
+    );
+
+  if (rest.length > 2) {
+    throw tooManyScopeSegments();
+  }
+
+  const first = rest[0];
+  const second = rest[1];
+
+  if (first === undefined) {
+    return { kind: "unscoped" };
+  }
+
+  if (second === undefined) {
+    if (first === LOCAL) {
+      return { kind: LOCAL };
+    }
+    return { kind: "environment", environment: asEnvironment(first, relativePath, config) };
+  }
+
+  if (second === LOCAL) {
+    if (first === LOCAL) {
+      throw tooManyScopeSegments();
+    }
+    return { kind: "environment-local", environment: asEnvironment(first, relativePath, config) };
+  }
+
+  if (first === LOCAL) {
+    // Validate before complaining about order: an ordering error asserts `second`
+    // IS the environment, which is only true once it is declared (invariant 10).
+    // An undeclared segment is diagnosed here exactly as the mirror order
+    // diagnoses it, and the rename below can only name a filename penv accepts.
+    const environment = asEnvironment(second, relativePath, config);
+    const corrected = formatValueFile({
+      ...ref,
+      scope: { kind: "environment-local", environment },
+      encrypted,
+    });
+    throw new FilenameGrammarError(
+      relativePath,
+      "`local` precedes the environment segment",
+      `The environment segment always precedes \`local\` — \`<name>.<env>.local\` mirrors ` +
+        `\`.env.[mode].local\` — so \`${refPath(ref)}.${LOCAL}.${second}\` is an error, not a ` +
+        `synonym. Rename it to \`${corrected}\`.`,
+    );
+  }
+
+  throw tooManyScopeSegments();
 }
 
 /**
@@ -211,32 +308,7 @@ export function parseFilename(relativePath: string, config: PenvConfig): ParsedF
     return meta;
   }
 
-  if (rest.length > 1) {
-    throw new FilenameGrammarError(
-      relativePath,
-      `\`${rest.join("` and `")}\` are ${rest.length} scope segments`,
-      "A value file carries exactly one scope: `<name>`, `<name>.<env>`, or `<name>.local`. " +
-        "Write one file per environment.",
-    );
-  }
-
-  const scopeSegment = rest[0];
-  let scope: Scope;
-  if (scopeSegment === undefined) {
-    scope = { kind: "unscoped" };
-  } else if (scopeSegment === LOCAL) {
-    scope = { kind: LOCAL };
-  } else if (config.environments.includes(scopeSegment)) {
-    scope = { kind: "environment", environment: scopeSegment };
-  } else if (BARE_WORD.test(scopeSegment)) {
-    throw new UnknownEnvironmentError(scopeSegment, config.environments);
-  } else {
-    throw new FilenameGrammarError(
-      relativePath,
-      `\`${scopeSegment}\` is not an environment, \`local\`, \`enc\`, or a meta format`,
-      `A dot segment must be one of those — ${declaredList(config)}. Rename the file.`,
-    );
-  }
+  const scope = parseScope(rest, ref, encrypted, relativePath, config);
 
   return { kind: "value", namespace, name, scope, encrypted };
 }

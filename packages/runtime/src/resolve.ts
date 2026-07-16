@@ -7,6 +7,15 @@
  * filesystem provider's synchronous reads instead. It does not restate the
  * precedence rule: `candidatesFor` owns the order and everything here only
  * walks the list it returns, so the two paths cannot drift apart.
+ *
+ * The runtime reads the local tree for every environment, whatever provider
+ * that environment declares, and this is the design rather than a limitation.
+ * A provider is where an environment's source of truth *lives*, not where the
+ * runtime reads from: `penv pull` materialises the tree from the provider, and
+ * the runtime then reads what is on disk. So `load` never inspects
+ * `providers.*.type` — a Vault-backed environment resolves through exactly the
+ * code path a filesystem-backed one does, which is what makes changing provider
+ * a configuration change rather than an application rewrite.
  */
 
 import { dirname, resolve as resolvePath } from "node:path";
@@ -70,33 +79,13 @@ function encryptedWinner(ref: ParameterRef, environment: string, file: ValueFile
   );
 }
 
-function unsupportedProvider(environment: string, type: string): PenvError {
-  return new PenvError(
-    "PROVIDER_UNSUPPORTED",
-    `Environment ${environment} declares the \`${type}\` provider, which penv cannot read here`,
-    `This release implements the filesystem provider only, and \`load\` is synchronous, so a ` +
-      `network-backed provider cannot serve the \`@env\` runtime path. Reading the local ` +
-      `.penv/ tree instead would silently serve ${environment} from your working copy. Set ` +
-      `\`providers.${environment}.type\` to \`"filesystem"\`, or supply the values for ` +
-      `${environment} another way.`,
-  );
-}
-
 /**
  * Loads the config, settles the environment, and resolves every parameter the
- * provider holds — the work `load` and `penv/config` both start from.
+ * local tree holds — the work `load` and `penv/config` both start from.
  */
 export function resolveSync(cwd: string, environment?: string): ResolvedConfig {
   const { config, file } = loadConfig(cwd);
   const target = resolveEnvironment(config, environment);
-
-  // A declared provider penv cannot honour must be loud. Falling through to the
-  // filesystem would answer a Vault-backed environment out of the working tree
-  // with no error, warning, or doctor finding — invariant 13.
-  const declared = config.providers[target];
-  if (declared !== undefined && declared.type !== "filesystem") {
-    throw unsupportedProvider(target, declared.type);
-  }
 
   const provider = createFilesystemProvider({
     root: resolvePath(dirname(file), ".penv"),

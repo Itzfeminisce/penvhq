@@ -58,6 +58,36 @@ describe("parseFilename — valid value forms", () => {
     } satisfies ParsedFile);
   });
 
+  it("parses a personal override for one environment", () => {
+    expect(parseFilename("app/jwt-secret.development.local", config)).toEqual({
+      kind: "value",
+      namespace: ["app"],
+      name: "jwt-secret",
+      scope: { kind: "environment-local", environment: "development" },
+      encrypted: false,
+    } satisfies ParsedFile);
+  });
+
+  it("parses a personal override for one environment in a nested namespace", () => {
+    expect(parseFilename("redis/password.production.local", config)).toEqual({
+      kind: "value",
+      namespace: ["redis"],
+      name: "password",
+      scope: { kind: "environment-local", environment: "production" },
+      encrypted: false,
+    } satisfies ParsedFile);
+  });
+
+  it("parses a terminal .enc after an environment-scoped personal override", () => {
+    expect(parseFilename("services/billing/stripe/secret-key.staging.local.enc", config)).toEqual({
+      kind: "value",
+      namespace: ["services", "billing", "stripe"],
+      name: "secret-key",
+      scope: { kind: "environment-local", environment: "staging" },
+      encrypted: true,
+    } satisfies ParsedFile);
+  });
+
   it("parses a terminal .enc on the unscoped default", () => {
     expect(parseFilename("redis/password.enc", config)).toEqual({
       kind: "value",
@@ -184,6 +214,125 @@ describe("parseFilename — errors", () => {
     );
   });
 
+  it("rejects more than two scope segments even when the last is `local`", () => {
+    expect(() => parseFilename("redis/password.production.staging.local", config)).toThrow(
+      FilenameGrammarError,
+    );
+    expect(() => parseFilename("redis/password.production.staging.local.enc", config)).toThrow(
+      FilenameGrammarError,
+    );
+    expect(() => parseFilename("redis/password.local.local", config)).toThrow(FilenameGrammarError);
+  });
+
+  // The reverse spelling is an error, not a synonym: one cascade level must not
+  // be addressable by two names.
+  it("rejects `.local` before the environment and names the correct spelling", () => {
+    expect(() => parseFilename("redis/password.local.production", config)).toThrow(
+      FilenameGrammarError,
+    );
+    expect(() => parseFilename("redis/password.local.production", config)).toThrow(
+      /environment segment always precedes `local`/,
+    );
+    expect(() => parseFilename("redis/password.local.production", config)).toThrow(
+      /redis\/password\.production\.local/,
+    );
+  });
+
+  it("names the correct encrypted spelling when `.local` precedes the environment", () => {
+    expect(() => parseFilename("redis/password.local.production.enc", config)).toThrow(
+      /redis\/password\.production\.local\.enc/,
+    );
+  });
+
+  // A remedy that names a filename penv also rejects is not a remedy. The
+  // ordering complaint is only true once the segment could genuinely be an
+  // environment, so the suggestion must itself parse.
+  it.each(["redis/password.local.production", "redis/password.local.production.enc"])(
+    "suggests a filename that parses, for `%s`",
+    (path) => {
+      let thrown: unknown;
+      try {
+        parseFilename(path, config);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(FilenameGrammarError);
+      const suggestion = /Rename it to `([^`]+)`/.exec(
+        (thrown as FilenameGrammarError).message,
+      )?.[1];
+      expect(suggestion).toBeDefined();
+      expect(() => parseFilename(suggestion as string, config)).not.toThrow();
+      expect(parseFilename(suggestion as string, config)).toMatchObject({
+        kind: "value",
+        scope: { kind: "environment-local", environment: "production" },
+      });
+    },
+  );
+
+  // The segment before `local` is an environment only because it was declared
+  // (invariant 10). `.local.<undeclared>` is the mirror of `.<undeclared>.local`
+  // and must be diagnosed identically — an ordering complaint would assert the
+  // segment IS the environment, which is false.
+  it("rejects `.local` before an undeclared environment with the environment error", () => {
+    expect(() => parseFilename("redis/password.local.prod", config)).toThrow(
+      UnknownEnvironmentError,
+    );
+    expect(() => parseFilename("redis/password.local.prod", config)).toThrow(
+      /Environment prod is not declared/,
+    );
+    expect(() => parseFilename("redis/password.local.qa.enc", config)).toThrow(
+      UnknownEnvironmentError,
+    );
+    expect(() => parseFilename("redis/password.local.qa.enc", config)).toThrow(/`production`/);
+  });
+
+  it("rejects `.local` before an implausible segment with the grammar error", () => {
+    expect(() => parseFilename("redis/password.local.3x!", config)).toThrow(FilenameGrammarError);
+    expect(() => parseFilename("redis/password.local.3x!", config)).toThrow(
+      /`3x!` is not an environment/,
+    );
+    expect(() => parseFilename("redis/password.local.3x!.enc", config)).toThrow(
+      /`3x!` is not an environment/,
+    );
+  });
+
+  // Neither order may claim an undeclared segment is the environment.
+  it("diagnoses `.local.<segment>` exactly as its mirror `.<segment>.local` does", () => {
+    for (const segment of ["prod", "3x!"]) {
+      const diagnose = (path: string): string => {
+        try {
+          parseFilename(path, config);
+        } catch (error) {
+          return (error as PenvError).code;
+        }
+        throw new Error(`${path} parsed but should not have`);
+      };
+      expect(diagnose(`redis/password.local.${segment}`)).toBe(
+        diagnose(`redis/password.${segment}.local`),
+      );
+    }
+  });
+
+  it("rejects an undeclared environment before `.local` with the environment error", () => {
+    expect(() => parseFilename("redis/password.prod.local", config)).toThrow(
+      UnknownEnvironmentError,
+    );
+    expect(() => parseFilename("redis/password.prod.local", config)).toThrow(
+      /Environment prod is not declared/,
+    );
+    expect(() => parseFilename("redis/password.qa.local.enc", config)).toThrow(/`production`/);
+  });
+
+  it("rejects an implausible segment before `.local` with the grammar error", () => {
+    expect(() => parseFilename("redis/password.3x!.local", config)).toThrow(FilenameGrammarError);
+  });
+
+  it("never infers the environment of a `<env>.local` file from its namespace folder", () => {
+    expect(() => parseFilename("production/redis/password.prod.local", config)).toThrow(
+      UnknownEnvironmentError,
+    );
+  });
+
   it("rejects an undeclared environment segment with the environment error", () => {
     expect(() => parseFilename("redis/password.prod", config)).toThrow(UnknownEnvironmentError);
     expect(() => parseFilename("redis/password.prod", config)).toThrow(
@@ -295,6 +444,25 @@ describe("parseFilename — reserved parameter names", () => {
     });
   });
 
+  it("keeps `<name>.production.local` valid as a scope segment", () => {
+    expect(parseFilename("redis/password.production.local", config)).toMatchObject({
+      scope: { kind: "environment-local", environment: "production" },
+      encrypted: false,
+    });
+  });
+
+  // The negative case for the `<env>.local` position: the environment is an
+  // environment because it was declared, never because it precedes `local`.
+  it("rejects `<name>.production.local` when production is not a declared environment", () => {
+    const bare: PenvConfig = { environments: ["development"], providers: {} };
+    expect(() => parseFilename("redis/password.production.local", bare)).toThrow(
+      UnknownEnvironmentError,
+    );
+    expect(parseFilename("redis/password.development.local", bare)).toMatchObject({
+      scope: { kind: "environment-local", environment: "development" },
+    });
+  });
+
   it("does not reserve an environment name as a namespace folder", () => {
     expect(parseFilename("production/password.staging", config)).toMatchObject({
       namespace: ["production"],
@@ -361,6 +529,26 @@ describe("formatValueFile / formatMetaFile / parameterId", () => {
         encrypted: false,
       }),
     ).toBe("app/jwt-secret.local");
+    expect(
+      formatValueFile({
+        namespace: ["app"],
+        name: "jwt-secret",
+        scope: { kind: "environment-local", environment: "development" },
+        encrypted: false,
+      }),
+    ).toBe("app/jwt-secret.development.local");
+  });
+
+  // The environment precedes `local`, and `.enc` stays terminal behind both.
+  it("formats an environment-scoped personal override with .enc last", () => {
+    expect(
+      formatValueFile({
+        namespace: ["redis"],
+        name: "password",
+        scope: { kind: "environment-local", environment: "production" },
+        encrypted: true,
+      }),
+    ).toBe("redis/password.production.local.enc");
   });
 
   it("formats meta files", () => {
@@ -387,6 +575,8 @@ describe("round trip", () => {
     { kind: "environment", environment: "development" },
     { kind: "environment", environment: "production" },
     { kind: "local" },
+    { kind: "environment-local", environment: "development" },
+    { kind: "environment-local", environment: "production" },
   ];
   const namespaces: string[][] = [[], ["redis"], ["services", "billing", "stripe"]];
 

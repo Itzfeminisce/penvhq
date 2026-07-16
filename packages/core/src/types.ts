@@ -21,14 +21,28 @@ export const META_FORMATS = ["json", "toml", "yml"] as const;
 export type MetaFormat = (typeof META_FORMATS)[number];
 
 /**
- * The scope of a value file — its position in the resolution cascade.
+ * The scope of a value file — its position in the resolution cascade. The four
+ * kinds mirror `.env`, `.env.[mode]`, `.env.local`, and `.env.[mode].local`, in
+ * that correspondence and no other.
+ *
  * `.enc` is deliberately not part of this union: encryption is a storage
  * property, orthogonal to precedence.
  */
 export type Scope =
   | { readonly kind: "unscoped" }
   | { readonly kind: "environment"; readonly environment: string }
-  | { readonly kind: "local" };
+  | { readonly kind: "local" }
+  /** A personal override that applies to one environment only. */
+  | { readonly kind: "environment-local"; readonly environment: string };
+
+/**
+ * Fails to compile when a union gains a member some `switch` does not handle.
+ * Scope is the union this matters most for: without it, a new scope silently
+ * formats and resolves as though it were the unscoped default.
+ */
+export function assertNever(value: never, context: string): never {
+  throw new Error(`Unhandled ${context}: ${JSON.stringify(value)}`);
+}
 
 /** Identifies one parameter, independent of scope. `redis/password`. */
 export interface ParameterRef {

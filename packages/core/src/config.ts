@@ -19,11 +19,19 @@ import type { PenvConfig } from "./types.js";
 const CONFIG_FILENAMES = ["penv.config.ts", "penv.config.js", "penv.config.mjs"] as const;
 
 /**
+ * jiti resolves a module's relative imports against the parent it is given, so
+ * the parent must be the config file itself — a `penv.config.ts` importing
+ * `./shared.ts` means a file next to the config, not one next to penv. Passing
+ * the config file also keeps this module free of `import.meta`, which does not
+ * exist in the CJS build.
+ *
  * `interopDefault` is off so a missing default export stays observable rather
  * than being papered over with the module namespace. `moduleCache` is off so an
  * edited config on the next call is the config penv reads.
  */
-const jiti = createJiti(import.meta.url, { interopDefault: false, moduleCache: false });
+function jitiFor(file: string) {
+  return createJiti(file, { interopDefault: false, moduleCache: false });
+}
 
 const EXPORT_REMEDY =
   "penv reads its configuration from the default export: " +
@@ -78,7 +86,7 @@ export function loadConfigFrom(file: string): PenvConfig {
 
   let loaded: unknown;
   try {
-    loaded = jiti(path);
+    loaded = jitiFor(path)(path);
   } catch (cause) {
     throw new ConfigError(
       `${path} could not be loaded: ${causeMessage(cause)}`,
@@ -299,11 +307,34 @@ function fromProcessEnv(name: "PENV_ENV" | "NODE_ENV"): string | undefined {
   return trimmed.length === 0 ? undefined : trimmed;
 }
 
-/** The environment to act on: explicit, then `PENV_ENV`, then `NODE_ENV`. */
-export function resolveEnvironment(config: PenvConfig, explicit?: string): string {
+/**
+ * The environment to act on if one is set: explicit, then `PENV_ENV`, then `NODE_ENV`.
+ *
+ * Absence is an answer here, not a failure. An unscoped `penv import .env` needs
+ * no environment to know the scope it writes at — only the validation that
+ * follows needs one — so a command that can proceed without one asks here and
+ * says what it skipped. A command that genuinely cannot proceed calls
+ * `resolveEnvironment`, which turns the same absence into an error.
+ *
+ * A declared name is still the only answer: an environment that is set but
+ * undeclared throws from here exactly as it does from `resolveEnvironment`.
+ */
+export function lookupEnvironment(config: PenvConfig, explicit?: string): string | undefined {
   const requested =
     explicit !== undefined && explicit.trim().length > 0 ? explicit.trim() : undefined;
   const environment = requested ?? fromProcessEnv("PENV_ENV") ?? fromProcessEnv("NODE_ENV");
+
+  if (environment === undefined) {
+    return undefined;
+  }
+
+  assertEnvironment(environment, config);
+  return environment;
+}
+
+/** The environment to act on: explicit, then `PENV_ENV`, then `NODE_ENV`. */
+export function resolveEnvironment(config: PenvConfig, explicit?: string): string {
+  const environment = lookupEnvironment(config, explicit);
 
   if (environment === undefined) {
     throw new ConfigError(
@@ -313,6 +344,5 @@ export function resolveEnvironment(config: PenvConfig, explicit?: string): strin
     );
   }
 
-  assertEnvironment(environment, config);
   return environment;
 }

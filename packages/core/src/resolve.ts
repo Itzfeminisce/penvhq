@@ -1,5 +1,12 @@
 /**
- * The value-resolution cascade: `<name>.local` > `<name>.<env>` > `<name>`.
+ * The value-resolution cascade:
+ * `<name>.<env>.local` > `<name>.local` > `<name>.<env>` > `<name>`.
+ *
+ * These are the four levels Next.js and Vite already use (`.env.[mode].local` >
+ * `.env.local` > `.env.[mode]` > `.env`), one parameter at a time. Dropping a
+ * level does not simplify the cascade, it widens scope: with no
+ * `<name>.<env>.local`, a personal override for one environment has nowhere to
+ * go but the unscoped default, which then serves every environment.
  *
  * Flat override — a value file holds one opaque value, so a more specific scope
  * replaces a less specific one wholesale. Values are never merged.
@@ -16,44 +23,75 @@ import type {
   Provider,
   Resolution,
   ResolutionCandidate,
+  Scope,
   ValueFile,
 } from "./types.js";
+import { assertNever } from "./types.js";
 
 /** The environment whose runs must be reproducible, so personal overrides never apply. */
 const TEST_ENVIRONMENT = "test";
 
-function scopedPair(ref: ParameterRef, scope: ValueFile["scope"]): ValueFile[] {
+/** The cascade for one environment, highest precedence first. The only order. */
+function cascadeScopes(environment: string): Scope[] {
+  return [
+    { kind: "environment-local", environment },
+    { kind: "local" },
+    { kind: "environment", environment },
+    { kind: "unscoped" },
+  ];
+}
+
+/**
+ * True for the scopes that are one developer's machine rather than the team's —
+ * both `.local` scopes. Every scope this admits is skipped in `test`.
+ */
+function isPersonalOverride(scope: Scope): boolean {
+  switch (scope.kind) {
+    case "environment-local":
+    case "local":
+      return true;
+    case "environment":
+    case "unscoped":
+      return false;
+    default:
+      return assertNever(scope, "scope");
+  }
+}
+
+/** Plaintext before encrypted, so a scope's pair has a deterministic order. */
+function scopedPair(ref: ParameterRef, scope: Scope): ValueFile[] {
   return [
     { namespace: ref.namespace, name: ref.name, scope, encrypted: false },
     { namespace: ref.namespace, name: ref.name, scope, encrypted: true },
   ];
 }
 
-function localCandidates(ref: ParameterRef): ValueFile[] {
-  return scopedPair(ref, { kind: "local" });
+/**
+ * Every value file that could supply this parameter, highest precedence first.
+ * Both `.local` scopes are omitted entirely in `test`.
+ */
+export function candidatesFor(ref: ParameterRef, environment: string): ValueFile[] {
+  const skipPersonal = environment === TEST_ENVIRONMENT;
+  return cascadeScopes(environment)
+    .filter((scope) => !(skipPersonal && isPersonalOverride(scope)))
+    .flatMap((scope) => scopedPair(ref, scope));
 }
 
 /**
- * Every value file that could supply this parameter, highest precedence first.
- * The `.local` scope is omitted entirely in `test`.
+ * The `.local` scopes `test` skips, reported as present:false rather than
+ * omitted: fallback and skipping are never silent, so `--explain` must say a
+ * personal override was passed over instead of leaving no trace of it.
  */
-export function candidatesFor(ref: ParameterRef, environment: string): ValueFile[] {
-  const files: ValueFile[] = [];
-  if (environment !== TEST_ENVIRONMENT) {
-    files.push(...localCandidates(ref));
-  }
-  files.push(...scopedPair(ref, { kind: "environment", environment }));
-  files.push(...scopedPair(ref, { kind: "unscoped" }));
-  return files;
-}
-
-function skippedLocalCandidates(ref: ParameterRef): ResolutionCandidate[] {
-  return localCandidates(ref).map((file) => ({
-    file,
-    location: formatValueFile(file),
-    present: false,
-    skippedReason: "local-skipped-in-test",
-  }));
+function skippedPersonalCandidates(ref: ParameterRef, environment: string): ResolutionCandidate[] {
+  return cascadeScopes(environment)
+    .filter(isPersonalOverride)
+    .flatMap((scope) => scopedPair(ref, scope))
+    .map((file) => ({
+      file,
+      location: formatValueFile(file),
+      present: false,
+      skippedReason: "local-skipped-in-test",
+    }));
 }
 
 export async function resolveParameter(
@@ -65,7 +103,7 @@ export async function resolveParameter(
   const values = await Promise.all(files.map((file) => provider.read(file)));
 
   const candidates: ResolutionCandidate[] =
-    environment === TEST_ENVIRONMENT ? skippedLocalCandidates(ref) : [];
+    environment === TEST_ENVIRONMENT ? skippedPersonalCandidates(ref, environment) : [];
 
   let winner: ResolutionCandidate | undefined;
   let value: string | undefined;
@@ -104,6 +142,8 @@ export async function resolveParameter(
     value,
     winner,
     candidates,
+    // Only the unscoped default is a fallback. A winner at either `.local`
+    // scope is a deliberate override, not a value leaking out of its scope.
     viaUnscopedFallback: winner !== undefined && winner.file.scope.kind === "unscoped",
   };
 }

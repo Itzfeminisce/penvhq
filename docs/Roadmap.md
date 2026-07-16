@@ -18,6 +18,7 @@ Everything below describes the *finished* design (see docs). This table says whe
 | Provider-backed keys (OS keychain / KMS) | Yes | v0.3 |
 | Rotation (`dual-valid`, `atomic-cutover`), `doctor` rotation checks | Yes | v0.3 |
 | Vault provider + cross-provider `doctor` drift | Yes | v0.4 |
+| `penv pull` — materialising the tree from a provider | Yes | v0.4 (with the first real provider) |
 | AWS SSM, Kubernetes providers | Yes | v0.5 |
 | Provider portability as a *proven* claim | Yes | v0.4 (Vault), generalized v0.5 |
 | `.json` meta format | Yes | v0.2 |
@@ -36,7 +37,7 @@ Everything below describes the *finished* design (see docs). This table says whe
 
 - Filesystem provider: read, write, list, remove against the parameter tree.
 - Filename grammar and reserved-token validation. **`.enc` is a reserved terminal token from day one** — a parameter named `enc` errors immediately — even though encrypt/decrypt is not implemented until v0.3. This avoids a later migration.
-- Value cascade: `<name>.local` > `<name>.<env>` > `<name>`, flat override, `.local` skipped in `test`, loud fallback surfacing.
+- Value cascade: `<name>.<env>.local` > `<name>.local` > `<name>.<env>` > `<name>`, flat override, both `.local` levels skipped in `test`, loud fallback surfacing.
 - `penv init`, `import`, `generate`, `get`, `set`, `remove`, `list`.
 - Runtime loader and the `process.env` compatibility path.
 - `.gitignore` automation.
@@ -54,6 +55,7 @@ Everything below describes the *finished* design (see docs). This table says whe
 - Deterministic name transform with collision detection.
 - Schema draft generation on import, labelled as a draft.
 - Watch mode.
+- **Schema↔tree drift reporting.** `watch` and `doctor` name the distance between `.penv/env.ts` and the parameter tree in both directions: declared with no value for this environment (with the `penv set` line to paste), and present in the tree but undeclared. Reporting only — nothing here writes or deletes a value file. The drift is the signal `validate` exists to raise; the report makes it legible without closing it.
 
 **Gate to advance:** one schema visibly drives both a failing `penv validate` and a compile-time type error from the same source, with no duplicated type declarations.
 
@@ -116,6 +118,12 @@ Everything below describes the *finished* design (see docs). This table says whe
 - **VS Code extension / IDE tooling** — competes on t3-env's ground; follows the provider proof, never precedes it.
 - **Broad provider matrix** — no provider is claimed as supported until its adapter passes the contract suite.
 - **Multi-format meta** — real cost (multiple parsers, mixed-format checks, more reserved tokens) for no v0.1–v1.0 value; `.json` first, others pluggable later.
+- **Materialising value files from `.penv/env.ts`** — watching the schema and writing a parameter file whenever a parameter is declared. Rejected, not postponed; the v0.2 drift report above is the answer to the itch behind it. Three reasons, in order of weight:
+  1. **A declaration has no value.** Auto-creation must invent one, and every candidate resolves: an empty file is the value `""`, a placeholder is `"TODO"`. Either turns a loud "required parameter has no value for production" into a silent value reaching runtime — the exact failure penv exists to delete, reintroduced to save a `penv set`.
+  2. **It deletes its own signal.** `env.ts` declares what must exist, the tree holds what does, and the gap between them is what `validate` and `doctor` report. Fill the gap by construction and `validate` can never fail.
+  3. **Symmetry makes it destructive.** Files appearing on declaration implies files vanishing on undeclaration, and a rename is a delete plus a create — renaming `databaseUrl` to `dbUrl` would delete a real secret. No heuristic separates a half-typed name from a genuinely new one; they are byte-identical to a watcher, and a debounce loses to anyone who pauses mid-word. That rests a destructive operation on a guess that is wrong precisely when it is expensive.
+
+  If the manual step still grates once the drift report exists, the ceiling is an explicit `penv sync` that prompts per parameter, creates only on a human keystroke, and never deletes — worst case an orphan, which `doctor` already catches. `penv set` stays the only writer of a value; one writer is what makes the tree auditable.
 
 ## The two risks this roadmap cannot close by itself
 

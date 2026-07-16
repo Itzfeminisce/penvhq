@@ -5,7 +5,8 @@
  * resolves", and only one of them means the value was written for production.
  */
 
-import { variableName } from "@penv/core";
+import type { Scope } from "@penv/core";
+import { assertNever, variableName } from "@penv/core";
 import { defineCommand } from "citty";
 import { describeAll, openProject, PENV_DIR, targetEnvironment } from "../project.js";
 import { columns, guard, write } from "../ui.js";
@@ -19,7 +20,7 @@ export interface ListEntry {
   readonly parameter: string;
   /** The generated `.env` variable, so the two names are legible side by side. */
   readonly variable: string;
-  /** `local`, an environment name, `default`, or `absent`. */
+  /** `<env>.local`, `local`, an environment name, `default`, or `absent`. */
   readonly scope: string;
   /** The winning value file relative to `.penv/`, or `undefined` when nothing wins. */
   readonly location: string | undefined;
@@ -30,6 +31,27 @@ export interface ListEntry {
 export interface ListResult {
   readonly environment: string;
   readonly parameters: readonly ListEntry[];
+}
+
+/**
+ * The cascade level a winning scope names, spelled as its filename suffix so the
+ * column reads back as the file on disk. Each of the four levels is distinct:
+ * `production.local` and `local` are different files with different reach, and a
+ * column that called both `local` would hide which one won.
+ */
+function scopeLabel(scope: Scope): string {
+  switch (scope.kind) {
+    case "environment":
+      return scope.environment;
+    case "local":
+      return "local";
+    case "environment-local":
+      return `${scope.environment}.local`;
+    case "unscoped":
+      return "default";
+    default:
+      return assertNever(scope, "scope");
+  }
 }
 
 export async function runList(options: ListOptions): Promise<ListResult> {
@@ -43,14 +65,7 @@ export async function runList(options: ListOptions): Promise<ListResult> {
     parameters.push({
       parameter: resolution.parameter,
       variable: variableName(resolution.ref, project.config),
-      scope:
-        scope === undefined
-          ? "absent"
-          : scope.kind === "environment"
-            ? scope.environment
-            : scope.kind === "local"
-              ? "local"
-              : "default",
+      scope: scope === undefined ? "absent" : scopeLabel(scope),
       location: winner?.location,
       encrypted: winner?.file.encrypted === true,
       viaUnscopedFallback: resolution.viaUnscopedFallback,

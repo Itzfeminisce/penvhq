@@ -156,10 +156,13 @@ Each value file holds exactly one value. Each parameter has at most one meta fil
 Value files use the same precedence convention you already know from `.env.local` / `.env.production` / `.env`, expressed one parameter at a time:
 
 ```
-<namespace>/<name>              value — unscoped default
-<namespace>/<name>.<env>        value — environment-specific
-<namespace>/<name>.local        value — personal override (gitignored)
+<namespace>/<name>                    value — unscoped default
+<namespace>/<name>.<env>              value — environment-specific
+<namespace>/<name>.local              value — personal override (gitignored)
+<namespace>/<name>.<env>.local        value — personal override for one environment (gitignored)
 ```
+
+The scope segments read in the same order as the dotenv filenames they mirror: `<name>.production.local` is `.env.production.local`. The environment always precedes `local` — `<name>.local.production` is an error, not a synonym.
 
 Any value file may be encrypted by appending `.enc` as the terminal marker, at any scope:
 
@@ -167,9 +170,10 @@ Any value file may be encrypted by appending `.enc` as the terminal marker, at a
 <namespace>/<name>.enc
 <namespace>/<name>.<env>.enc
 <namespace>/<name>.local.enc
+<namespace>/<name>.<env>.local.enc
 ```
 
-`.enc` is always last; the scope segment always precedes it. `<name>.enc.production` is an error, not a synonym. Meta files are always plaintext and are never encrypted.
+`.enc` is always last; the scope segments always precede it. `<name>.enc.production` is an error, not a synonym. Meta files are always plaintext and are never encrypted.
 
 Meta files carry one supported extension per parameter:
 
@@ -186,14 +190,17 @@ Filenames are split on `.`, so every declared environment name plus `enc`, `json
 penv resolves each parameter using the same precedence order frameworks like Next.js and Vite use for `.env` files, applied per parameter. Highest precedence first:
 
 ```
-<name>.local        personal override — your machine only, gitignored
+<name>.<env>.local  personal override, for one environment only — gitignored
+<name>.local        personal override, every environment — gitignored
 <name>.<env>        the environment-specific value
 <name>              the unscoped default
 ```
 
+These are the four levels you already know, one parameter at a time: they are `.env.[mode].local`, `.env.local`, `.env.[mode]`, and `.env` respectively. If you understand why `.env.development.local` beats `.env.local` beats `.env.development` beats `.env`, you understand penv's value resolution — that correspondence is the point, so penv keeps all four rather than a subset.
+
 Most-specific scope wins. This is flat override, not merging — a value file holds one opaque value, and a more specific scope *replaces* a less specific one wholesale. `.enc` is orthogonal: it describes how a value is stored, not its precedence, so an encrypted value competes for precedence exactly as its plaintext equivalent would.
 
-**`.local` is skipped in the `test` environment**, so tests are reproducible and never pick up a developer's personal overrides — matching the convention frameworks already use.
+**Both `.local` scopes are skipped in the `test` environment**, so tests are reproducible and never pick up a developer's personal overrides — matching the convention frameworks already use.
 
 **Fallback is never silent.** Any parameter resolving via the unscoped default for a real environment is reported by `penv doctor`, so a production value quietly coming from a shared default cannot hide. Ask penv which file wins at any time:
 
@@ -313,6 +320,30 @@ staging: { type: "vault", path: "secret/staging" }
 
 penv maps its record `(production, redis, password)` onto the provider's path (for Vault, `secret/production/redis/password`) using the `path` you declare. The mapping is explicit rather than inferred, so what penv sends where is always legible. The `env.stripe.secretKey` line in your code is identical whether that value came from a local file, Vault, or SSM.
 
+### A provider is where the source of truth lives, not where the runtime reads
+
+This is the load-bearing distinction, and everything else about providers follows from it.
+
+A provider is the system of record for an environment's values. It is not something your application talks to at boot. `penv pull` materialises the parameter tree from the provider, and the runtime reads that tree:
+
+```
+vault:secret/production/redis/password
+        │
+        │  penv pull          ← penv talks to the provider
+        ▼
+.penv/redis/password.production
+        │
+        │  import { env } from "@env"    ← your app talks to the tree
+        ▼
+env.redis.password
+```
+
+The two halves are deliberately separate. Reading is always local, always synchronous, and identical for every provider — which is precisely what makes `load` able to return `z.infer<T>` rather than a promise, and what makes changing provider a configuration change rather than an application rewrite. Nothing in the resolution path branches on provider type, so there is no code path that Vault takes and the filesystem does not.
+
+This is also how these providers are consumed in practice: the Vault Agent Injector writes files, the Secrets Store CSI driver mounts them, and External Secrets Operator syncs into Kubernetes Secrets. penv's tree is the same shape those tools already produce. `penv pull` is penv's own version of that step, for deploys that do not already have one.
+
+The consequence, stated rather than hidden: a deploy must pull before it starts, or mount a tree something else has already materialised. penv does not fetch secrets for you at import time, and a tree that was never pulled resolves to whatever is on disk — which is what `penv doctor`'s drift check is for.
+
 Supported providers: Filesystem, HashiCorp Vault, AWS SSM Parameter Store, Kubernetes Secrets, Azure Key Vault, Google Secret Manager, Cloudflare Secrets. All satisfy one provider contract; the filesystem provider is the reference implementation of that contract.
 
 ## Encryption
@@ -403,8 +434,9 @@ Every warning names the parameter and the concrete problem. The full `.penv/` tr
 | Command | Purpose |
 |---|---|
 | `penv init` | Initialize a project (`.penv/`, `env.ts`, config, `@env` alias, gitignore). |
-| `penv import <file>` | Import an existing dotenv file; it becomes the source of truth. |
+| `penv import <file>` | Import an existing dotenv file; it becomes the source of truth. The filename names the scope the values are written at (`.env.production` → `<name>.production`); `--env` names it for a file that doesn't, and contradicting the filename is an error. |
 | `penv generate` | Write a standard `.env` artifact for deploy targets. |
+| `penv pull` | Materialise the parameter tree for an environment from its provider. Supports `--env`. |
 | `penv get <key>` | Read a parameter. Supports `--env` and `--explain`. |
 | `penv set <key>` | Update a parameter and push to the active provider. |
 | `penv remove <key>` | Delete a parameter. |

@@ -138,6 +138,73 @@ describe("describeResolution with an encrypted winner", () => {
     expect(local?.skippedReason).toBe("local-skipped-in-test");
     expect(resolution.winner?.location).toBe("api/key.enc");
   });
+
+  /**
+   * Both `.local` scopes are skipped in `test`, so both must leave a row on this
+   * path too — the walk here is separate from core's and can drop rows on its own.
+   */
+  it("reports the skipped <env>.local candidate as well", async () => {
+    const root = makeProject({ "api/key.test.local": "mine-in-test", "api/key.enc": "ciphertext" });
+
+    const resolution = await describeResolution(API_KEY, "test", providerFor(root));
+
+    const local = resolution.candidates.find((c) => c.location === "api/key.test.local");
+    expect(local?.skippedReason).toBe("local-skipped-in-test");
+  });
+
+  /**
+   * The skipped rows name the environment being explained. They cannot be
+   * recovered from another environment's cascade any more: `<name>.<env>.local`
+   * carries the environment in the filename, so a stand-in environment would
+   * print a file that cannot exist.
+   */
+  it("names the skipped rows with the environment being resolved", async () => {
+    const root = makeProject({ "api/key.enc": "ciphertext" });
+
+    const resolution = await describeResolution(API_KEY, "test", providerFor(root));
+
+    expect(resolution.candidates.map((c) => c.location)).toContain("api/key.test.local");
+    expect(resolution.candidates.every((c) => !c.location.includes("not-test"))).toBe(true);
+  });
+});
+
+describe("describeResolution across all four levels", () => {
+  /** Dropping a level widens scope; the order is the whole contract. */
+  it("prefers <env>.local over .local over <env> over the unscoped default", async () => {
+    const tree: Record<string, string> = {
+      "api/key.production.local": "mine-in-prod",
+      "api/key.local": "mine",
+      "api/key.production": "shared-prod",
+      "api/key": "fallback",
+    };
+    const expected = ["api/key.production.local", "api/key.local", "api/key.production", "api/key"];
+
+    for (const [index, winner] of expected.entries()) {
+      const root = makeProject(Object.fromEntries(Object.entries(tree).slice(index)));
+
+      const resolution = await describeResolution(API_KEY, "production", providerFor(root));
+
+      expect(resolution.winner?.location).toBe(winner);
+      expect(resolution.value).toBe(tree[winner]);
+    }
+  });
+
+  /** Only the unscoped default is a fallback; a `.local` winner is a deliberate override. */
+  it("does not call an <env>.local winner an unscoped fallback", async () => {
+    const root = makeProject({ "api/key.production.local": "mine-in-prod" });
+
+    const resolution = await describeResolution(API_KEY, "production", providerFor(root));
+
+    expect(resolution.viaUnscopedFallback).toBe(false);
+  });
+
+  it("still calls an unscoped winner a fallback", async () => {
+    const root = makeProject({ "api/key": "fallback" });
+
+    const resolution = await describeResolution(API_KEY, "production", providerFor(root));
+
+    expect(resolution.viaUnscopedFallback).toBe(true);
+  });
 });
 
 describe("penv get --explain --env test", () => {
