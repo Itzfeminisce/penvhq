@@ -25,6 +25,8 @@ import { createJiti } from "jiti";
 import type { z } from "zod";
 import type { Project } from "../project.js";
 import { openProject, refsFrom, targetEnvironment } from "../project.js";
+import type { DriftReport } from "../schema.js";
+import { computeDrift, EMPTY_DRIFT } from "../schema.js";
 import { CHECK, formatRows, guard, type Row, WARN, write } from "../ui.js";
 import { SCHEMA_FILE } from "./init.js";
 
@@ -43,6 +45,14 @@ export interface ValidateResult {
   readonly environment: string;
   readonly parameters: number;
   readonly issues: readonly ValidateIssue[];
+  /**
+   * The distance between `.penv/env.ts` and the tree, carried for the callers
+   * that report it (`watch`). Never folded into `ok` and never rendered by
+   * `renderValidate`: drift is a report, and CI's verdict must not move because
+   * a parameter the schema tolerates is absent. Empty when the schema did not
+   * load, since there is nothing to measure against.
+   */
+  readonly drift: DriftReport;
 }
 
 export interface ValidateOptions {
@@ -270,6 +280,7 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
       environment,
       parameters: 0,
       issues: [issueFrom(error, SCHEMA_PATH)],
+      drift: EMPTY_DRIFT,
     };
   }
 
@@ -284,13 +295,20 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
   const { schema, issues: schemaIssues } = await loadSchema(project, environment);
   issues.push(...schemaIssues);
 
+  let drift: DriftReport = EMPTY_DRIFT;
+
   if (schema !== undefined) {
+    const resolutions = await resolveAll(environment, project.provider);
     const object: Record<string, unknown> = {};
-    for (const resolution of await resolveAll(environment, project.provider)) {
+    for (const resolution of resolutions) {
       if (resolution.value !== undefined) {
         place(object, accessPath(resolution.ref), resolution.value);
       }
     }
+    // Measured from the same resolutions the verdict below is reached on, so the
+    // report can never describe a tree the verdict did not read.
+    drift = computeDrift({ schema, resolutions, config: project.config, environment });
+
     const result = schema.safeParse(object);
     if (!result.success) {
       for (const problem of result.error.issues) {
@@ -304,7 +322,7 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
     }
   }
 
-  return { ok: issues.length === 0, environment, parameters: refs.length, issues };
+  return { ok: issues.length === 0, environment, parameters: refs.length, issues, drift };
 }
 
 export function renderValidate(result: ValidateResult): string[] {

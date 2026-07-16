@@ -44,6 +44,7 @@ export {
   accessPath,
   checkNameCollisions,
   defaultVariableName,
+  refFromAccessPath,
   refFromVariable,
   roundTripsCleanly,
   variableName,

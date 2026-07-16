@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ValidateResult } from "./validate.js";
 import type { WatchHandle } from "./watch.js";
-import { runWatch } from "./watch.js";
+import { renderDrift, runWatch } from "./watch.js";
 
 /**
  * Fixture projects live under the workspace's `node_modules` so that the
@@ -298,5 +298,106 @@ describe("watch mode", () => {
     created.push(root);
 
     expect(() => runWatch({ cwd: root, environment: "production" })).toThrow(/penv\.config\.ts/);
+  });
+});
+
+/**
+ * The drift report is what `watch` prints that `validate` does not. It is the
+ * reason to have `watch` open while editing `.penv/env.ts`: the loop names the
+ * distance the edit just opened, in both directions.
+ */
+describe("drift", () => {
+  it("names a parameter the schema declares and the tree has no value for", async () => {
+    const root = makeProject({ schema: "databaseUrl: z.string()" });
+
+    const { results } = watching(root);
+    await until(() => results.length >= 1);
+
+    const drift = results[0]?.drift;
+    expect(drift?.declared.map((item) => item.subject)).toEqual(["database-url"]);
+    expect(drift?.declared[0]?.remedy).toBe("penv set database-url --env production");
+  });
+
+  it("names a value the tree holds that the schema does not declare", async () => {
+    const root = makeProject({ schema: "", tree: { "legacy-api-key": "abc123" } });
+
+    const { results } = watching(root);
+    await until(() => results.length >= 1);
+
+    expect(results[0]?.drift.undeclared.map((item) => item.variable)).toEqual(["LEGACY_API_KEY"]);
+  });
+
+  it("reports no drift when the schema and the tree agree", async () => {
+    const root = makeProject({
+      schema: "databaseUrl: z.string()",
+      tree: { "database-url.production": "postgres://localhost/app" },
+    });
+
+    const { results } = watching(root);
+    await until(() => results.length >= 1);
+
+    expect(results[0]?.drift).toEqual({ declared: [], undeclared: [] });
+  });
+
+  /** The loop is the point: an edit to the schema moves the distance it reports. */
+  it("closes the drift when the value it names is written", async () => {
+    const root = makeProject({ schema: "databaseUrl: z.string()" });
+
+    const { results } = watching(root);
+    await until(() => results.length >= 1);
+    expect(results[0]?.drift.declared).toHaveLength(1);
+
+    writeFileSync(
+      join(root, ".penv", "database-url.production"),
+      "postgres://localhost/app",
+      "utf8",
+    );
+
+    await until(
+      () => results.length >= 2 && results[results.length - 1]?.drift.declared.length === 0,
+    );
+  });
+
+  /** Drift is reported, never enforced. The verdict stays `validate`'s alone. */
+  it("does not decide the verdict", async () => {
+    const root = makeProject({
+      schema: "databaseUrl: z.string().optional()",
+      tree: { "legacy-api-key": "abc123" },
+    });
+
+    const { results } = watching(root);
+    await until(() => results.length >= 1);
+
+    expect(results[0]?.drift.undeclared).toHaveLength(1);
+    expect(results[0]?.ok).toBe(true);
+  });
+});
+
+describe("renderDrift", () => {
+  it("prints nothing at all when there is no drift", () => {
+    expect(renderDrift({ declared: [], undeclared: [] }, "production")).toEqual([]);
+  });
+
+  it("prints both directions and the paste block", () => {
+    const text = renderDrift(
+      {
+        declared: [
+          {
+            subject: "database-url",
+            ref: { namespace: [], name: "database-url" },
+            remedy: "penv set database-url --env production",
+            detail: "declared in .penv/env.ts, no value for production",
+          },
+        ],
+        undeclared: [{ ref: { namespace: [], name: "legacy" }, variable: "LEGACY_API_KEY" }],
+      },
+      "production",
+    ).join("\n");
+
+    expect(text).toContain("database-url");
+    expect(text).toContain("Declared, no value");
+    expect(text).toContain("LEGACY_API_KEY");
+    expect(text).toContain("Unused parameter");
+    expect(text).toContain("penv set database-url --env production");
   });
 });

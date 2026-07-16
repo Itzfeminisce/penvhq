@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { PenvError } from "@penv/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openProject, resolveSync } from "../project.js";
+import { EMPTY_DRIFT } from "../schema.js";
 import type { ImportReport } from "./import.js";
 import { importDotenv, renderImport } from "./import.js";
 import type { ValidateResult } from "./validate.js";
@@ -615,6 +616,7 @@ describe("an env.ts the import kept", () => {
     environment: "development",
     parameters: 2,
     issues: [],
+    drift: EMPTY_DRIFT,
   };
 
   /**

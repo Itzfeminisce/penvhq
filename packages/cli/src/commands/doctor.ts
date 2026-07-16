@@ -6,6 +6,12 @@
  * - **missing** — meta marks a parameter required for this environment and it
  *   resolves to nothing. Requiredness per environment is meta policy, not a
  *   second schema (invariant 1).
+ * - **declared** — the schema declares a parameter the tree has no value for.
+ *   The other half of the same distance `unused` measures, and a different
+ *   question from `missing`: this one is asked of the schema and answered for
+ *   every declared key, including one with no file anywhere — which no
+ *   tree-driven check can see, because a parameter with no file has no meta
+ *   either. It reports, and never writes: see `../schema.ts`.
  * - **weak** — the schema declares a minimum length the value does not meet.
  * - **unused** — a value file exists that the schema has no key for.
  * - **unscoped-fallback** — a real environment resolving via the unscoped
@@ -18,11 +24,13 @@
  * Warnings are reported; failures are reported and exit non-zero.
  */
 
-import type { Meta, PenvConfig, Resolution } from "@penv/core";
-import { accessPath, isRequired, isSecret, variableName } from "@penv/core";
+import type { Meta, Resolution } from "@penv/core";
+import { accessPath, isRequired, isSecret } from "@penv/core";
 import { defineCommand } from "citty";
 import type { z } from "zod";
 import { describeAll, openProject, targetEnvironment } from "../project.js";
+import type { DriftReport } from "../schema.js";
+import { computeDrift, lookup, minLengthOf } from "../schema.js";
 import { CHECK, formatRows, guard, type Row, WARN, write } from "../ui.js";
 import { loadSchema } from "./validate.js";
 
@@ -31,6 +39,7 @@ export type DoctorSeverity = "pass" | "warning" | "failure";
 export type DoctorCheck =
   | "schema"
   | "missing"
+  | "declared"
   | "weak"
   | "unused"
   | "unscoped-fallback"
@@ -43,6 +52,8 @@ export interface DoctorFinding {
   readonly label: string;
   readonly subject?: string;
   readonly detail?: string;
+  /** A line the reader can act on — the `penv set` to paste, where there is one. */
+  readonly remedy?: string;
 }
 
 export interface DoctorReport {
@@ -55,80 +66,6 @@ export interface DoctorReport {
 export interface DoctorOptions {
   readonly cwd: string;
   readonly environment?: string;
-}
-
-/*
- * Schema introspection.
- *
- * Every helper answers "I cannot tell" rather than guessing. A check that fires
- * on a field it does not understand is worse than a check that stays quiet: the
- * report is only worth reading if every line in it is true.
- */
-
-function defOf(node: unknown): Record<string, unknown> | undefined {
-  if (typeof node !== "object" || node === null) {
-    return undefined;
-  }
-  const def = (node as { def?: unknown }).def;
-  return typeof def === "object" && def !== null ? (def as Record<string, unknown>) : undefined;
-}
-
-function typeOf(node: unknown): string | undefined {
-  const type = defOf(node)?.type;
-  return typeof type === "string" ? type : undefined;
-}
-
-/** Peels `.optional()`, `.default()`, `.nullable()` — wrappers, not shapes. */
-function unwrap(node: unknown): unknown {
-  let current = node;
-  for (let depth = 0; depth < 8; depth += 1) {
-    const inner = defOf(current)?.innerType;
-    if (inner === undefined) {
-      return current;
-    }
-    current = inner;
-  }
-  return current;
-}
-
-function shapeOf(node: unknown): Record<string, unknown> | undefined {
-  if (typeOf(node) !== "object") {
-    return undefined;
-  }
-  const shape = (node as { shape?: unknown }).shape;
-  return typeof shape === "object" && shape !== null
-    ? (shape as Record<string, unknown>)
-    : undefined;
-}
-
-type Lookup =
-  | { readonly kind: "found"; readonly node: unknown }
-  | { readonly kind: "absent" }
-  /** The schema is not introspectable this far down. Every check skips it. */
-  | { readonly kind: "unknown" };
-
-function lookup(root: z.ZodType, path: readonly string[]): Lookup {
-  let node: unknown = unwrap(root);
-  for (const key of path) {
-    const shape = shapeOf(node);
-    if (shape === undefined) {
-      return { kind: "unknown" };
-    }
-    if (!Object.hasOwn(shape, key)) {
-      return { kind: "absent" };
-    }
-    node = unwrap(shape[key]);
-  }
-  return { kind: "found", node };
-}
-
-/** The declared minimum length, when the field is a string that declares one. */
-function minLengthOf(node: unknown): number | undefined {
-  if (typeOf(node) !== "string") {
-    return undefined;
-  }
-  const min = (node as { minLength?: unknown }).minLength;
-  return typeof min === "number" ? min : undefined;
 }
 
 interface Subject {
@@ -175,14 +112,26 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     })),
   );
 
-  findings.push(...missingFindings(subjects, environment));
+  const missing = missingFindings(subjects, environment);
+  findings.push(...missing);
   // A check that could not run says so. Printing nothing where a check belongs
   // reads as "nothing found", which is the one thing a report must never imply.
   if (schema === undefined) {
-    findings.push(skipped("weak", "Secret strength"), skipped("unused", "Schema coverage"));
+    findings.push(
+      skipped("declared", "Schema coverage"),
+      skipped("weak", "Secret strength"),
+      skipped("unused", "Value coverage"),
+    );
   } else {
+    const drift = computeDrift({
+      schema,
+      resolutions: subjects.map(({ resolution }) => resolution),
+      config: project.config,
+      environment,
+    });
+    findings.push(...declaredFindings(drift, missing, environment));
     findings.push(...weakFindings(subjects, schema));
-    findings.push(...unusedFindings(subjects, schema, project.config));
+    findings.push(...unusedFindings(drift));
   }
   findings.push(...fallbackFindings(subjects, environment));
   findings.push(...plaintextSecretFindings(subjects, environment));
@@ -211,6 +160,7 @@ function missingFindings(subjects: readonly Subject[], environment: string): Doc
       label: "Missing parameter",
       subject: resolution.parameter,
       detail: `required for ${environment}, absent`,
+      remedy: `penv set ${[...resolution.ref.namespace, resolution.ref.name].join("/")} --env ${environment}`,
     }));
 
   if (findings.length > 0) {
@@ -225,6 +175,48 @@ function missingFindings(subjects: readonly Subject[], environment: string): Doc
         required.length === 0
           ? `none required for ${environment}`
           : `${required.length} required for ${environment}, all present`,
+    },
+  ];
+}
+
+/**
+ * Schema → tree: declared, with no value for this environment.
+ *
+ * A warning, not a failure. The schema decides whether an absent value is fatal
+ * and `penv validate` is where that verdict is reached; saying it twice, in two
+ * voices, would make this report the second authority the design does not have.
+ *
+ * Parameters the `missing` check already named are dropped rather than repeated:
+ * that line is the same absence with meta's stronger verdict on it, and it now
+ * carries the same paste line. One absence, one line.
+ */
+function declaredFindings(
+  drift: DriftReport,
+  missing: readonly DoctorFinding[],
+  environment: string,
+): DoctorFinding[] {
+  const reported = new Set(missing.filter((f) => f.severity !== "pass").map((f) => f.subject));
+
+  const findings: DoctorFinding[] = drift.declared
+    .filter((item) => !reported.has(item.subject))
+    .map((item) => ({
+      check: "declared",
+      severity: "warning",
+      label: "Declared, no value",
+      subject: item.subject,
+      detail: item.detail,
+      remedy: item.remedy,
+    }));
+
+  if (findings.length > 0) {
+    return findings;
+  }
+  return [
+    {
+      check: "declared",
+      severity: "pass",
+      label: "Schema coverage",
+      subject: `every parameter .penv/env.ts requires has a value for ${environment}`,
     },
   ];
 }
@@ -277,24 +269,15 @@ function weakFindings(subjects: readonly Subject[], schema: z.ZodType): DoctorFi
   ];
 }
 
-function unusedFindings(
-  subjects: readonly Subject[],
-  schema: z.ZodType,
-  config: PenvConfig,
-): DoctorFinding[] {
-  const findings: DoctorFinding[] = [];
-  for (const { resolution } of subjects) {
-    if (lookup(schema, accessPath(resolution.ref)).kind !== "absent") {
-      continue;
-    }
-    findings.push({
-      check: "unused",
-      severity: "warning",
-      label: "Unused parameter",
-      subject: variableName(resolution.ref, config),
-      detail: "present, not in schema",
-    });
-  }
+/** Tree → schema: a value the application has no declared way to read. */
+function unusedFindings(drift: DriftReport): DoctorFinding[] {
+  const findings: DoctorFinding[] = drift.undeclared.map((item) => ({
+    check: "unused",
+    severity: "warning",
+    label: "Unused parameter",
+    subject: item.variable,
+    detail: "present, not in schema",
+  }));
 
   if (findings.length > 0) {
     return findings;
@@ -303,7 +286,7 @@ function unusedFindings(
     {
       check: "unused",
       severity: "pass",
-      label: "Schema coverage",
+      label: "Value coverage",
       subject: "every value file has a schema key",
     },
   ];
@@ -378,7 +361,23 @@ export function renderDoctor(report: DoctorReport): string[] {
     ...(finding.subject === undefined ? {} : { subject: finding.subject }),
     ...(finding.detail === undefined ? {} : { detail: finding.detail }),
   }));
-  return formatRows(rows);
+
+  const lines = formatRows(rows);
+  // Below the table rather than beside it: these are lines to paste, and a line
+  // to paste has to survive being selected without a report's columns coming
+  // with it. Deduped, because two parameters can share a remedy.
+  const remedies = [
+    ...new Set(
+      report.findings
+        .filter((finding) => finding.severity !== "pass")
+        .map((finding) => finding.remedy)
+        .filter((remedy): remedy is string => remedy !== undefined),
+    ),
+  ];
+  for (const remedy of remedies) {
+    lines.push(`  ${remedy}`);
+  }
+  return lines;
 }
 
 export const doctorCommand = defineCommand({

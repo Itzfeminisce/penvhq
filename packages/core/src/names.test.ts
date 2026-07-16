@@ -3,6 +3,7 @@ import {
   accessPath,
   checkNameCollisions,
   defaultVariableName,
+  refFromAccessPath,
   refFromVariable,
   roundTripsCleanly,
   variableName,
@@ -80,6 +81,46 @@ describe("refFromVariable", () => {
       const ref: ParameterRef = { namespace: [], name };
       expect(refFromVariable(defaultVariableName(ref))).toEqual(ref);
     }
+  });
+});
+
+describe("refFromAccessPath", () => {
+  /** Unlike a flat `.env` variable, a schema key arrives with its structure. */
+  it("reads the namespace the path carries", () => {
+    expect(refFromAccessPath(["redis", "password"])).toEqual(redisPassword);
+    expect(refFromAccessPath(["app", "jwtSecret"])).toEqual(appJwtSecret);
+    expect(refFromAccessPath(["databaseUrl"])).toEqual(databaseUrl);
+  });
+
+  it("inverts accessPath for every name the transform produces", () => {
+    const refs: ParameterRef[] = [
+      databaseUrl,
+      appJwtSecret,
+      redisPassword,
+      { namespace: [], name: "port" },
+      { namespace: [], name: "my-long-name" },
+      { namespace: ["third-party"], name: "api-key" },
+    ];
+    for (const ref of refs) {
+      expect(refFromAccessPath(accessPath(ref))).toEqual(ref);
+    }
+  });
+
+  /**
+   * The transform's image is not every string. `apiURL` kebabs to `api-url`,
+   * which camels back to `apiUrl` — a different key — so no value file reaches
+   * it. Answering `undefined` is what stops a caller inventing a `penv set` line
+   * that writes a file the schema would still not see.
+   */
+  it("refuses a key outside the transform's image rather than guessing", () => {
+    expect(refFromAccessPath(["apiURL"])).toBeUndefined();
+    expect(refFromAccessPath(["APIKey"])).toBeUndefined();
+    expect(refFromAccessPath(["redis", "passWORD"])).toBeUndefined();
+  });
+
+  it("refuses a path that names nothing", () => {
+    expect(refFromAccessPath([])).toBeUndefined();
+    expect(refFromAccessPath([""])).toBeUndefined();
   });
 });
 

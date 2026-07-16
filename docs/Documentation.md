@@ -416,6 +416,7 @@ $ penv doctor
 
 ✓ Schema valid
 ⚠ Missing parameter         redis.password      required for production, absent
+⚠ Declared, no value        app.api-key         declared in .penv/env.ts, no value for production
 ⚠ Weak secret               app.jwt-secret      18 chars, schema requires ≥32
 ⚠ Unused parameter          LEGACY_API_KEY      present, not in schema
 ⚠ Drifted from provider     stripe.secret-key   local ≠ vault:secret/production
@@ -423,9 +424,15 @@ $ penv doctor
 ⚠ Plaintext secret          db-password.staging value file is not encrypted
 ✓ Encryption enabled
 ✓ Provider                  vault
+  penv set redis/password --env production
+  penv set app/api-key --env production
 ```
 
 Every warning names the parameter and the concrete problem. The full `.penv/` tree is the payoff for teams who want to act on what doctor finds — not a precondition for reading the report.
+
+**Schema↔tree drift, both directions.** `Declared, no value` and `Unused parameter` are the two halves of one distance: what `.penv/env.ts` declares that the tree has no value for, and what the tree holds that the schema never declares. `penv watch` reports the same two, live, while you edit. Where a value would close the gap, the `penv set` lines are collected below the report to paste.
+
+Reporting is all it does. penv will not materialise a value file from a declaration, because a declaration has no value — inventing one is how a placeholder reaches production silently, which is the failure penv exists to delete. `penv set` stays the only thing that writes a value.
 
 `doctor`'s cross-provider drift check needs to know how local names map to provider paths; that correspondence comes from `penv.config.ts`.
 

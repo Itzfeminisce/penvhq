@@ -69,6 +69,42 @@ export function accessPath(ref: ParameterRef): string[] {
   return [...ref.namespace, ref.name].map(camelSegment);
 }
 
+function kebabSegment(segment: string): string {
+  return segment.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+}
+
+/**
+ * The parameter a schema key names — `["redis", "password"]` → `redis/password`.
+ *
+ * Unlike {@link refFromVariable} this may read a namespace, because a schema key
+ * arrives as a path: the nesting in `.penv/env.ts` is the structure a flat `.env`
+ * does not have.
+ *
+ * `undefined` when the path is outside the image of {@link accessPath} — `apiURL`
+ * kebabs to `api-url`, which camels back to `apiUrl`, so no value file can be
+ * named that reaches that key. Answering "I cannot tell" is what keeps the
+ * caller from inventing a `penv set` line that writes a file the schema would
+ * still not see. Composed from the real transform rather than re-derived, like
+ * {@link roundTripsCleanly}, so it cannot drift from what resolution does.
+ */
+export function refFromAccessPath(path: readonly string[]): ParameterRef | undefined {
+  const name = path[path.length - 1];
+  if (name === undefined) {
+    return undefined;
+  }
+  const ref: ParameterRef = {
+    namespace: path.slice(0, -1).map(kebabSegment),
+    name: kebabSegment(name),
+  };
+  if ([...ref.namespace, ref.name].some((segment) => segment.length === 0)) {
+    return undefined;
+  }
+  const round = accessPath(ref);
+  return round.length === path.length && round.every((segment, i) => segment === path[i])
+    ? ref
+    : undefined;
+}
+
 /**
  * The flat parameter a generated variable came from. No namespace is inferred:
  * a flat `.env` carries no structure to read, and structure is never guessed.

@@ -206,6 +206,183 @@ describe("weak", () => {
   });
 });
 
+describe("declared", () => {
+  it("fires when the schema declares a parameter with no value for this environment", async () => {
+    const root = makeProject({
+      schema: "redis: z.object({ password: z.string() })",
+      tree: { "redis/password.development": "dev-secret" },
+    });
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+    const fired = firedFor(report.findings, "declared");
+
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.label).toBe("Declared, no value");
+    expect(fired[0]?.subject).toBe("redis.password");
+    expect(fired[0]?.detail).toBe("declared in .penv/env.ts, no value for production");
+    expect(fired[0]?.remedy).toBe("penv set redis/password --env production");
+  });
+
+  /**
+   * The case no tree-driven check can reach: a parameter with no file anywhere
+   * has no meta either, so `missing` never sees it. Before this check, the only
+   * report of it was a raw Zod issue from `validate`.
+   */
+  it("fires for a declared parameter with no file at all", async () => {
+    const root = makeProject({ schema: "databaseUrl: z.string()", tree: {} });
+
+    const fired = firedFor(
+      (await runDoctor({ cwd: root, environment: "production" })).findings,
+      "declared",
+    );
+
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.subject).toBe("database-url");
+    expect(fired[0]?.remedy).toBe("penv set database-url --env production");
+  });
+
+  /** Drift is reported, never enforced: `validate` is where the verdict is reached. */
+  it("does not fail the run", async () => {
+    const root = makeProject({ schema: "databaseUrl: z.string()", tree: {} });
+
+    expect((await runDoctor({ cwd: root, environment: "production" })).ok).toBe(true);
+  });
+
+  it("stays quiet when the declared parameter has a value for this environment", async () => {
+    const root = makeProject({
+      schema: "redis: z.object({ password: z.string() })",
+      tree: { "redis/password.production": "prod-secret" },
+    });
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+
+    expect(firedFor(report.findings, "declared")).toEqual([]);
+    expect(severityOf(report.findings, "declared")).toBe("pass");
+  });
+
+  it("stays quiet when the unscoped default supplies the value", async () => {
+    const root = makeProject({
+      schema: "redis: z.object({ password: z.string() })",
+      tree: { "redis/password": "default-secret" },
+    });
+
+    expect(
+      firedFor((await runDoctor({ cwd: root, environment: "production" })).findings, "declared"),
+    ).toEqual([]);
+  });
+
+  /** The schema itself says absence is legal, so absence is a declaration, not drift. */
+  it("stays quiet on an optional field with no value", async () => {
+    const root = makeProject({ schema: "databaseUrl: z.string().optional()", tree: {} });
+
+    expect(
+      firedFor((await runDoctor({ cwd: root, environment: "production" })).findings, "declared"),
+    ).toEqual([]);
+  });
+
+  it("stays quiet on a field with a default", async () => {
+    const root = makeProject({ schema: 'port: z.string().default("3000")', tree: {} });
+
+    expect(
+      firedFor((await runDoctor({ cwd: root, environment: "production" })).findings, "declared"),
+    ).toEqual([]);
+  });
+
+  /**
+   * Absence permission is inherited. Judged on its own wrapper, `password` is a
+   * bare string and would be reported — while the schema is perfectly happy with
+   * the whole `redis` namespace absent.
+   */
+  it("stays quiet beneath an optional namespace", async () => {
+    const root = makeProject({
+      schema: "redis: z.object({ password: z.string() }).optional()",
+      tree: {},
+    });
+
+    expect(
+      firedFor((await runDoctor({ cwd: root, environment: "production" })).findings, "declared"),
+    ).toEqual([]);
+  });
+
+  /**
+   * `.nullable()` accepts null, which no value file can produce: a missing file
+   * is `undefined`, and that is what the schema rejects. So absence is drift.
+   */
+  it("fires on a nullable field with no value", async () => {
+    const root = makeProject({ schema: "databaseUrl: z.string().nullable()", tree: {} });
+
+    expect(
+      firedFor((await runDoctor({ cwd: root, environment: "production" })).findings, "declared"),
+    ).toHaveLength(1);
+  });
+
+  /**
+   * `apiURL` kebabs to `api-url`, which camels back to `apiUrl` — so no value
+   * file penv can name ever reaches this key. Reported as drift `penv set`
+   * cannot close, rather than with a paste line that would write a file the
+   * schema still would not see.
+   */
+  it("names the rename when no filename reaches the declared key", async () => {
+    const root = makeProject({ schema: "apiURL: z.string()", tree: {} });
+
+    const fired = firedFor(
+      (await runDoctor({ cwd: root, environment: "production" })).findings,
+      "declared",
+    );
+
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.subject).toBe("apiURL");
+    expect(fired[0]?.detail).toBe("declared, no filename reaches it");
+    expect(fired[0]?.remedy).not.toContain("penv set");
+    expect(fired[0]?.remedy).toContain("Rename");
+  });
+
+  /**
+   * A reserved token is unreachable for the same reason `apiURL` is: the grammar
+   * refuses it as a parameter name, so no value file resolves to the key. The
+   * paste line would have been `penv set local --env production` — a command
+   * that errors, offered as the fix.
+   */
+  it("names the rename when the declared key is a reserved token", async () => {
+    const root = makeProject({ schema: "local: z.string(), production: z.string()", tree: {} });
+
+    const fired = firedFor(
+      (await runDoctor({ cwd: root, environment: "production" })).findings,
+      "declared",
+    );
+
+    expect(fired.map((finding) => finding.subject)).toEqual(["local", "production"]);
+    for (const finding of fired) {
+      expect(finding.detail).toBe("declared, no filename reaches it");
+      expect(finding.remedy).not.toContain("penv set");
+    }
+  });
+
+  /**
+   * One absence, one line. `missing` is the same fact with meta's stronger
+   * verdict on it, and it carries the same paste line, so this must not repeat it.
+   */
+  it("does not repeat an absence the missing check already reported", async () => {
+    const root = makeProject({
+      schema: "redis: z.object({ password: z.string() })",
+      tree: {
+        // A value for another environment, so the parameter is in the tree and
+        // `missing` can see it: a parameter with only meta is listed nowhere.
+        "redis/password.development": "dev-secret",
+        "redis/password.json": JSON.stringify({ environments: { production: { required: true } } }),
+      },
+    });
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+
+    expect(firedFor(report.findings, "missing")).toHaveLength(1);
+    expect(firedFor(report.findings, "missing")[0]?.remedy).toBe(
+      "penv set redis/password --env production",
+    );
+    expect(firedFor(report.findings, "declared")).toEqual([]);
+  });
+});
+
 describe("unused", () => {
   it("fires when a value file has no key in the schema", async () => {
     const root = makeProject({
@@ -353,7 +530,7 @@ describe("a schema that does not load", () => {
 
     expect(severityOf(report.findings, "schema")).toBe("failure");
     expect(report.ok).toBe(false);
-    for (const check of ["weak", "unused"] as const) {
+    for (const check of ["declared", "weak", "unused"] as const) {
       expect(findingsOf(report.findings, check)).toHaveLength(1);
       expect(findingsOf(report.findings, check)[0]?.detail).toContain("could not run");
     }
@@ -375,6 +552,7 @@ describe("the report", () => {
     expect(report.findings.map((finding) => finding.check)).toEqual([
       "schema",
       "missing",
+      "declared",
       "weak",
       "unused",
       "unscoped-fallback",
@@ -383,6 +561,6 @@ describe("the report", () => {
     ]);
     expect(report.findings.every((finding) => finding.severity === "pass")).toBe(true);
     expect(report.findings[0]?.label).toBe("Schema valid");
-    expect(report.findings[6]?.subject).toBe("filesystem");
+    expect(report.findings[7]?.subject).toBe("filesystem");
   });
 });

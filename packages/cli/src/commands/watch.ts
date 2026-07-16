@@ -1,10 +1,18 @@
 /**
  * `penv watch` — re-run validation whenever the configuration changes.
  *
- * Watch mode reports exactly what `penv validate` reports, on a loop. It is a
- * faster way to see the same answer, never a second opinion: the diagnostics
- * come from `runValidate` itself, so there is no watch-mode rendering that could
- * drift from the command CI runs.
+ * Watch mode reports `penv validate`'s verdict on a loop, and never a second
+ * opinion about it: the diagnostics come from `runValidate` itself, so there is
+ * no watch-mode verdict that could drift from the command CI runs.
+ *
+ * It prints one thing `validate` does not — the schema↔tree drift report, which
+ * `runValidate` measures and hands back without letting it touch `ok`. The two
+ * commands differ because their readers do. CI wants a verdict, and a warning
+ * about a parameter the schema tolerates would be noise in a log nobody reads on
+ * a passing run. The person with `watch` open is mid-edit, and the distance
+ * between what they have just declared and what the tree holds is the thing they
+ * are watching *for*. Same facts, same measurement, one of them worth printing
+ * only where someone is looking.
  *
  * Two things are watched, because two things decide the answer: the `.penv/`
  * tree (the values and their meta) and `penv.config.ts` (the environment
@@ -21,7 +29,8 @@ import { existsSync, watch } from "node:fs";
 import { basename, dirname } from "node:path";
 import { defineCommand } from "citty";
 import { openProject } from "../project.js";
-import { guard, reportError, write } from "../ui.js";
+import type { DriftReport } from "../schema.js";
+import { formatRows, guard, type Row, reportError, WARN, write } from "../ui.js";
 import type { ValidateResult } from "./validate.js";
 import { renderValidate, runValidate } from "./validate.js";
 
@@ -260,11 +269,50 @@ export function runWatch(options: WatchOptions): WatchHandle {
 }
 
 /**
- * One cycle's report. Identical to `penv validate`'s, with a rule above it —
- * on a loop, the reader's first question is where the last run ended.
+ * One cycle's report: `penv validate`'s, with a rule above it — on a loop, the
+ * reader's first question is where the last run ended — and the drift below it.
+ *
+ * Drift comes last because it is the part that is not a verdict. The rows above
+ * say whether the configuration is valid; these say what the schema and the tree
+ * disagree about, which is often *why*, and is worth reading even on a run that
+ * passed.
  */
 export function renderWatch(result: ValidateResult): string[] {
-  return ["", ...renderValidate(result)];
+  return ["", ...renderValidate(result), ...renderDrift(result.drift, result.environment)];
+}
+
+/**
+ * The drift rows. Nothing at all when the schema and the tree agree: a loop
+ * reprints its whole report on every keystroke, and a block that says "no drift"
+ * forever is the first thing the eye learns to skip past — taking the block that
+ * matters with it.
+ */
+export function renderDrift(drift: DriftReport, environment: string): string[] {
+  const rows: Row[] = [
+    ...drift.declared.map((item) => ({
+      glyph: WARN,
+      label: "Declared, no value",
+      subject: item.subject,
+      detail: item.detail,
+    })),
+    ...drift.undeclared.map((item) => ({
+      glyph: WARN,
+      label: "Unused parameter",
+      subject: item.variable,
+      detail: "present, not in schema",
+    })),
+  ];
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const lines = ["", `Schema and tree differ for ${environment}:`, ...formatRows(rows)];
+  // The paste block, exactly as `doctor` prints it — the reader who sees drift
+  // here and drift there is looking at one report, not two that resemble each other.
+  for (const remedy of new Set(drift.declared.map((item) => item.remedy))) {
+    lines.push(`  ${remedy}`);
+  }
+  return lines;
 }
 
 export const watchCommand = defineCommand({
