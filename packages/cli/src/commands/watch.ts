@@ -17,7 +17,7 @@
  */
 
 import type { FSWatcher } from "node:fs";
-import { watch } from "node:fs";
+import { existsSync, watch } from "node:fs";
 import { basename, dirname } from "node:path";
 import { defineCommand } from "citty";
 import { openProject } from "../project.js";
@@ -67,7 +67,7 @@ export function runWatch(options: WatchOptions): WatchHandle {
   const configFile = basename(project.configFile);
   const debounceMs = options.debounceMs ?? DEBOUNCE_MS;
 
-  const watchers: FSWatcher[] = [];
+  const watchers = new Set<FSWatcher>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let running = false;
   let pending = false;
@@ -121,6 +121,60 @@ export function runWatch(options: WatchOptions): WatchHandle {
     }, debounceMs);
   }
 
+  function stop(watcher: FSWatcher): void {
+    watchers.delete(watcher);
+    watcher.close();
+  }
+
+  /**
+   * Waits for a vanished target to come back, by watching its parent for the
+   * name to reappear.
+   *
+   * A branch switch is a delete and then a create, so a watch that merely
+   * stopped at the delete would be silent for the rest of the session — the
+   * user would be reading a report of a tree that has since returned. The
+   * re-armed watcher validates on arrival rather than trusting the report the
+   * deletion produced.
+   */
+  function armRecovery(target: string, recursive: boolean, only?: string): void {
+    const parent = dirname(target);
+    const name = basename(target);
+    let recovery: FSWatcher | undefined;
+
+    try {
+      recovery = watch(parent, { recursive: false }, (_event, filename) => {
+        if (closed || recovery === undefined) {
+          return;
+        }
+        // The parent went too. Watching it would spin exactly the way the
+        // vanished target did, and there is nothing left to recover from.
+        if (!existsSync(parent)) {
+          stop(recovery);
+          return;
+        }
+        if (filename !== null && basename(filename) !== name) {
+          return;
+        }
+        if (!existsSync(target)) {
+          return;
+        }
+        stop(recovery);
+        addWatcher(target, recursive, only);
+        schedule();
+      });
+    } catch (error) {
+      options.onError?.(error);
+      return;
+    }
+
+    recovery.on("error", (error) => {
+      if (!closed) {
+        options.onError?.(error);
+      }
+    });
+    watchers.add(recovery);
+  }
+
   /**
    * `recursive` is not available on every platform, so a watcher that cannot
    * have it watches the directory itself. Namespace folders below it go
@@ -128,8 +182,31 @@ export function runWatch(options: WatchOptions): WatchHandle {
    * the answer always comes from a fresh `runValidate`.
    */
   function addWatcher(target: string, recursive: boolean, only?: string): void {
+    let watcher: FSWatcher | undefined;
+
     const listen = (useRecursive: boolean): FSWatcher =>
       watch(target, { recursive: useRecursive }, (_event, filename) => {
+        if (closed) {
+          return;
+        }
+        // A deleted target does not stop its watcher, and on Windows does not
+        // error either: it re-fires `rename` for the absent path tens of
+        // thousands of times a second, forever. Left alone that pins a core,
+        // and every event resets the debounce below, so the watch would burn
+        // CPU while reporting nothing at all. The check costs a `stat` per
+        // event, which is what a `.penv/` that is still there is worth.
+        //
+        // Deleting the tree is a change like any other, so it is scheduled
+        // rather than reported as a failure: `runValidate` has a real verdict
+        // for a missing `.penv/`, and watch's job is to say what validate says.
+        if (!existsSync(target)) {
+          if (watcher !== undefined) {
+            stop(watcher);
+          }
+          armRecovery(target, recursive, only);
+          schedule();
+          return;
+        }
         // Directories are watched rather than files so that an editor's
         // write-to-temp-then-rename is seen as a change to the real name. The
         // cost is hearing about neighbours, so the ones that matter are named.
@@ -139,7 +216,6 @@ export function runWatch(options: WatchOptions): WatchHandle {
         schedule();
       });
 
-    let watcher: FSWatcher;
     try {
       watcher = listen(recursive);
     } catch (error) {
@@ -159,7 +235,7 @@ export function runWatch(options: WatchOptions): WatchHandle {
         options.onError?.(error);
       }
     });
-    watchers.push(watcher);
+    watchers.add(watcher);
   }
 
   addWatcher(project.penvDir, true);
@@ -176,8 +252,8 @@ export function runWatch(options: WatchOptions): WatchHandle {
         clearTimeout(timer);
         timer = undefined;
       }
-      for (const watcher of watchers.splice(0)) {
-        watcher.close();
+      for (const watcher of [...watchers]) {
+        stop(watcher);
       }
     },
   };

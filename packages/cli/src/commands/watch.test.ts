@@ -188,6 +188,63 @@ describe("watch mode", () => {
     expect(results[results.length - 1]?.ok).toBe(true);
   });
 
+  /**
+   * A branch switch to a branch without `.penv/` deletes the watched tree. The
+   * platform does not stop that watcher and, on Windows, does not error it
+   * either: it re-fires `rename` for the absent path tens of thousands of times
+   * a second. Unguarded that pinned a core and reset the debounce on every one
+   * of those events, so watch went *silent* while burning CPU — the one thing a
+   * watch must never do. Deleting the tree is a change like any other, and
+   * `validate` has a verdict for it.
+   */
+  it("reports the verdict when the watched tree is deleted, instead of spinning", async () => {
+    const root = makeProject({
+      schema: "databaseUrl: z.url()",
+      tree: { "database-url": "postgres://localhost/app" },
+    });
+
+    const { results } = watching(root);
+    await until(() => results.length >= 1);
+    expect(results[0]?.ok).toBe(true);
+
+    const before = process.cpuUsage();
+    rmSync(join(root, ".penv"), { recursive: true, force: true });
+
+    // The deletion is answered, not swallowed.
+    await until(() => results.length >= 2);
+    expect(results[results.length - 1]?.ok).toBe(false);
+
+    // And answering it did not cost a core. A storm ran at ~100% of one.
+    const spent = process.cpuUsage(before);
+    const elapsed = (spent.user + spent.system) / 1000;
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  /** The other half of a branch switch: the tree comes back. */
+  it("re-arms and re-validates when the deleted tree returns", async () => {
+    const root = makeProject({
+      schema: "databaseUrl: z.url()",
+      tree: { "database-url": "postgres://localhost/app" },
+    });
+
+    const { results } = watching(root);
+    await until(() => results.length >= 1);
+
+    rmSync(join(root, ".penv"), { recursive: true, force: true });
+    await until(() => results.some((result) => !result.ok));
+
+    mkdirSync(join(root, ".penv"), { recursive: true });
+    writeFileSync(
+      join(root, ".penv", "env.ts"),
+      `import { z } from "zod";\nexport const schema = z.object({databaseUrl: z.url()});\n`,
+      "utf8",
+    );
+    writeFileSync(join(root, ".penv", "database-url"), "postgres://localhost/app\n", "utf8");
+
+    // A watch that stopped at the deletion would report nothing ever again.
+    await until(() => results[results.length - 1]?.ok === true);
+  });
+
   it("coalesces a burst of changes into fewer runs than events", async () => {
     const root = makeProject({
       schema: "databaseUrl: z.url()",
