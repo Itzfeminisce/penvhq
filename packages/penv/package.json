@@ -1,0 +1,41 @@
+{
+  "name": "penv",
+  "version": "0.0.0",
+  "description": "Configuration that shares a data model with your production secret manager.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "penv": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.js",
+      "require": "./dist/config.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup"
+  },
+  "peerDependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@penv/cli": "workspace:*",
+    "@penv/core": "workspace:*",
+    "@penv/provider-filesystem": "workspace:*",
+    "@penv/runtime": "workspace:*",
+    "zod": "4.4.3"
+  }
+}

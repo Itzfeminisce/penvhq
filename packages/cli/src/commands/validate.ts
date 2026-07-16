@@ -1,0 +1,323 @@
+/**
+ * `penv validate` — build the target environment's configuration and check it
+ * against the one schema.
+ *
+ * Three failures land here rather than anywhere else, and all three are errors:
+ * a reserved token in a name (invariant 11), two parameters mapping to one
+ * generated variable (invariant 12 — never last-write-wins), and a config object
+ * the schema rejects. A passing run means the schema is internally consistent;
+ * it does not mean the schema is correct. That is your review, especially after
+ * an inferred import.
+ */
+
+import { pathToFileURL } from "node:url";
+import type { ParameterRef, ValueFile } from "@penv/core";
+import {
+  accessPath,
+  checkNameCollisions,
+  NameCollisionError,
+  PenvError,
+  ReservedTokenError,
+  resolveAll,
+} from "@penv/core";
+import { defineCommand } from "citty";
+import { createJiti } from "jiti";
+import type { z } from "zod";
+import type { Project } from "../project.js";
+import { openProject, refsFrom, targetEnvironment } from "../project.js";
+import { CHECK, formatRows, guard, type Row, WARN, write } from "../ui.js";
+import { SCHEMA_FILE } from "./init.js";
+
+export type ValidateIssueKind = "config" | "reserved" | "collision" | "schema";
+
+export interface ValidateIssue {
+  readonly kind: ValidateIssueKind;
+  /** What the line is about: a parameter, a variable, a token, or a file. */
+  readonly subject: string;
+  readonly message: string;
+  readonly remedy?: string;
+}
+
+export interface ValidateResult {
+  readonly ok: boolean;
+  readonly environment: string;
+  readonly parameters: number;
+  readonly issues: readonly ValidateIssue[];
+}
+
+export interface ValidateOptions {
+  readonly cwd: string;
+  readonly environment?: string;
+}
+
+const SCHEMA_EXPORT = "schema";
+const SCHEMA_PATH = `.penv/${SCHEMA_FILE}`;
+
+const LABELS: Readonly<Record<ValidateIssueKind, string>> = {
+  config: "Config",
+  reserved: "Reserved token",
+  collision: "Name collision",
+  schema: "Invalid parameter",
+};
+
+function firstLine(text: string): string {
+  return text.split("\n")[0] ?? text;
+}
+
+function issueFrom(error: PenvError, fallbackSubject: string): ValidateIssue {
+  const base = {
+    message: firstLine(error.message),
+    ...(error.remedy === undefined ? {} : { remedy: error.remedy }),
+  };
+  if (error instanceof ReservedTokenError) {
+    return { kind: "reserved", subject: error.token, ...base };
+  }
+  if (error instanceof NameCollisionError) {
+    return { kind: "collision", subject: error.variable, ...base };
+  }
+  return { kind: "config", subject: fallbackSubject, ...base };
+}
+
+/**
+ * Places a value at its access path. Values are placed exactly as the provider
+ * holds them: coercion is the schema's job, so a value file's contents stay a
+ * string here.
+ */
+function place(root: Record<string, unknown>, path: readonly string[], value: string): void {
+  const leaf = path[path.length - 1];
+  if (leaf === undefined) {
+    return;
+  }
+  let node = root;
+  for (const key of path.slice(0, -1)) {
+    const existing = node[key];
+    if (typeof existing === "object" && existing !== null) {
+      node = existing as Record<string, unknown>;
+      continue;
+    }
+    const child: Record<string, unknown> = {};
+    node[key] = child;
+    node = child;
+  }
+  node[leaf] = value;
+}
+
+function isZodType(value: unknown): value is z.ZodType {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "safeParse" in value &&
+    typeof (value as { safeParse: unknown }).safeParse === "function"
+  );
+}
+
+export interface SchemaLoad {
+  /** Absent when the module could not be evaluated. `issues` says why. */
+  readonly schema?: z.ZodType;
+  readonly issues: readonly ValidateIssue[];
+}
+
+/**
+ * A penv error raised inside the user's own `.penv/env.ts`, identified by its
+ * `code` rather than by `instanceof`.
+ *
+ * The error is thrown by *their* copy of penv, which is a different module realm
+ * from this one, so `instanceof` is false across the boundary. `code` is the
+ * stable, machine-readable discriminator, and this is exactly what it is for.
+ */
+function validationIssuesOf(cause: unknown): readonly ValidateIssue[] | undefined {
+  if (typeof cause !== "object" || cause === null) {
+    return undefined;
+  }
+  const error = cause as { code?: unknown; issues?: unknown };
+  if (error.code !== "VALIDATION_FAILED" || !Array.isArray(error.issues)) {
+    return undefined;
+  }
+  return error.issues.map((issue: unknown) => {
+    const { parameter, message } = issue as { parameter?: unknown; message?: unknown };
+    return {
+      kind: "schema" as const,
+      subject: typeof parameter === "string" && parameter !== "" ? parameter : SCHEMA_PATH,
+      message: typeof message === "string" ? message : String(issue),
+      remedy: `Fix the value, or adjust the schema in ${SCHEMA_PATH} if the shape is wrong.`,
+    };
+  });
+}
+
+/**
+ * The one schema, read from `.penv/env.ts`.
+ *
+ * Only the `schema` export is read, never `env` — a command whose job is to
+ * *report* on configuration must not be stopped by it. That is the whole reason
+ * the docs tell type-only consumers to import `schema`: a type-only import is
+ * erased and never evaluates the module at all.
+ *
+ * A *runtime* read cannot have that guarantee. Evaluating the module runs its
+ * top level, so a scaffolded `export const env = load(schema)` loads eagerly
+ * here too, and if that load throws, the schema is unreachable — ESM produces no
+ * namespace for a module that threw. Two things make that honest rather than
+ * silent: `PENV_ENV` is pinned so the eager load targets the environment being
+ * reported on, and a load that fails validation is unwrapped back into the
+ * per-parameter issues it was built from, so the report still names parameters
+ * instead of blaming the file.
+ */
+export async function loadSchema(project: Project, environment: string): Promise<SchemaLoad> {
+  const file = pathToFileURL(`${project.penvDir}/${SCHEMA_FILE}`).href;
+  // Resolved from the user's own file: `zod` and `penv` are their dependencies,
+  // not the CLI's. `moduleCache` is off so an edited schema is the schema penv reads.
+  const jiti = createJiti(file, { interopDefault: false, moduleCache: false });
+
+  const previous = process.env.PENV_ENV;
+  process.env.PENV_ENV = environment;
+  let loaded: unknown;
+  try {
+    loaded = await jiti.import(file);
+  } catch (cause) {
+    const issues = validationIssuesOf(cause);
+    if (issues !== undefined) {
+      return { issues };
+    }
+    const detail = cause instanceof Error ? firstLine(cause.message) : String(cause);
+    return {
+      issues: [
+        {
+          kind: "config",
+          subject: SCHEMA_PATH,
+          message: `${SCHEMA_PATH} could not be loaded: ${detail}`,
+          remedy: `Fix the error above. penv reads the \`${SCHEMA_EXPORT}\` export of ${SCHEMA_PATH}, which is yours to edit.`,
+        },
+      ],
+    };
+  } finally {
+    if (previous === undefined) {
+      delete process.env.PENV_ENV;
+    } else {
+      process.env.PENV_ENV = previous;
+    }
+  }
+
+  const exported =
+    typeof loaded === "object" && loaded !== null
+      ? (loaded as Record<string, unknown>)[SCHEMA_EXPORT]
+      : undefined;
+
+  if (!isZodType(exported)) {
+    return {
+      issues: [
+        {
+          kind: "config",
+          subject: SCHEMA_PATH,
+          message: `${SCHEMA_PATH} exports no \`${SCHEMA_EXPORT}\``,
+          remedy: `Export the shape as \`export const ${SCHEMA_EXPORT} = z.object({ ... })\`. One schema drives both validation and types.`,
+        },
+      ],
+    };
+  }
+  return { schema: exported, issues: [] };
+}
+
+export async function runValidate(options: ValidateOptions): Promise<ValidateResult> {
+  const project = openProject(options.cwd);
+  const environment = targetEnvironment(project, options.environment);
+  const issues: ValidateIssue[] = [];
+
+  // Invariant 11: a reserved token in a filename is an error, never a silent
+  // misparse — so listing the tree is itself a check.
+  let files: ValueFile[];
+  try {
+    files = await project.provider.list();
+  } catch (error) {
+    if (!(error instanceof PenvError)) {
+      throw error;
+    }
+    return {
+      ok: false,
+      environment,
+      parameters: 0,
+      issues: [issueFrom(error, SCHEMA_PATH)],
+    };
+  }
+
+  const refs: ParameterRef[] = refsFrom(files);
+
+  // Invariant 12: two parameters mapping to one generated variable would lose a
+  // value on `penv generate`. It fails here rather than there.
+  for (const collision of checkNameCollisions(refs, project.config)) {
+    issues.push(issueFrom(collision, collision.variable));
+  }
+
+  const { schema, issues: schemaIssues } = await loadSchema(project, environment);
+  issues.push(...schemaIssues);
+
+  if (schema !== undefined) {
+    const object: Record<string, unknown> = {};
+    for (const resolution of await resolveAll(environment, project.provider)) {
+      if (resolution.value !== undefined) {
+        place(object, accessPath(resolution.ref), resolution.value);
+      }
+    }
+    const result = schema.safeParse(object);
+    if (!result.success) {
+      for (const problem of result.error.issues) {
+        issues.push({
+          kind: "schema",
+          subject: problem.path.join(".") || SCHEMA_PATH,
+          message: problem.message,
+          remedy: `Fix the value, or adjust the schema in ${SCHEMA_PATH} if the shape is wrong.`,
+        });
+      }
+    }
+  }
+
+  return { ok: issues.length === 0, environment, parameters: refs.length, issues };
+}
+
+export function renderValidate(result: ValidateResult): string[] {
+  if (result.ok) {
+    return formatRows([
+      {
+        glyph: CHECK,
+        label: "Schema valid",
+        subject: `${result.parameters} parameters for environment ${result.environment}`,
+      },
+    ]);
+  }
+
+  const rows: Row[] = result.issues.map((issue) => ({
+    glyph: WARN,
+    label: LABELS[issue.kind],
+    subject: issue.subject,
+    detail: issue.message,
+  }));
+
+  const lines = formatRows(rows);
+  const remedies = [...new Set(result.issues.map((issue) => issue.remedy))];
+  for (const remedy of remedies) {
+    if (remedy !== undefined) {
+      lines.push(`  ${remedy}`);
+    }
+  }
+  return lines;
+}
+
+export const validateCommand = defineCommand({
+  meta: {
+    name: "validate",
+    description: "Validate configuration against the schema; non-zero on failure",
+  },
+  args: {
+    env: { type: "string", description: "The environment to validate" },
+  },
+  run({ args }) {
+    return guard(async () => {
+      const result = await runValidate({
+        cwd: process.cwd(),
+        ...(args.env === undefined ? {} : { environment: args.env }),
+      });
+      write(renderValidate(result));
+      if (!result.ok) {
+        process.exitCode = 1;
+      }
+    });
+  },
+});
