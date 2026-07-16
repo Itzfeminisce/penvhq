@@ -1,0 +1,8 @@
+packages:
+  - "packages/*"
+  - "packages/providers/*"
+allowBuilds:
+  # tsup's bundler. Needed to build every package.
+  esbuild: true
+minimumReleaseAgeExclude:
+  - '@changesets/cli@2.31.1'

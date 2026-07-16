@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/runtime" },
+    { "path": "./packages/providers/filesystem" },
+    { "path": "./packages/cli" },
+    { "path": "./packages/penv" }
+  ]
+}
