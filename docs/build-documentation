@@ -1,0 +1,387 @@
+# penv documentation
+
+Configuration that shares a data model with your production secret manager — so the local↔production translation stops being where secrets drift.
+
+penv stores each parameter as its own file, in a hierarchy that mirrors how Vault, AWS SSM, and Kubernetes Secrets already store the same data. One Zod schema gives you both runtime validation and TypeScript types. `penv doctor` tells you where local configuration has drifted from your provider.
+
+> **Is penv for you?** penv is for teams already running (or about to run) a real secret manager who hand-maintain the translation between local `.env` and that provider. If you are a solo developer happy with `.env.example` and t3-env, penv is not aimed at you — those tools are faster for that job, and penv does not try to beat them at it.
+
+---
+
+## Contents
+
+1. [Install](#install)
+2. [Quickstart](#quickstart) — from `.env` to penv in one command
+3. [Concepts](#concepts) — the mental model
+4. [The parameter tree](#the-parameter-tree)
+5. [Environments](#environments)
+6. [Schema and types](#schema-and-types)
+7. [Runtime API](#runtime-api)
+8. [Configuration reference](#configuration-reference)
+9. [Providers](#providers)
+10. [Encryption](#encryption)
+11. [Rotation](#rotation)
+12. [`penv doctor`](#penv-doctor)
+13. [CLI reference](#cli-reference)
+14. [Migrating and leaving](#migrating-and-leaving)
+15. [What penv does not do](#what-penv-does-not-do)
+
+---
+
+## Install
+
+```bash
+npm install penv
+# or: bun add penv / pnpm add penv
+```
+
+---
+
+## Quickstart
+
+If you already have a `.env`, adopting penv is one command:
+
+```
+$ penv import .env
+
+✓ Found 34 variables
+✓ Created .penv/
+✓ Generated penv.config.ts
+✓ Generated .penv/schema.ts   (draft — review before trusting)
+✓ Updated .gitignore
+✓ Created .env.backup
+✓ Validated configuration
+
+Done. .penv/ is now your source of truth.
+```
+
+After import, `.penv/` is primary and `.env` becomes a generated artifact. Two things to do next:
+
+1. **Review the generated schema.** It was inferred from single sample values and is a starting point, not a guarantee — a boolean guessed from `true` will not anticipate `1`/`0`. Open `.penv/schema.ts` and tighten it.
+2. **Run `penv doctor`.** It reports anything missing, weak, unused, or drifted before you rely on the setup.
+
+Read a value, generate a deploy artifact:
+
+```bash
+penv get database-url
+penv generate           # writes a standard .env for deploy targets
+```
+
+---
+
+## Concepts
+
+**Parameters are first-class resources.** Each parameter is its own file with its own lifecycle, access boundary, and rotation path — not a line inside a shared file. You can `chmod` a file; you cannot `chmod` a line.
+
+**The tree mirrors your provider.** A penv path like `redis/password` and a Vault path like `secret/production/redis/password` are two serializations of the same logical record `(environment, path, name)`. Because the shapes match, changing provider is a configuration change, not an application rewrite.
+
+**One schema, everywhere.** A single `.penv/schema.ts` drives runtime validation *and* TypeScript inference. There is deliberately no per-environment schema — forking schemas per environment reintroduces the drift penv exists to remove.
+
+**penv owns the translation, and makes it visible.** The mapping from a penv record to a provider path is explicit configuration, not magic. penv's value is that this translation is defined once, validated, and legible — instead of living in a script someone wrote under deploy pressure.
+
+---
+
+## The parameter tree
+
+```
+project-root/
+├── package.json
+├── penv.config.ts          # environments, providers, name overrides
+└── .penv/
+    ├── schema.ts           # one Zod schema
+    │
+    ├── database-url                    # unscoped default value
+    ├── database-url.production.enc     # production override, encrypted
+    ├── database-url.json               # per-parameter meta
+    │
+    ├── app/
+    │   ├── jwt-secret.development
+    │   ├── jwt-secret.production.enc
+    │   └── jwt-secret.json
+    │
+    └── redis/
+        ├── host.production
+        ├── password.production.enc
+        └── password.json
+```
+
+### Filename grammar
+
+```
+<namespace>/<name>              value — unscoped default
+<namespace>/<name>.<env>        value — environment-specific override
+<namespace>/<name>.<env>.enc    value — encrypted environment override
+<namespace>/<name>.json         meta  — one per parameter (or .toml / .yml)
+```
+
+Each value file holds exactly one value. Each parameter has at most one meta file.
+
+### Reserved names
+
+Filenames are split on `.`, so every declared environment name plus `enc`, `json`, `toml`, and `yml` are reserved tokens. A parameter or environment whose name collides with a reserved token is a `penv validate` error, not a silent misparse. Pick one meta format per project and stay consistent — mixing `.json` and `.yml` is flagged by `penv doctor`.
+
+---
+
+## Environments
+
+Environments are a whitelist declared in `penv.config.ts`. They are **not** inferred from folders or filenames — a filename segment counts as an environment only if it appears in the whitelist. This is what keeps environment scoping and namespace folders from ever being ambiguous.
+
+```ts
+// penv.config.ts
+export default {
+  environments: ["local", "development", "staging", "production"],
+};
+```
+
+### Resolution order
+
+For a target environment, penv resolves each parameter as:
+
+1. `<name>.local` — your personal gitignored override (highest precedence)
+2. `<name>.<env>` — the shared environment value
+3. `<name>` — the unscoped default (fallback)
+
+**Fallback is never silent.** Any parameter resolving via the unscoped default for a real environment is reported by `penv doctor`, so a production value quietly coming from a shared default cannot hide. Ask penv which file wins at any time:
+
+```bash
+penv get database-url --env production --explain
+# → resolves to .penv/database-url.production.enc
+```
+
+---
+
+## Schema and types
+
+One Zod schema, exported from `.penv/schema.ts`:
+
+```ts
+import { z } from "zod";
+
+export default z.object({
+  databaseUrl: z.url(),
+  jwtSecret: z.string().min(32),
+  redis: z.object({
+    host: z.string(),
+    password: z.string(),
+  }),
+});
+```
+
+`penv validate` loads the target environment's parameters, builds the config object, checks it against the schema, prints diagnostics, and exits non-zero on failure. A passing `penv validate` means the schema is *internally consistent* — it does not mean the schema is *correct*. Correctness is your review, especially after an inferred import.
+
+### Name mapping
+
+There is a deterministic default transform, so the common case needs no configuration:
+
+```
+redis/password   (file path)
+  → redis.password   (schema key / runtime access)
+  → REDIS_PASSWORD   (generated .env)
+```
+
+Override individual names in `penv.config.ts` when a deploy target expects something else. Overrides are collision-checked — two parameters mapping to the same generated variable fail `penv validate`, so the round-trip never silently loses a value.
+
+---
+
+## Runtime API
+
+```ts
+import { env } from "penv";     // blessed path — typed, inferred from schema
+
+env.databaseUrl;
+env.app.jwtSecret;
+env.require("jwt-secret");       // throws a clear error if absent
+```
+
+Types come straight from `schema.ts` — no duplicated interfaces, no manual typings, and autocomplete on the nested namespaces.
+
+### Compatibility forms
+
+```ts
+import "penv/config";           // zero-config: discovers .penv/, resolves NODE_ENV,
+                                 // populates process.env — dotenv-shaped
+
+import { config } from "penv";  // explicit
+config({ env: process.env.NODE_ENV, path: ".penv" });
+```
+
+The typed `import { env }` surface is the recommended path. The side-effecting `import "penv/config"` form populates `process.env` and, like dotenv, must run *before* any module reads `process.env` — an ESM import-ordering caveat to keep in mind if you use it.
+
+---
+
+## Configuration reference
+
+`penv.config.ts` lives at the project root, next to `package.json` (not inside `.penv/`).
+
+```ts
+export default {
+  environments: ["local", "development", "staging", "production"],
+
+  providers: {
+    local:       { type: "filesystem" },
+    development: { type: "filesystem" },
+    staging:     { type: "vault",   path: "secret/staging" },
+    production:  { type: "aws-ssm", path: "/prod/app" },
+  },
+
+  // optional per-parameter name overrides for generated .env
+  names: {
+    "database-url": "PG_CONN",
+  },
+};
+```
+
+| Field | Meaning |
+|---|---|
+| `environments` | Whitelist of valid environment names. The only source of truth for what counts as an environment. |
+| `providers` | Per-environment backend. Local dev is typically `filesystem`; staging/production point at a real secret manager. |
+| `providers.*.path` | The provider-side base path penv maps records onto. This explicit mapping is the translation penv owns on your behalf. |
+| `names` | Overrides the default name transform for generated `.env` output. Collision-checked. |
+
+`.penv/schema.ts` is auto-discovered from inside `.penv/` and does not need to be referenced here.
+
+---
+
+## Providers
+
+The filesystem is the first provider, not the only one. Switching a provider is a config change — application code does not change.
+
+```ts
+staging: { type: "filesystem" }
+// →
+staging: { type: "vault", path: "secret/staging" }
+```
+
+penv maps its record `(production, redis, password)` onto the provider's path (for Vault, `secret/production/redis/password`) using the `path` you declare. The mapping is explicit rather than inferred, so what penv sends where is always legible.
+
+> **Honesty note.** Provider portability is the highest-risk claim in penv. It is being proven against one real provider — Vault — before being generalized. Until that proof ships, treat portability to other providers as a roadmap item, not a guarantee. See the roadmap.
+
+Planned order: Filesystem → Vault → AWS SSM → Kubernetes Secrets → Azure Key Vault → Google Secret Manager → Cloudflare Secrets.
+
+---
+
+## Encryption
+
+Each parameter encrypts independently — the `.enc` suffix marks an encrypted value file, so rotating one secret never means re-encrypting unrelated ones.
+
+Whether a parameter *must* be encrypted is a **policy** in its meta, and the on-disk `.enc` marker is validated against that policy. The filename is not the sole authority on what is secret, which is what lets `penv doctor` catch a secret parameter that has a committed *plaintext* value file for some environment.
+
+> **Read this before treating penv as a security upgrade.** Until keys are provider-backed — OS keychain locally, KMS-derived in CI and production, never stored next to the repo — penv encryption is an *organizational* improvement over `.env`, not a *cryptographic* one. Provider-backed keys land in a later milestone (see roadmap). We would rather say this plainly than let you assume protection you do not yet have.
+
+---
+
+## Rotation
+
+penv distinguishes two rotation modes that must not be treated as the same mechanism:
+
+**`dual-valid`** — old and new values are both accepted during a `gracePeriod`. Use for JWT secrets, API keys, webhook secrets, where outstanding tokens and in-flight requests still carry the old value.
+
+```
+active → rotating (current + previous both valid) → active (previous retired after grace)
+```
+
+**`atomic-cutover`** — no simultaneous validity at the app layer; an immediate flip. Use for database passwords and Redis auth. Any real overlap belongs at the infrastructure layer (e.g. RDS-managed credential overlap), not in penv.
+
+### Where rotation state lives
+
+The local value file is *always the current value*. `penv set` overwrites it and pushes to the provider; the provider keeps the previous value for the grace window, because the provider is the only place a previous value is read. Rotation phase lives in meta, never in filenames — so the tree does not change shape mid-rotation and the single schema stays intact.
+
+One consequence, stated up front: filesystem-backed environments (`local`, `development`) cannot exercise true dual-valid rotation the way a live provider can — dual validity is a property of a running system. Rehearse rotation flows locally with a mock provider, not the filesystem value store.
+
+### Rotation meta fields
+
+```json
+{
+  "rotationPolicy": "90d",
+  "environments": {
+    "production": {
+      "required": true,
+      "rotationMode": "dual-valid",
+      "rotationStrategy": "generated",
+      "gracePeriod": "24h",
+      "rotationPolicy": "30d"
+    }
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `rotationPolicy` | How often the secret should rotate. |
+| `rotationMode` | `dual-valid` or `atomic-cutover`. |
+| `rotationStrategy` | `generated` (penv creates the new value) or `external` (a human/system supplies it). |
+| `gracePeriod` | For `dual-valid`: how long both values stay accepted. |
+| `lastRotated` | Timestamp of the last *completed* rotation. |
+| `rotatingSince` | Timestamp of the current `active → rotating` transition. Distinct clock from `lastRotated`. |
+| `rotationState` | `active` \| `rotating` \| `retired`. |
+
+`penv doctor` checks two independent conditions: **overdue** (`now - lastRotated > rotationPolicy`) and **stuck** (`now - rotatingSince > stuckThreshold`, only for `dual-valid`). They use different clocks on purpose — `lastRotated` cannot tell you how long a rotation has been *stuck in flight*, which is why `rotatingSince` exists.
+
+Access control (who may read a production secret) is **not** penv's job — proxy it through provider-native ACLs (Vault policies, IAM). penv does not reimplement what providers already do well.
+
+---
+
+## `penv doctor`
+
+The fastest way to see penv's value without restructuring anything. Point it at your local config and a live provider; it produces one report of everything that has drifted.
+
+```
+$ penv doctor
+
+✓ Schema valid
+⚠ Missing parameter         redis.password      required for production, absent
+⚠ Weak secret               app.jwt-secret      18 chars, schema requires ≥32
+⚠ Unused parameter          LEGACY_API_KEY      present, not in schema
+⚠ Drifted from provider     stripe.secret-key   local ≠ vault:secret/production
+⚠ Unscoped fallback in use  api-url             production resolving to default
+⚠ Plaintext secret          db-password.staging value file is not encrypted
+✓ Encryption enabled
+✓ Provider                  vault
+```
+
+Every warning names the parameter and the concrete problem. The filesystem model becomes the natural next step for teams who want to *fix* what doctor surfaces — it is not required to get value from the report.
+
+> `penv doctor`'s cross-provider drift check needs to know how your local names map to provider paths. That correspondence comes from `penv.config.ts`. Getting a useful report is fast, but it is not literally zero-config — the mapping is the small amount you supply.
+
+---
+
+## CLI reference
+
+| Command | Purpose |
+|---|---|
+| `penv init` | Initialize a project (`.penv/`, config, gitignore). |
+| `penv import <file>` | Import an existing dotenv file; it becomes the source of truth. |
+| `penv generate` | Write a standard `.env` artifact for deploy targets. |
+| `penv get <key>` | Read a parameter. `--env`, `--explain` supported. |
+| `penv set <key>` | Update a parameter and push to the active provider. |
+| `penv remove <key>` | Delete a parameter. |
+| `penv list` | List parameters. |
+| `penv encrypt` / `penv decrypt` | Encrypt / decrypt selected parameters. |
+| `penv validate` | Validate configuration against the schema; non-zero on failure. |
+| `penv doctor` | Report drift, missing, unused, weak, fallback, plaintext-secret, and rotation issues. |
+
+---
+
+## Migrating and leaving
+
+**Adopting** is `penv import .env`. After it runs, `.penv/` is your source of truth and `.env` is generated. Editing the generated `.env` by hand and expecting penv to absorb the change is not supported — edit in `.penv/` and regenerate.
+
+**Committing safely.** `penv init` and `penv import` update `.gitignore` so value files are ignored and only structure, schema, meta, and config are committed. A committed plaintext secret is a `penv doctor` failure, not a soft warning — treat it as one.
+
+**Leaving.** penv is designed to be reversible. `penv generate` gives you a working `.env` at any time, so you are never locked in behind a proprietary store. (A fuller documented exit path — including how portable `penv.config.ts` and `schema.ts` are back to plain tooling — is tracked as an open item; see the roadmap.)
+
+---
+
+## What penv does not do
+
+penv will not:
+
+- Replace environment variables as a runtime mechanism — it generates and consumes them.
+- Replace your cloud secret manager — it sits in front of it.
+- Beat t3-env on local onboarding speed or dev-loop feel. It does not try to.
+- Introduce a proprietary validation language — Zod is the validation layer.
+- Require application code changes to adopt.
+- Claim cryptographic security before encryption keys are provider-backed.
+- Reimplement per-environment access control that Vault and IAM already handle.
+
+> Configuration should be treated as structured data — not a flat text file, and not two disconnected systems kept in sync by hand.
