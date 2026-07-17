@@ -68,7 +68,7 @@ describe("the published artifact", () => {
     };
 
     expect(tree.problems ?? []).toEqual([]);
-    expect(tree.dependencies?.penv?.missing).not.toBe(true);
+    expect(tree.dependencies?.["@penvhq/penv"]?.missing).not.toBe(true);
   });
 
   it("runs `npx penv` — the bin the quickstart leads with", () => {
@@ -82,10 +82,10 @@ describe("the published artifact", () => {
     }
   });
 
-  it('serves `import { load } from "penv"` from the ESM build', () => {
+  it('serves `import { load } from "@penvhq/penv"` from the ESM build', () => {
     writeFileSync(
       join(project, "esm.mjs"),
-      `import { load, defineConfig } from "penv";
+      `import { load, defineConfig } from "@penvhq/penv";
        if (typeof load !== "function") throw new Error("load is not a function");
        if (typeof defineConfig !== "function") throw new Error("defineConfig is not a function");
        console.log("esm-ok");`,
@@ -94,11 +94,11 @@ describe("the published artifact", () => {
     expect(run("node", ["esm.mjs"], project)).toContain("esm-ok");
   });
 
-  it('serves `require("penv")` from the CJS build', () => {
+  it('serves `require("@penvhq/penv")` from the CJS build', () => {
     // `import.meta` in a CJS bundle throws on load, so this is the guard for it.
     writeFileSync(
       join(project, "cjs.cjs"),
-      `const { load, defineConfig } = require("penv");
+      `const { load, defineConfig } = require("@penvhq/penv");
        if (typeof load !== "function") throw new Error("load is not a function");
        if (typeof defineConfig !== "function") throw new Error("defineConfig is not a function");
        console.log("cjs-ok");`,
@@ -131,7 +131,7 @@ describe("the published artifact", () => {
     );
     writeFileSync(
       join(project, "types.ts"),
-      `import { load } from "penv";
+      `import { load } from "@penvhq/penv";
        import { z } from "zod";
        const schema = z.object({ databaseUrl: z.string(), port: z.number() });
        const env = load(schema);

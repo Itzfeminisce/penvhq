@@ -1,5 +1,5 @@
 /**
- * `import "penv/config"` — the dotenv-shaped compatibility entry, under the
+ * `import "@penvhq/penv/config"` — the dotenv-shaped compatibility entry, under the
  * specifier users install.
  *
  * A bare side-effect import, because that is the whole contract: evaluating this

@@ -482,7 +482,7 @@ export function renderSchemaModule(fields: readonly SchemaField[], draft: boolea
 
   return (
     `${draft ? DRAFT_HEADER : ""}import { z } from "zod";\n` +
-    `import { load } from "penv";\n` +
+    `import { load } from "@penvhq/penv";\n` +
     `\n` +
     `// The shape. Import this (or z.infer<typeof schema>) when you only need the\n` +
     `// type — tests, tooling — so you don't trigger config loading.\n` +
@@ -550,7 +550,7 @@ export function renderConfigModule(decisions: InitDecisions): string {
       `  publicPrefixes: [${prefixes}],\n`;
   }
 
-  return `import { defineConfig } from "penv";\n\nexport default defineConfig({\n${body}});\n`;
+  return `import { defineConfig } from "@penvhq/penv";\n\nexport default defineConfig({\n${body}});\n`;
 }
 
 /**

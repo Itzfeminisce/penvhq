@@ -1,5 +1,5 @@
 /**
- * The `import "penv/config"` compatibility entry: populates `process.env`,
+ * The `import "@penvhq/penv/config"` compatibility entry: populates `process.env`,
  * dotenv-shaped, so penv can be adopted without changing existing code.
  *
  * ESM ordering caveat: this module must run before any module that reads
