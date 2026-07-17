@@ -47,7 +47,7 @@ import {
 } from "@penv/core";
 import { defineCommand } from "citty";
 import { detectAlias } from "../detect.js";
-import { openProject } from "../project.js";
+import { localTree, openProject } from "../project.js";
 import { CHECK, formatSteps, guard, type Step, WARN, write } from "../ui.js";
 import type { InitDecisions, InitStep, SchemaField } from "./init.js";
 import { planInit, scaffold, writeConfigFile } from "./init.js";
@@ -556,22 +556,23 @@ export function importDotenv(options: ImportOptions): ImportReport {
   // of one scaffold must not disagree about where the schema lives.
   const steps = scaffold(cwd, draftFields(parsed.entries), true, decisions);
   const project = openProject(cwd);
+  const tree = localTree(project);
 
   for (const [index, entry] of parsed.entries.entries()) {
     const ref = refs[index];
     if (ref === undefined) {
       continue;
     }
-    project.provider.writeSync(
+    tree.writeSync(
       { namespace: ref.namespace, name: ref.name, scope, encrypted: false },
       entry.value,
     );
     // A comment sitting directly above a variable describes it, so it becomes
     // that parameter's meta description and `generate` re-emits it as a comment.
     if (entry.description !== undefined) {
-      const existing = project.provider.readMetaSync(ref);
+      const existing = tree.readMetaSync(ref);
       const meta: Meta = { ...existing, description: entry.description };
-      project.provider.writeMetaSync(ref, meta);
+      tree.writeMetaSync(ref, meta);
     }
   }
 

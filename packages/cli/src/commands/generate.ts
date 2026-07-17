@@ -24,6 +24,7 @@ import { defineCommand } from "citty";
 import type { Project } from "../project.js";
 import {
   keySourceFor,
+  localTree,
   openProject,
   PENV_DIR,
   refsFrom,
@@ -65,7 +66,8 @@ interface Artifact {
 
 function entriesFor(project: Project, environment: string, allowDecrypt: boolean): Artifact {
   const keys = keySourceFor(project, environment);
-  const resolutions = resolveAllSync(project.provider, environment, keys);
+  const tree = localTree(project);
+  const resolutions = resolveAllSync(tree, environment, keys);
 
   // Invariant 12, enforced where the loss would happen: two parameters mapping
   // to one variable would silently drop a value from this file.
@@ -105,10 +107,7 @@ function entriesFor(project: Project, environment: string, allowDecrypt: boolean
     }
     // A parameter's description is a comment in the generated file, so the
     // annotation that arrived on import survives the round trip back out.
-    const description = effectiveMeta(
-      project.provider.readMetaSync(resolution.ref),
-      environment,
-    ).description;
+    const description = effectiveMeta(tree.readMetaSync(resolution.ref), environment).description;
     entries.push({
       key: variableName(resolution.ref, project.config),
       value: resolution.value,

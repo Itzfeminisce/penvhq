@@ -17,11 +17,13 @@
 
 import type { Meta, MetaBlock, ParameterRef, PenvConfig, SecretScope, Sink } from "@penv/core";
 import { checkNameCollisions, PenvError, requireValue, variableName } from "@penv/core";
+import type { FilesystemProvider } from "@penv/provider-filesystem";
 import { checkGithubNames, createGithubSink } from "@penv/sink-github";
 import { defineCommand } from "citty";
 import type { Project, SyncResolution } from "../project.js";
 import {
   keySourceFor,
+  localTree,
   openProject,
   PENV_DIR,
   refsFrom,
@@ -152,9 +154,14 @@ function withLastPushed(meta: Meta | undefined, environment: string, iso: string
   return { ...base, environments };
 }
 
-function recordPush(project: Project, ref: ParameterRef, environment: string, iso: string): void {
-  const meta = withLastPushed(project.provider.readMetaSync(ref), environment, iso);
-  project.provider.writeMetaSync(ref, meta);
+function recordPush(
+  tree: FilesystemProvider,
+  ref: ParameterRef,
+  environment: string,
+  iso: string,
+): void {
+  const meta = withLastPushed(tree.readMetaSync(ref), environment, iso);
+  tree.writeMetaSync(ref, meta);
 }
 
 export async function runPush(options: PushOptions): Promise<PushResult> {
@@ -162,9 +169,10 @@ export async function runPush(options: PushOptions): Promise<PushResult> {
   const environment = targetEnvironment(project, options.environment);
   const { sink, repo } = sinkFor(project, environment, options.sink);
 
+  const tree = localTree(project);
   const keys = keySourceFor(project, environment);
   // The push resolution: both `.local` scopes dropped. CI receives what CI would read.
-  const resolutions = resolveAllSync(project.provider, environment, keys, true);
+  const resolutions = resolveAllSync(tree, environment, keys, true);
   const refs = refsFrom(resolutions.map((resolution) => resolution.ref));
 
   // Every name judged before a single PUT. Exact-string collisions are core's;
@@ -198,7 +206,7 @@ export async function runPush(options: PushOptions): Promise<PushResult> {
     // process runs per parameter, so a single pre-loop time would sit seconds
     // behind the destination's and make `doctor`'s hand-edit check fire on a clean
     // push. A tolerance in `doctor` still absorbs the residual clock skew.
-    recordPush(project, item.ref, environment, options.now ?? new Date().toISOString());
+    recordPush(tree, item.ref, environment, options.now ?? new Date().toISOString());
   }
 
   return {
