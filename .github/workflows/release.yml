@@ -17,11 +17,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4 # reads packageManager from package.json
-
+      # Node must be >=22.13 BEFORE pnpm runs — pnpm 11.3 imports node:sqlite.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+
+      - uses: pnpm/action-setup@v4 # reads packageManager from package.json
+
+      # Re-run setup-node now that pnpm is on PATH, to enable the pnpm cache
+      # and write the npm auth .npmrc for publishing.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
