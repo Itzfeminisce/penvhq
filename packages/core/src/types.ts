@@ -201,6 +201,57 @@ export interface Provider {
    * parameter nothing walks.
    */
   removeMeta(ref: ParameterRef): Promise<void>;
+  /**
+   * Reads the value a parameter held before its current one — the sole retention
+   * operation the contract asks for, and an optional one. A provider that retains
+   * previous values implements it (and thereby satisfies {@link RetainingProvider});
+   * one that does not — the filesystem, Kubernetes, the general case — omits it
+   * entirely and still satisfies this contract.
+   *
+   * Never call it without first narrowing through {@link retainsPrevious}: retention
+   * is declared, not assumed, and a provider that omits this method has no such
+   * property to guess at.
+   */
+  readPrevious?(file: ValueFile): Promise<string | undefined>;
+}
+
+/**
+ * A {@link Provider} that retains a parameter's previous value. The narrowing
+ * {@link retainsPrevious} produces; the type a `dual-valid` rotation demands, since
+ * `atomic-cutover` does not.
+ *
+ * The capability is "give me the previous value" and nothing more. Retention
+ * *policy* is deliberately absent, because it does not survive the crossing
+ * between providers: Vault expires versions on a time TTL, SSM caps at a fixed
+ * 100 and silently prunes the oldest, Kubernetes retains nothing at all. A
+ * mandatory verb shaped on any one of those is unsatisfiable by the others, so
+ * the contract asks for none of them — no TTL, no count, no window.
+ *
+ * penv owns the grace-window clock (`rotatingSince` in meta); a provider is never
+ * asked to enforce a window, only to answer — and must be free to answer no. A
+ * non-retaining provider is not an exception to patch over: it is the general
+ * case, and the filesystem and Kubernetes sit on the same side of that line.
+ */
+export interface RetainingProvider extends Provider {
+  /**
+   * Reads the value a parameter held before its current one, at a single scope.
+   * Resolves to `undefined` when the provider no longer holds it — provider
+   * pruning and penv's timer do not commute, so the previous version may already
+   * be gone. Absence is never an error: a rotation that cannot find its previous
+   * value is a `doctor` failure, never a silent success, on the same rule the
+   * encryption check follows for a sealed value penv cannot open.
+   */
+  readPrevious(file: ValueFile): Promise<string | undefined>;
+}
+
+/**
+ * Narrows a provider to one that retains previous values, reading the capability
+ * the provider declared rather than guessing at it. This is the one place penv
+ * asks: a `dual-valid` rotation refuses a non-retaining provider here, up front,
+ * rather than discovering the gap at the moment it reaches for a previous value.
+ */
+export function retainsPrevious(provider: Provider): provider is RetainingProvider {
+  return typeof provider.readPrevious === "function";
 }
 
 /**

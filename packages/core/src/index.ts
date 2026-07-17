@@ -99,6 +99,7 @@ export type {
   ReservedToken,
   Resolution,
   ResolutionCandidate,
+  RetainingProvider,
   Scope,
   SecretScope,
   Sink,
@@ -106,4 +107,4 @@ export type {
   SinkSecret,
   ValueFile,
 } from "./types.js";
-export { assertNever, META_FORMATS, RESERVED_TOKENS } from "./types.js";
+export { assertNever, META_FORMATS, RESERVED_TOKENS, retainsPrevious } from "./types.js";
