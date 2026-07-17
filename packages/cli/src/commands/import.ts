@@ -609,11 +609,16 @@ function displayPath(root: string, file: string): string {
  * did not write the draft, and it does not read the user's schema to guess which
  * ones they had already declared themselves.
  */
-function keptSchemaStep(variables: number): Step {
+function keptSchemaStep(step: InitStep, variables: number): Step {
   const plural = variables === 1 ? "parameter" : "parameters";
   return {
     glyph: WARN,
-    text: "Kept .penv/env.ts",
+    // The step's own text, which names the file that was actually kept. This
+    // line rebuilt it from a hardcoded `.penv/env.ts`, so a project whose schema
+    // lives in `src/` was told penv had kept a file it does not have — the one
+    // line whose whole job is "your schema is untouched" naming the wrong
+    // schema. Only the glyph and the note are this function's business.
+    text: step.text,
     note: `(yours — ${variables} imported ${plural} undeclared, draft schema skipped)`,
   };
 }
@@ -654,7 +659,7 @@ export function renderImport(
 
   for (const step of result.steps) {
     if (step.target === "schema" && step.action === "kept") {
-      steps.push(keptSchemaStep(result.variables));
+      steps.push(keptSchemaStep(step, result.variables));
       continue;
     }
     // A conflicted step is the one init reports that is not a success — the same

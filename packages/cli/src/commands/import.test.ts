@@ -722,3 +722,53 @@ describe("the schema goes where the config says", () => {
     expect(existsSync(join(root, ".penv", "env.ts"))).toBe(false);
   });
 });
+
+/**
+ * The line whose whole job is "your schema is untouched" has to name the schema
+ * it did not touch. It rebuilt its text from a hardcoded `.penv/env.ts` rather
+ * than using the step's own, so a project whose schema lives in `src/` was told
+ * penv had kept a file the project does not have.
+ */
+describe("the kept-schema line names the schema that was kept", () => {
+  /** A passing validation, so the render has one; this block is about the step above it. */
+  const validated: ValidateResult = {
+    ok: true,
+    environment: "production",
+    parameters: 2,
+    issues: [],
+    drift: EMPTY_DRIFT,
+  };
+
+  it("names the declared path, not `.penv/env.ts`", () => {
+    const root = makeProject({
+      dotenv: "API_KEY=abc\nDB_URL=postgres://x\n",
+      filename: ".env.production",
+      config: { ...CONFIG, schemaFile: "src/env.ts" },
+    });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "env.ts"), "export const mine = 1;\n", "utf8");
+
+    const report = importDotenv({ cwd: root, file: ".env.production" });
+    const line = renderImport(report, validated).find((text) => text.includes("Kept"));
+
+    expect(line).toContain("src/env.ts");
+    expect(line).not.toContain(".penv/env.ts");
+    // The warning it exists to carry is still there.
+    expect(line).toContain("⚠");
+    expect(line).toContain("undeclared");
+  });
+
+  it("still names .penv/env.ts when that is where the schema really is", () => {
+    const root = makeProject({
+      dotenv: "API_KEY=abc\n",
+      filename: ".env.production",
+      config: CONFIG,
+      schema: "export const mine = 1;\n",
+    });
+
+    const report = importDotenv({ cwd: root, file: ".env.production" });
+    const line = renderImport(report, validated).find((text) => text.includes("Kept"));
+
+    expect(line).toContain(".penv/env.ts");
+  });
+});
