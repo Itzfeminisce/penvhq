@@ -52,12 +52,15 @@ export {
   reservedTokensFor,
   validateEnvironmentNames,
 } from "./grammar.js";
-export type { KeyLookup, KeySource } from "./keys.js";
+export type { Keychain, KeyLookup, KeySource } from "./keys.js";
 export {
   createEnvKeySource,
+  createKeychainKeySource,
   KEY_BYTES,
+  KEYCHAIN_SERVICE,
   nullKeySource,
   resolveKeySource,
+  setKeychain,
   validateKeys,
 } from "./keys.js";
 export { effectiveMeta, isRequired, isSecret, parseMeta, serializeMeta } from "./meta.js";

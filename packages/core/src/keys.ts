@@ -126,6 +126,102 @@ export function createEnvKeySource(config: KeyConfig): KeySource {
 }
 
 /**
+ * A synchronous read of, and write to, the OS keychain.
+ *
+ * The contract lives here but its implementation does not: a native keychain
+ * binding is a build failure in a deploy container, and `load` runs in every
+ * deploy. So core carries the interface and the CLI — whose dependency budget is
+ * looser, and which never ships inside a user's app — registers the binding via
+ * {@link setKeychain}. Where none is registered (the runtime, in production), a
+ * keychain source answers `unavailable` and a keychain-sealed value refuses to
+ * open loudly, exactly as it should somewhere the keychain was never meant to be
+ * read.
+ */
+export interface Keychain {
+  /**
+   * The secret stored for `(service, account)`, or `null` when the keychain is
+   * reachable but holds none. Throws when the keychain cannot be consulted at all
+   * — locked, or the binding missing — which the source reports as `unavailable`.
+   */
+  getPassword(service: string, account: string): string | null;
+  /** Stores a secret for `(service, account)`, replacing any existing one. */
+  setPassword(service: string, account: string, password: string): void;
+}
+
+/** The service name every penv key is stored under; the account is the key's id. */
+export const KEYCHAIN_SERVICE = "penv";
+
+let registeredKeychain: Keychain | undefined;
+
+/**
+ * Registers the OS-keychain binding. The CLI calls this at startup with a native
+ * implementation; the runtime never does, so its dependency tree stays free of
+ * the native module that would break a deploy build.
+ */
+export function setKeychain(keychain: Keychain | undefined): void {
+  registeredKeychain = keychain;
+}
+
+/**
+ * A key held in the OS keychain: the local-machine source, so a laptop that is
+ * the master copy of production's secrets stops keeping its key in a dotfile.
+ *
+ * Reads through the registered (or injected) {@link Keychain} binding, never a
+ * native module of its own — so it is safe to reach from the runtime, which finds
+ * no binding and answers `unavailable` rather than dragging a native dependency
+ * into a deployed app. Mirrors `createEnvKeySource`: one key per id, an honest
+ * `absent` for any other id, and the tri-state distinction between a locked
+ * keychain (`unavailable`) and a readable one with no such key (`absent`).
+ */
+export function createKeychainKeySource(config: KeyConfig, keychain?: Keychain): KeySource {
+  const backend = keychain ?? registeredKeychain;
+
+  const read = (keyId: string): KeyLookup => {
+    if (backend === undefined) {
+      return {
+        kind: "unavailable",
+        detail:
+          "no OS keychain binding is available here; keychain keys are read through the penv CLI, " +
+          "not inside a deployed app",
+      };
+    }
+    let stored: string | null;
+    try {
+      stored = backend.getPassword(KEYCHAIN_SERVICE, config.id);
+    } catch (cause) {
+      return {
+        kind: "unavailable",
+        detail: `the OS keychain could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
+      };
+    }
+    if (stored === null) {
+      return {
+        kind: "absent",
+        detail: `the OS keychain holds no key \`${config.id}\` under service \`${KEYCHAIN_SERVICE}\``,
+      };
+    }
+    const decoded = decodeKey(stored, `the OS keychain entry for \`${config.id}\``);
+    return decoded.kind === "found" ? { ...decoded, keyId } : decoded;
+  };
+
+  return {
+    type: "keychain",
+    lookup(keyId) {
+      if (keyId !== config.id) {
+        return {
+          kind: "absent",
+          detail: `the OS keychain entry holds key \`${config.id}\`, not \`${keyId}\``,
+        };
+      }
+      return read(keyId);
+    },
+    current() {
+      return read(config.id);
+    },
+  };
+}
+
+/**
  * The source for an environment that declares no `keys` block.
  *
  * Every lookup is `unavailable`, never `absent`. penv was never told where to
@@ -155,32 +251,28 @@ export function resolveKeySource(config: PenvConfig, environment: string): KeySo
     return nullKeySource(environment);
   }
 
-  // Every source but `env` refuses, rather than `keychain` alone refusing.
-  //
-  // `KeyConfig.source` is a two-member union, and at this line that union is a
-  // fiction: the config is a user's TypeScript file evaluated by jiti and cast
-  // unchecked, so `source` is whatever they typed. Refusing only the one name
-  // penv knows it cannot serve would let every name it has never heard of fall
-  // through to the env source — `source: "vault"` would seal production secrets
-  // under `PENV_KEY_*` while the config said Vault, which is the silent downgrade
-  // this module exists to make impossible. `validateConfig` names it too, but
-  // only for someone who ran `penv validate`; sealing a value must not depend on
-  // that. The one source that works is the one that is allowed through.
-  if (declared.source !== "env") {
-    const known =
-      declared.source === "keychain"
-        ? // Reserved by the config grammar, not implemented in this release —
-          // loud for the same reason an unparsed `.toml` meta file is loud.
-          `The OS keychain source is not part of this release.`
-        : `\`${String(declared.source)}\` is not a key source penv knows.`;
-    throw new PenvError(
-      "KEY_SOURCE_UNSUPPORTED",
-      `Environment ${environment} declares key source \`${String(declared.source)}\`, which penv cannot read`,
-      `${known} Declare \`source: "env"\` and export the key as \`${envVarFor(declared.id)}\`.`,
-    );
+  if (declared.source === "env") {
+    return createEnvKeySource(declared);
+  }
+  if (declared.source === "keychain") {
+    return createKeychainKeySource(declared);
   }
 
-  return createEnvKeySource(declared);
+  // A source name penv has never heard of never falls through to a weaker one.
+  //
+  // `KeyConfig.source` is a closed union, and at this line that union is a
+  // fiction: the config is a user's TypeScript file evaluated by jiti and cast
+  // unchecked, so `source` is whatever they typed. Dispatching by name and
+  // refusing the rest is what stops `source: "vault"` from sealing production
+  // secrets under `PENV_KEY_*` while the config said Vault — the silent downgrade
+  // this module exists to make impossible. `validateConfig` names it too, but
+  // only for someone who ran `penv validate`; sealing a value must not depend on
+  // that.
+  throw new PenvError(
+    "KEY_SOURCE_UNSUPPORTED",
+    `Environment ${environment} declares key source \`${String(declared.source)}\`, which penv cannot read`,
+    `\`${String(declared.source)}\` is not a key source penv knows. Declare \`source: "env"\` (exported as \`${envVarFor(declared.id)}\`) or \`source: "keychain"\`.`,
+  );
 }
 
 /** The `id` charset. `:` is excluded because it separates the envelope's fields. */

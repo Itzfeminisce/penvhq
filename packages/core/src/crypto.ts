@@ -40,9 +40,15 @@ export type DecryptResult =
 function remedyFor(failure: DecryptFailure, location: string): string {
   switch (failure.reason) {
     case "key-source-unavailable":
+      // Two causes reach here and they have different fixes: a source that was
+      // never declared (add a `keys` block) and a declared source that could not
+      // be consulted (a locked OS keychain — unlock it). The detail says which,
+      // so the remedy names both rather than sending a correctly-configured
+      // keychain user to edit config that is already right.
       return (
-        `penv could not consult a key source: ${failure.detail}. Declare where this ` +
-        "environment's keys live in the `keys` block of penv.config.ts."
+        `penv could not consult a key source: ${failure.detail}. Make the key available where this ` +
+        "environment expects it — if the source is your OS keychain, unlock it; if no key source is " +
+        "declared, add a `keys` block to penv.config.ts."
       );
     case "key-absent":
       return (

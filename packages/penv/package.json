@@ -39,6 +39,7 @@
     "zod": "4.4.3"
   },
   "dependencies": {
+    "@napi-rs/keyring": "1.3.0",
     "jiti": "2.7.0"
   }
 }

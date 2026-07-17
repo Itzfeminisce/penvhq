@@ -7,5 +7,7 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   target: "node20",
-  external: ["zod"],
+  // @napi-rs/keyring is a native binding with per-platform binaries — it must be
+  // required at runtime, never bundled.
+  external: ["zod", "@napi-rs/keyring"],
 });

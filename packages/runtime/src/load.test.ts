@@ -403,8 +403,9 @@ describe("load", () => {
     it("ships no keychain or native dependency", () => {
       // The env key source exists so decryption costs the app nothing: `load`
       // runs in every deploy, and a native module in its dependency tree is a
-      // build failure in someone's container. `keychain` is refused loudly by
-      // core instead — a source penv cannot read must say so, not be shimmed in.
+      // build failure in someone's container. The keychain binding lives in the
+      // CLI, never here; at runtime a keychain source finds no binding registered
+      // and resolves to `unavailable`, so `load` still carries no native dep.
       const manifest: unknown = JSON.parse(
         readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
       );

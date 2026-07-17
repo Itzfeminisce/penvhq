@@ -7,6 +7,7 @@
  * tests call the commands rather than spawn them.
  */
 
+import { setKeychain } from "@penv/core";
 import { runMain as cittyRunMain, defineCommand } from "citty";
 import { doctorCommand } from "./commands/doctor.js";
 import { decryptCommand, encryptCommand } from "./commands/encrypt.js";
@@ -22,6 +23,7 @@ import { removeCommand } from "./commands/remove.js";
 import { setCommand } from "./commands/set.js";
 import { validateCommand } from "./commands/validate.js";
 import { watchCommand } from "./commands/watch.js";
+import { defaultKeychain } from "./keychain.js";
 
 export const main = defineCommand({
   meta: {
@@ -48,6 +50,10 @@ export const main = defineCommand({
 });
 
 export function runMain(): Promise<void> {
+  // The CLI is where the keychain is read and written; core stays native-free and
+  // the runtime never registers a binding. Idempotent, and the binding is lazy —
+  // the native module loads only if a keychain key is actually touched.
+  setKeychain(defaultKeychain);
   return cittyRunMain(main);
 }
 

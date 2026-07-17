@@ -20,6 +20,11 @@ import { defineConfig } from "tsup";
  * The tests do not catch it: vitest resolves the source, where the prefix is
  * still there. Any other builtin subpath — `fs/promises`, `stream/promises` —
  * will need the same line.
+ *
+ * `@napi-rs/keyring` is external and a real dependency of this package: it is a
+ * native binding with per-platform binaries that cannot be bundled, and the CLI
+ * `require`s it lazily at runtime, so it must resolve from this package's own
+ * `node_modules`. It ships only with `npx penv`, never with `import { load }`.
  */
 export default defineConfig({
   entry: {
@@ -36,6 +41,6 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   target: "node20",
-  external: ["zod", "jiti", "readline/promises", "node:readline/promises"],
+  external: ["zod", "jiti", "@napi-rs/keyring", "readline/promises", "node:readline/promises"],
   noExternal: [/^@penv\//],
 });

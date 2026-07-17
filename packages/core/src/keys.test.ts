@@ -1,7 +1,38 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { PenvError } from "./errors.js";
-import { createEnvKeySource, KEY_BYTES, nullKeySource, resolveKeySource } from "./keys.js";
+import type { Keychain } from "./keys.js";
+import {
+  createEnvKeySource,
+  createKeychainKeySource,
+  KEY_BYTES,
+  nullKeySource,
+  resolveKeySource,
+  setKeychain,
+} from "./keys.js";
 import type { KeyConfig, PenvConfig } from "./types.js";
+
+/** A keychain backed by a plain map, so a test never touches the real OS keychain. */
+function mapKeychain(entries: Readonly<Record<string, string>> = {}): Keychain {
+  const store = new Map(Object.entries(entries));
+  return {
+    getPassword: (_service, account) => store.get(account) ?? null,
+    setPassword: (_service, account, password) => void store.set(account, password),
+  };
+}
+
+/** A keychain that cannot be consulted at all — a locked keychain, or a missing binding. */
+function lockedKeychain(): Keychain {
+  return {
+    getPassword() {
+      throw new Error("the keychain is locked");
+    },
+    setPassword() {
+      throw new Error("the keychain is locked");
+    },
+  };
+}
 
 /**
  * Every variable this file sets, restored after each case. A test that leaked a
@@ -34,6 +65,9 @@ afterEach(() => {
   }
   touched.clear();
   original.clear();
+  // No test leaks a registered keychain backend into the next; the default is
+  // "none registered", which a keychain source reports as `unavailable`.
+  setKeychain(undefined);
 });
 
 /** A key of `length` bytes, exported the way a deploy exports one. */
@@ -213,37 +247,25 @@ describe("resolveKeySource", () => {
   });
 
   /*
-   * The load-bearing refusal. `keychain` is reserved by the config grammar and
-   * read by nothing in this release, and reserving without implementing must be
-   * loud — exactly as an unparsed `.toml` meta file is. A silent downgrade to the
-   * env source would seal production secrets under a key the user never chose,
-   * while the config still said `keychain`.
+   * The load-bearing non-downgrade. `keychain` resolves to a keychain source and
+   * never to the env source — even when a key is exported under the name the env
+   * source would read, so a downgrade would succeed and go unnoticed. Sealing
+   * under a key the user never chose while the config said `keychain` is exactly
+   * the silent downgrade this module exists to make impossible.
    */
-  it("throws KEY_SOURCE_UNSUPPORTED for `keychain` rather than downgrading to env", () => {
-    // The key is exported under the name an env source would read, so a
-    // downgrade would succeed and go unnoticed. It must still throw.
+  it("resolves `keychain` to a keychain source, never downgrading to env", () => {
     setEnv("PENV_KEY_PROD", exportedKey(KEY_BYTES));
     const withKeys: PenvConfig = {
       ...config,
       keys: { production: { source: "keychain", id: "prod" } },
     };
 
-    const error = ((): unknown => {
-      try {
-        return resolveKeySource(withKeys, "production");
-      } catch (thrown: unknown) {
-        return thrown;
-      }
-    })();
+    const source = resolveKeySource(withKeys, "production");
 
-    expect(error).toBeInstanceOf(PenvError);
-    if (!(error instanceof PenvError)) {
-      throw new Error("expected a PenvError, not a key source");
-    }
-    expect(error.code).toBe("KEY_SOURCE_UNSUPPORTED");
-    expect(error.message).toContain("production");
-    expect(error.message).toContain("keychain");
-    expect(error.remedy).toContain("PENV_KEY_PROD");
+    expect(source.type).toBe("keychain");
+    // With no keychain backend registered it answers `unavailable` — never the
+    // env key sitting in PENV_KEY_PROD.
+    expect(source.current().kind).toBe("unavailable");
   });
 
   /*
@@ -342,36 +364,7 @@ describe("resolveKeySource", () => {
     expect(source.current().kind).toBe("found");
   });
 
-  /*
-   * `keychain` is reserved by the config grammar and read by nothing in this
-   * release, and it keeps a message of its own: "not part of this release" and
-   * "not a source penv knows" send a reader to different places, and the second
-   * would have them hunting for a typo in a name they spelled correctly.
-   */
-  it("gives `keychain` the release-specific message, not the unknown-source one", () => {
-    setEnv("PENV_KEY_PROD", exportedKey(KEY_BYTES));
-    const withKeys: PenvConfig = {
-      ...config,
-      keys: { production: { source: "keychain", id: "prod" } },
-    };
-
-    const error = ((): unknown => {
-      try {
-        return resolveKeySource(withKeys, "production");
-      } catch (thrown: unknown) {
-        return thrown;
-      }
-    })();
-
-    expect(error).not.toMatchObject({ type: "env" });
-    if (!(error instanceof PenvError)) {
-      throw new Error("expected a PenvError, not a key source");
-    }
-    expect(error.remedy).toContain("not part of this release");
-    expect(error.remedy).not.toContain("is not a key source penv knows");
-  });
-
-  it("throws for `keychain` in every environment that declares it, not only the first", () => {
+  it("resolves each declared source independently — env and keychain side by side", () => {
     const withKeys: PenvConfig = {
       ...config,
       keys: {
@@ -381,6 +374,87 @@ describe("resolveKeySource", () => {
     };
 
     expect(resolveKeySource(withKeys, "development").type).toBe("env");
-    expect(() => resolveKeySource(withKeys, "production")).toThrow(PenvError);
+    expect(resolveKeySource(withKeys, "production").type).toBe("keychain");
+  });
+});
+
+describe("createKeychainKeySource", () => {
+  const prodKeychain: KeyConfig = { source: "keychain", id: "prod" };
+
+  it("finds a 32-byte base64 key stored in the keychain under its id", () => {
+    const source = createKeychainKeySource(
+      prodKeychain,
+      mapKeychain({ prod: exportedKey(KEY_BYTES) }),
+    );
+
+    const lookup = source.lookup("prod");
+    expect(lookup.kind).toBe("found");
+    expect(lookup.kind === "found" && lookup.keyId).toBe("prod");
+    expect(lookup.kind === "found" && lookup.key).toEqual(new Uint8Array(KEY_BYTES).fill(7));
+  });
+
+  it("answers the same key from current() as from lookup(), so seal and open agree", () => {
+    const source = createKeychainKeySource(
+      prodKeychain,
+      mapKeychain({ prod: exportedKey(KEY_BYTES) }),
+    );
+    expect(source.current()).toEqual(source.lookup("prod"));
+  });
+
+  it("returns `absent` for a lookup of any id but its own, never its key under the wrong name", () => {
+    const source = createKeychainKeySource(
+      prodKeychain,
+      mapKeychain({ prod: exportedKey(KEY_BYTES) }),
+    );
+    expect(source.lookup("staging").kind).toBe("absent");
+  });
+
+  it("returns `absent` when the keychain is readable but holds no such key", () => {
+    const source = createKeychainKeySource(prodKeychain, mapKeychain({}));
+    expect(source.current().kind).toBe("absent");
+  });
+
+  it("returns `unavailable`, not `absent`, when the keychain cannot be consulted", () => {
+    const source = createKeychainKeySource(prodKeychain, lockedKeychain());
+    expect(source.current().kind).toBe("unavailable");
+  });
+
+  it("returns `unavailable` when no keychain binding is registered", () => {
+    const source = createKeychainKeySource(prodKeychain);
+    expect(source.current().kind).toBe("unavailable");
+  });
+
+  it("uses the registered binding when none is injected", () => {
+    setKeychain(mapKeychain({ prod: exportedKey(KEY_BYTES) }));
+    expect(createKeychainKeySource(prodKeychain).current().kind).toBe("found");
+  });
+
+  it("rejects a stored value that is not a 32-byte key as `absent`, never a wrong-length key", () => {
+    const source = createKeychainKeySource(prodKeychain, mapKeychain({ prod: exportedKey(16) }));
+    const lookup = source.current();
+    expect(lookup.kind).toBe("absent");
+    expect(lookup.kind === "absent" && lookup.detail).toContain("16 bytes");
+  });
+});
+
+/*
+ * The invariant the whole keychain design rests on: core carries no native
+ * module. The runtime depends on core and `load` runs in every deploy, so a
+ * native binding in core's tree would be a build failure in someone's container —
+ * which is why the keychain binding lives in the CLI and is injected. The
+ * runtime's own dep test pins the runtime's DIRECT deps, but a native module
+ * added to core would enter the deploy tree transitively and slip past it. This
+ * pins core itself.
+ */
+describe("the native-free invariant core depends on", () => {
+  it("declares no native or keychain dependency in @penv/core", () => {
+    const manifest: unknown = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+    );
+    const { dependencies } = manifest as { dependencies: Readonly<Record<string, string>> };
+
+    expect(Object.keys(dependencies)).toEqual(["jiti"]);
+    // Belt and braces: no keychain/napi module by any name, now or later.
+    expect(Object.keys(dependencies).some((name) => /keyring|keytar|napi/i.test(name))).toBe(false);
   });
 });

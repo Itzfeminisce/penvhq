@@ -21,6 +21,7 @@
     "build": "tsup"
   },
   "dependencies": {
+    "@napi-rs/keyring": "1.3.0",
     "@penv/core": "workspace:*",
     "@penv/provider-filesystem": "workspace:*",
     "@penv/sink-github": "workspace:*",
