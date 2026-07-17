@@ -721,3 +721,91 @@ describe("the alias note", () => {
     expect(plan.notes.join("\n")).not.toContain("declares `imports`");
   });
 });
+
+/**
+ * Guess once, declare forever. Detection is a suggestion, and a suggestion that
+ * outranked a recorded decision would make `penv init` unsafe to re-run: on a
+ * project declaring `src/lib/env.ts` it scaffolded a *second* schema at the
+ * detected path, warned that its own correct alias pointed at the wrong file,
+ * and told a project with `environments: ["production"]` that it had declared
+ * none. Three failures, one cause — the plan never read the config.
+ */
+describe("re-running init on a project that already decided", () => {
+  /** The config is loaded through jiti, so a fixture has to be a plain object literal. */
+  function configured(root: string, body: string): void {
+    writeFileSync(join(root, "penv.config.ts"), `export default ${body};\n`, "utf8");
+  }
+
+  it("keeps the declared schema instead of the detected one", () => {
+    const root = makeProject(NEXT, { src: true });
+    configured(root, '{ environments: [], providers: {}, schemaFile: "src/lib/env.ts" }');
+
+    expect(planInit(root).decisions.schemaFile).toBe("src/lib/env.ts");
+  });
+
+  /**
+   * A config that omits `schemaFile` has still answered — with the default. A
+   * project scaffolded before detection existed must not have its schema moved
+   * by a later penv that now recognises the framework.
+   */
+  it("keeps the default a config implies, rather than re-detecting over it", () => {
+    const root = makeProject(NEXT, { src: true });
+    configured(root, "{ environments: [], providers: {} }");
+
+    expect(planInit(root).decisions.schemaFile).toBe(".penv/env.ts");
+  });
+
+  it("does not scaffold a second schema", () => {
+    const root = makeProject(NEXT, { src: true });
+    configured(root, '{ environments: [], providers: {}, schemaFile: "src/lib/env.ts" }');
+
+    runInit({ cwd: root, decisions: planInit(root).decisions });
+    runInit({ cwd: root, decisions: planInit(root).decisions });
+
+    expect(existsSync(join(root, "src", "lib", "env.ts"))).toBe(true);
+    expect(existsSync(join(root, ".penv", "env.ts"))).toBe(false);
+  });
+
+  it("stops announcing that a project with environments has none", () => {
+    const root = makeProject(NEXT, { src: true });
+    configured(
+      root,
+      '{ environments: ["production"], providers: { production: { type: "filesystem" } } }',
+    );
+
+    const plan = planInit(root);
+
+    expect(plan.decisions.environments).toEqual(["production"]);
+    expect(plan.notes.join("\n")).not.toContain("No environments declared");
+  });
+
+  it("keeps the declared publicPrefixes over the detected ones", () => {
+    const root = makeProject(NEXT, { src: true });
+    configured(root, '{ environments: [], providers: {}, publicPrefixes: ["VITE_"] }');
+
+    expect(planInit(root).decisions.publicPrefixes).toEqual(["VITE_"]);
+  });
+
+  /** A flag is the human deciding now, which outranks the human having decided before. */
+  it("lets --schema override what the config declares", () => {
+    const root = makeProject(NEXT, { src: true });
+    configured(root, '{ environments: [], providers: {}, schemaFile: "src/lib/env.ts" }');
+
+    expect(planInit(root, { schema: "src/other.ts" }).decisions.schemaFile).toBe("src/other.ts");
+  });
+
+  /**
+   * Only this project's config. A monorepo root's declaration is not the
+   * package's, and `writeConfigFile` has always looked exactly beside `root`.
+   */
+  it("ignores a config belonging to a parent directory", () => {
+    const parent = makeDir();
+    configured(parent, '{ environments: [], providers: {}, schemaFile: "src/parent.ts" }');
+    const root = join(parent, "packages", "app");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "package.json"), JSON.stringify(NEXT), "utf8");
+    mkdirSync(join(root, "src"), { recursive: true });
+
+    expect(planInit(root).decisions.schemaFile).toBe("src/env.ts");
+  });
+});

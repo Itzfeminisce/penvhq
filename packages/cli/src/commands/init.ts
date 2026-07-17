@@ -22,9 +22,11 @@ import { createInterface } from "node:readline/promises";
 import {
   DEFAULT_SCHEMA_FILE,
   isLegalEnvironmentName,
+  loadConfigFrom,
   type PenvConfig,
   PenvError,
   RESERVED_TOKENS,
+  schemaFileOf,
   schemaInsideTree,
   validateSchemaFile,
 } from "@penv/core";
@@ -230,16 +232,48 @@ function configOf(decisions: InitDecisions): PenvConfig {
 }
 
 /**
+ * The decisions this project already recorded, or `undefined` when it has none.
+ *
+ * Only the config init itself would write or keep — the one beside `root`, not
+ * whatever `findConfigFile` turns up two directories above. A monorepo's root
+ * config is not this package's declaration, and `writeConfigFile` has always
+ * looked exactly here.
+ *
+ * A config that exists and cannot be read is an error rather than an absence.
+ * Treating it as absent is how the re-run bug worked in the first place: penv
+ * would decide the project had declared nothing, re-detect, and scaffold a
+ * second schema beside the one already there.
+ */
+function declaredIn(root: string): PenvConfig | undefined {
+  const file = join(root, CONFIG_FILE);
+  if (!existsSync(file)) {
+    return undefined;
+  }
+  return loadConfigFrom(file);
+}
+
+/**
  * What penv observed and what it proposes to write. The notes are the point as
  * much as the decisions are: a project that ends up with `.penv/env.ts` because
  * detection failed must be told that detection failed, or the fallback is
  * indistinguishable from a choice penv made on their behalf.
+ *
+ * Precedence is the whole design in one list: a flag is the human deciding now, a
+ * config is the human having decided already, and detection is a suggestion that
+ * loses to both. Guess once, declare forever — so once `penv.config.ts` exists,
+ * re-detection cannot move what it says. Re-running init on a project that
+ * declared `src/lib/env.ts` used to scaffold a *second* schema at the detected
+ * path, warn that its own correct alias pointed at the wrong file, and announce
+ * that a project with `environments: ["production"]` had declared none.
  */
 export function planInit(root: string, flags: InitFlags = {}): InitPlan {
+  const declared = declaredIn(root);
   const detected = detectFramework(root);
   const notes: string[] = [];
 
-  if (detected === undefined) {
+  if (declared !== undefined) {
+    notes.push(`${CONFIG_FILE} already exists — init keeps every decision it records.`);
+  } else if (detected === undefined) {
     notes.push(
       `No framework detected in package.json — the schema goes to ${DEFAULT_SCHEMA_FILE}.`,
     );
@@ -247,9 +281,15 @@ export function planInit(root: string, flags: InitFlags = {}): InitPlan {
     notes.push(`Detected ${detected.name}.`);
   }
 
+  // Flag, then what the project already declared, then detection. `schemaFileOf`
+  // rather than `config.schemaFile`: a config that omits the key has still
+  // answered — with the default — and re-detection must not move a schema that
+  // is already sitting where the project says it is.
   const schemaFile =
     flags.schema === undefined
-      ? (detected?.schemaFile ?? DEFAULT_SCHEMA_FILE)
+      ? declared !== undefined
+        ? schemaFileOf(declared)
+        : (detected?.schemaFile ?? DEFAULT_SCHEMA_FILE)
       : flags.schema.trim();
   if (flags.schema !== undefined) {
     if (schemaFile.length === 0) {
@@ -289,8 +329,11 @@ export function planInit(root: string, flags: InitFlags = {}): InitPlan {
   }
 
   const suggestedEnvironments = suggestEnvironments(root);
-  const environments = flags.environments ?? [];
-  if (flags.environments === undefined) {
+  const environments = flags.environments ?? declared?.environments ?? [];
+  // The empty whitelist is worth a line only when it is still empty. A project
+  // that declared `production` being told it has declared nothing is penv
+  // reading its own config wrong out loud.
+  if (environments.length === 0) {
     notes.push(
       "No environments declared: penv does not infer them, and a `--yes` run cannot invent them.",
     );
@@ -307,7 +350,7 @@ export function planInit(root: string, flags: InitFlags = {}): InitPlan {
     decisions: {
       environments,
       schemaFile,
-      publicPrefixes: detected?.publicPrefixes ?? [],
+      publicPrefixes: declared?.publicPrefixes ?? detected?.publicPrefixes ?? [],
       alias,
     },
     suggestedEnvironments,
