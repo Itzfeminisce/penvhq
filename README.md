@@ -8,9 +8,9 @@
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
   <a href="#is-penv-for-you">Is it for you?</a> ·
-  <a href="./penv-docs.md">Docs</a> ·
-  <a href="./RFC-0001-penv.md">RFC</a> ·
-  <a href="./penv-roadmap.md">Roadmap</a>
+  <a href="./docs/Documentation.md">Docs</a> ·
+  <a href="./docs/RFC.md">RFC</a> ·
+  <a href="./docs/Roadmap.md">Roadmap</a>
 </p>
 
 ---
@@ -24,19 +24,19 @@
 
 Those are two serializations of the same record. Because the shapes match, **switching provider is a config change, not an application rewrite** — and the translation between them stops being a script someone wrote under deploy pressure.
 
----
+> **Docs describe finished penv; the [roadmap](./docs/Roadmap.md) says what's shippable today.** This README and the docs describe the complete system. For what's available in which release, the roadmap is the single source of truth.
 
 ## What penv is — and isn't
 
-**penv is not** the fastest way to read `process.env` in TypeScript. [t3-env](https://github.com/t3-oss/t3-env) is, and it wins that job *structurally* — it wins by doing less, and no amount of work on penv changes that. If a single `.env` and t3-env make you happy, use them. We mean it.
+**penv is not** the fastest way to read `process.env` in TypeScript. [t3-env](https://github.com/t3-oss/t3-env) is, and it wins that job *structurally* — by doing less. If a single `.env` and t3-env make you happy, use them. We mean it.
 
-**penv is** the only configuration layer where your local environment and your production secret manager share a data model — instead of two systems you keep in sync by hand. That hand-maintained seam is the actual risk surface: a key renamed in Vault but not locally, a stale `.env.example`, a staging secret pasted into a prod deploy at 2am. penv's job is to delete it.
+**penv is** the only configuration layer where your local environment and your production secret manager share a data model — instead of two systems you keep in sync by hand. That hand-maintained seam is the real risk surface: a key renamed in Vault but not locally, a stale `.env.example`, a staging secret pasted into a prod deploy at 2am. penv's job is to delete it.
 
 That's the whole pitch. It's narrow on purpose.
 
 ## Is penv for you?
 
-**Yes, if** you already run (or are about to run) a real secret manager — Vault, AWS SSM, Kubernetes Secrets — and you currently hand-translate between a local `.env` and that provider, and you've felt the drift.
+**Yes, if** you already run (or are about to run) a real secret manager — Vault, AWS SSM, Kubernetes Secrets — and you hand-translate between a local `.env` and that provider, and you've felt the drift.
 
 **No, if** you're a solo dev or small project happy with `.env.example`. That's a smaller, well-solved problem, and penv would cost you more than it returns.
 
@@ -52,34 +52,35 @@ npx penv import .env
 ```
 ✓ Found 34 variables
 ✓ Created .penv/
-✓ Generated penv.config.ts
-✓ Generated .penv/schema.ts   (draft — review it)
+✓ Generated .penv/env.ts       (schema + loader — yours to edit)
+✓ Added @env alias to tsconfig.json
 ✓ Updated .gitignore
-✓ Created .env.backup
 ✓ Validated configuration
 
 Done. .penv/ is now your source of truth.
 ```
 
-Then two things:
-
-```bash
-npx penv doctor        # what's missing, weak, unused, or drifted from your provider
-```
-
-…and open `.penv/schema.ts` to tighten the inferred schema — it's a starting point, not a guarantee.
-
-Read values in code, fully typed:
+Read values in code, fully typed — imported from your own project, no magic:
 
 ```ts
-import { env } from "penv";
+import { env } from "@env";
 
-env.databaseUrl;         // typed, inferred from your schema
-env.app.jwtSecret;       // nested, matching your namespaces
-env.require("jwt-secret"); // throws a clear error if absent
+env.databaseUrl;         // string, validated at boot
+env.redis.password;      // string | undefined (optional in your schema)
 ```
 
-Generate a plain `.env` for deploy targets that expect one, any time:
+`@env` is an alias for `.penv/env.ts`, the one file `penv init` scaffolds and you own:
+
+```ts
+// .penv/env.ts
+import { z } from "zod";
+import { load } from "penv";
+
+export const schema = z.object({ /* your config shape */ });
+export const env = load(schema);   // typed z.infer<typeof schema>, validated at import
+```
+
+The types come from `z.infer` on your schema; the values are validated against that same schema at boot. One source, so the type you code against and the value you receive can't diverge. Generate a plain `.env` for deploy targets any time:
 
 ```bash
 npx penv generate
@@ -103,64 +104,28 @@ $ penv doctor
 
 Restructuring into the full `.penv/` tree is the payoff for teams who want to *fix* what doctor finds — not a precondition for reading the report.
 
-## What it looks like
+## Design tradeoffs (permanent, not gaps)
 
-```
-project-root/
-├── penv.config.ts          # environments, providers, name overrides
-└── .penv/
-    ├── schema.ts           # one Zod schema — runtime validation + types
-    ├── database-url
-    ├── database-url.production.enc
-    ├── database-url.json   # per-parameter meta (owner, rotation policy…)
-    ├── app/
-    │   ├── jwt-secret.production.enc
-    │   └── jwt-secret.json
-    └── redis/
-        ├── password.production.enc
-        └── password.json
-```
+We'd rather state these than let you discover them. They're properties of finished penv, not things a release closes:
 
-Each value file holds one value. Nothing is a proprietary database — it's all inspectable with `ls` and `cat`.
+- **More files than a flat `.env`** — the cost of per-parameter access control and independent rotation, which a flat file structurally can't offer.
+- **Migration restructures your source of truth** — it's not an additive layer. After `import`, `.penv/` is primary and `.env` is generated. Reversible via `penv generate`, but not invisible.
+- **Doesn't beat t3-env on local speed** — different job, and it doesn't try to.
+- **An encrypted unscoped default needs the decrypt key for local dev** — encrypt per-environment values instead if that's a problem.
 
-## CLI
-
-| Command | Does |
-|---|---|
-| `penv init` | Initialize a project |
-| `penv import <file>` | Import an existing `.env`; it becomes the source of truth |
-| `penv generate` | Write a standard `.env` for deploy targets |
-| `penv get` / `set` / `remove` / `list` | Manage parameters |
-| `penv encrypt` / `decrypt` | Encrypt/decrypt individual parameters |
-| `penv validate` | Check config against the schema |
-| `penv doctor` | Report drift, missing, unused, weak, plaintext, and rotation issues |
-
-Full reference in the [docs](./penv-docs.md).
-
-## Honest limitations
-
-We'd rather say these plainly than let you discover them.
-
-- **More files than a flat `.env`** — a real cost, accepted because it's what buys per-parameter access control and independent rotation. A flat file structurally can't offer those.
-- **Migration restructures your source of truth** — it's not an additive layer. After `import`, `.penv/` is primary and `.env` is generated. Reversible, but not invisible.
-- **Early encryption is organizational, not cryptographic** — until keys are provider-backed (OS keychain / KMS, never repo-adjacent), penv doesn't improve on `.env` security. That milestone is on the [roadmap](./penv-roadmap.md).
-- **Provider portability is being proven, not assumed** — the "config change, not a rewrite" claim is validated against Vault first, then generalized. Until then, treat other providers as roadmap items.
-
-## Status
-
-Pre-1.0 and sequenced by which risk each milestone retires — see the [roadmap](./penv-roadmap.md). The pivotal milestone is **v0.4**, where the Vault adapter proves provider portability is real. Everything before it is buildable from the settled design; that one claim stays a promise until v0.4 ships.
+For what's *available when* — encryption, providers, rotation — see the [roadmap](./docs/Roadmap.md).
 
 ## Documentation
 
-- **[Docs](./penv-docs.md)** — full reference: concepts, environments, schema, providers, rotation, CLI.
-- **[RFC-0001](./RFC-0001-penv.md)** — the design spec and the reasoning behind every decision.
-- **[Roadmap](./penv-roadmap.md)** — what's built, what's next, and the two risks a build plan can't close.
+- **[Docs](./docs/Documentation.md)** — the complete reference to finished penv: concepts, resolution, schema, providers, encryption, rotation, CLI.
+- **[RFC-0001](./docs/RFC.md)** — the story book: why penv is shaped this way, the alternatives weighed, the decisions and reasoning.
+- **[Roadmap](./docs/Roadmap.md)** — the single source of truth for what's available in which release.
 
 ## Contributing
 
-The highest-leverage contribution right now isn't code — it's signal. If you run a real secret manager and maintain the local↔production translation by hand, open an issue describing that pain. That's the demand question the roadmap can't answer from the inside, and it decides where this project goes.
+The highest-leverage contribution right now isn't code — it's signal. If you run a real secret manager and maintain the local↔production translation by hand, open an issue describing that pain. That's the demand question the roadmap can't answer from the inside.
 
-For code: the provider contract (v0.4) is the highest-risk, highest-value surface. Start there, or with a `doctor` check.
+For code: the provider contract (roadmap v0.4) is the highest-risk, highest-value surface. Start there, or with a `doctor` check.
 
 ## License
 
