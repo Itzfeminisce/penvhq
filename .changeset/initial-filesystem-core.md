@@ -1,8 +1,8 @@
 ---
-"@penv/provider-filesystem": minor
-"@penv/runtime": minor
-"@penv/core": minor
-"@penv/cli": minor
+"@penvhq/provider-filesystem": minor
+"@penvhq/runtime": minor
+"@penvhq/core": minor
+"@penvhq/cli": minor
 "penv": minor
 ---
 

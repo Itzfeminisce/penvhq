@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PenvError } from "@penv/core";
+import { PenvError } from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { runGet } from "./get.js";
 import { runList } from "./list.js";

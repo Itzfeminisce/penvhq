@@ -10,7 +10,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import type { SecretScope, Sink, SinkSecret } from "@penv/core";
+import type { SecretScope, Sink, SinkSecret } from "@penvhq/core";
 import { GithubUnavailableError } from "./errors.js";
 
 /** A `gh` invocation failed. Normalized so the sink maps it without touching Node's error shape. */

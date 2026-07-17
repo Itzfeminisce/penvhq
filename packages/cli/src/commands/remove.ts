@@ -6,8 +6,8 @@
  * the parameter across every environment, not of the value you just deleted.
  */
 
-import type { ValueFile } from "@penv/core";
-import { formatValueFile } from "@penv/core";
+import type { ValueFile } from "@penvhq/core";
+import { formatValueFile } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { openProject, PENV_DIR, refFromKey } from "../project.js";
 import { CHECK, formatRows, guard, type Row, WARN, write } from "../ui.js";

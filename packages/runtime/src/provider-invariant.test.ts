@@ -49,7 +49,7 @@ describe("the runtime never selects a provider", () => {
       "providerFactory",
       "isProviderRegistered",
       "assertProvidersRegistered",
-      "@penv/cli",
+      "@penvhq/cli",
     ];
     for (const source of SOURCES) {
       const text = code(source);
@@ -64,13 +64,13 @@ describe("the runtime never selects a provider", () => {
     // provider package appearing here would be a network provider the runtime
     // could reach at boot — the thing the sync-target rule forbids.
     const resolve = code("resolve.ts");
-    expect(resolve).toContain("@penv/provider-filesystem");
+    expect(resolve).toContain("@penvhq/provider-filesystem");
     expect(resolve).toContain("createFilesystemProvider");
 
-    const providerImports = [...resolve.matchAll(/from\s+"(@penv\/provider-[^"]+)"/g)].map(
+    const providerImports = [...resolve.matchAll(/from\s+"(@penvhq\/provider-[^"]+)"/g)].map(
       (match) => match[1],
     );
-    expect(providerImports).toEqual(["@penv/provider-filesystem"]);
+    expect(providerImports).toEqual(["@penvhq/provider-filesystem"]);
   });
 
   it("never inspects a declared provider type", () => {
@@ -90,7 +90,7 @@ describe("the runtime never selects a provider", () => {
       dependencies?: Record<string, string>;
     };
     const dependencies = manifest.dependencies ?? {};
-    expect(dependencies).toHaveProperty("@penv/provider-filesystem");
-    expect(dependencies).not.toHaveProperty("@penv/cli");
+    expect(dependencies).toHaveProperty("@penvhq/provider-filesystem");
+    expect(dependencies).not.toHaveProperty("@penvhq/cli");
   });
 });

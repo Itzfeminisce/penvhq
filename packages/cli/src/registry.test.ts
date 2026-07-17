@@ -14,8 +14,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type PenvConfig, PenvError } from "@penv/core";
-import { FilesystemProvider } from "@penv/provider-filesystem";
+import { type PenvConfig, PenvError } from "@penvhq/core";
+import { FilesystemProvider } from "@penvhq/provider-filesystem";
 import { afterEach, describe, expect, it } from "vitest";
 import { localTree, openProject } from "./project.js";
 import { assertProvidersRegistered, createProvider, isProviderRegistered } from "./registry.js";

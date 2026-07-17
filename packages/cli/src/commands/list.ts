@@ -5,8 +5,8 @@
  * resolves", and only one of them means the value was written for production.
  */
 
-import type { Scope } from "@penv/core";
-import { assertNever, resolveAll, variableName } from "@penv/core";
+import type { Scope } from "@penvhq/core";
+import { assertNever, resolveAll, variableName } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { keySourceFor, openProject, PENV_DIR, targetEnvironment } from "../project.js";
 import { columns, guard, write } from "../ui.js";

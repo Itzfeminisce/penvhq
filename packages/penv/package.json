@@ -1,5 +1,6 @@
 {
   "name": "penv",
+  "private": true,
   "version": "0.0.0",
   "description": "Configuration that shares a data model with your production secret manager.",
   "license": "MIT",
@@ -32,10 +33,10 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@penv/cli": "workspace:*",
-    "@penv/core": "workspace:*",
-    "@penv/provider-filesystem": "workspace:*",
-    "@penv/runtime": "workspace:*",
+    "@penvhq/cli": "workspace:*",
+    "@penvhq/core": "workspace:*",
+    "@penvhq/provider-filesystem": "workspace:*",
+    "@penvhq/runtime": "workspace:*",
     "zod": "4.4.3"
   },
   "dependencies": {

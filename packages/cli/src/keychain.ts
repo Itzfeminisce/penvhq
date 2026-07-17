@@ -1,7 +1,7 @@
 /**
  * The OS-keychain binding, and the one place the native module is touched.
  *
- * `@penv/core` defines the `Keychain` contract but carries no native dependency:
+ * `@penvhq/core` defines the `Keychain` contract but carries no native dependency:
  * `load` runs in every deploy, and a native module in the runtime's tree is a
  * build failure in someone's container. So the binding lives here, in the CLI —
  * whose dependency budget is looser and which never ships inside a user's app —
@@ -14,7 +14,7 @@
  */
 
 import { createRequire } from "node:module";
-import type { Keychain } from "@penv/core";
+import type { Keychain } from "@penvhq/core";
 
 /** The synchronous slice of `@napi-rs/keyring`'s `Entry` this binding uses. */
 interface Entry {

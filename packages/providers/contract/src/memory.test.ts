@@ -6,7 +6,7 @@
  * demonstrated with a second provider type and no live backend.
  */
 
-import { retainsPrevious } from "@penv/core";
+import { retainsPrevious } from "@penvhq/core";
 import { describe, expect, it } from "vitest";
 import { runProviderContractSuite } from "./contract.js";
 import { createInMemoryProvider } from "./memory.js";

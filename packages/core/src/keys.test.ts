@@ -447,7 +447,7 @@ describe("createKeychainKeySource", () => {
  * pins core itself.
  */
 describe("the native-free invariant core depends on", () => {
-  it("declares no native or keychain dependency in @penv/core", () => {
+  it("declares no native or keychain dependency in @penvhq/core", () => {
     const manifest: unknown = JSON.parse(
       readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
     );

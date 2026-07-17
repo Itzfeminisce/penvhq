@@ -19,7 +19,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_SCHEMA_FILE } from "@penv/core";
+import { DEFAULT_SCHEMA_FILE } from "@penvhq/core";
 
 /** A framework penv recognised, and what it implies about a project's layout. */
 export interface Detected {

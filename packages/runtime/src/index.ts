@@ -1,7 +1,7 @@
 /**
- * The public surface of `@penv/runtime` — what `penv` re-exports.
+ * The public surface of `@penvhq/runtime` — what `penv` re-exports.
  *
- * `defineConfig` is re-exported from `@penv/core` because the docs show
+ * `defineConfig` is re-exported from `@penvhq/core` because the docs show
  * `penv.config.ts` importing it from `penv`: one import specifier for the whole
  * tool, whatever package a symbol happens to live in.
  */
@@ -16,6 +16,6 @@ export {
   ReservedTokenError,
   UnknownEnvironmentError,
   ValidationError,
-} from "@penv/core";
+} from "@penvhq/core";
 export type { LoadOptions } from "./load.js";
 export { load } from "./load.js";

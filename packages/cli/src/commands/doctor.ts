@@ -34,7 +34,7 @@ import type {
   Sink,
   SinkConfig,
   SinkSecret,
-} from "@penv/core";
+} from "@penvhq/core";
 import {
   accessPath,
   effectiveMeta,
@@ -43,8 +43,8 @@ import {
   isSecret,
   resolveAll,
   variableName,
-} from "@penv/core";
-import { createGithubSink } from "@penv/sink-github";
+} from "@penvhq/core";
+import { createGithubSink } from "@penvhq/sink-github";
 import { defineCommand } from "citty";
 import type { z } from "zod";
 import type { Project } from "../project.js";

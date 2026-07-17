@@ -32,16 +32,16 @@ importers:
       '@napi-rs/keyring':
         specifier: 1.3.0
         version: 1.3.0
-      '@penv/core':
+      '@penvhq/core':
         specifier: workspace:*
         version: link:../core
-      '@penv/provider-filesystem':
+      '@penvhq/provider-filesystem':
         specifier: workspace:*
         version: link:../providers/filesystem
-      '@penv/runtime':
+      '@penvhq/runtime':
         specifier: workspace:*
         version: link:../runtime
-      '@penv/sink-github':
+      '@penvhq/sink-github':
         specifier: workspace:*
         version: link:../sinks/github
       citty:
@@ -74,16 +74,16 @@ importers:
         specifier: 2.7.0
         version: 2.7.0
     devDependencies:
-      '@penv/cli':
+      '@penvhq/cli':
         specifier: workspace:*
         version: link:../cli
-      '@penv/core':
+      '@penvhq/core':
         specifier: workspace:*
         version: link:../core
-      '@penv/provider-filesystem':
+      '@penvhq/provider-filesystem':
         specifier: workspace:*
         version: link:../providers/filesystem
-      '@penv/runtime':
+      '@penvhq/runtime':
         specifier: workspace:*
         version: link:../runtime
       zod:
@@ -92,17 +92,17 @@ importers:
 
   packages/providers/contract:
     dependencies:
-      '@penv/core':
+      '@penvhq/core':
         specifier: workspace:*
         version: link:../../core
 
   packages/providers/filesystem:
     dependencies:
-      '@penv/core':
+      '@penvhq/core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
-      '@penv/provider-contract':
+      '@penvhq/provider-contract':
         specifier: workspace:*
         version: link:../contract
       zod:
@@ -111,10 +111,10 @@ importers:
 
   packages/runtime:
     dependencies:
-      '@penv/core':
+      '@penvhq/core':
         specifier: workspace:*
         version: link:../core
-      '@penv/provider-filesystem':
+      '@penvhq/provider-filesystem':
         specifier: workspace:*
         version: link:../providers/filesystem
     devDependencies:
@@ -124,7 +124,7 @@ importers:
 
   packages/sinks/github:
     dependencies:
-      '@penv/core':
+      '@penvhq/core':
         specifier: workspace:*
         version: link:../../core
 

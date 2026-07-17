@@ -4,7 +4,7 @@
  * `penv import .env` on a real 30+ variable project, then `penv generate`, must
  * round-trip every variable losslessly. If a single value does not survive,
  * nothing downstream matters — so this file exercises the real import and
- * generate implementations from `@penv/cli` against a realistic file, rather
+ * generate implementations from `@penvhq/cli` against a realistic file, rather
  * than a hand-picked sample of easy lines.
  *
  * What the gate does *not* require is equally load-bearing and is asserted here
@@ -16,9 +16,9 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { generateDotenv, importDotenv } from "@penv/cli";
-import type { DotenvEntry } from "@penv/core";
-import { parseDotenv } from "@penv/core";
+import { generateDotenv, importDotenv } from "@penvhq/cli";
+import type { DotenvEntry } from "@penvhq/core";
+import { parseDotenv } from "@penvhq/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**

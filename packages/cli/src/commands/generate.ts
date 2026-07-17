@@ -11,7 +11,7 @@
 
 import { writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
-import type { DotenvEntry } from "@penv/core";
+import type { DotenvEntry } from "@penvhq/core";
 import {
   checkNameCollisions,
   effectiveMeta,
@@ -19,7 +19,7 @@ import {
   requireValue,
   serializeDotenv,
   variableName,
-} from "@penv/core";
+} from "@penvhq/core";
 import { defineCommand } from "citty";
 import type { Project } from "../project.js";
 import {

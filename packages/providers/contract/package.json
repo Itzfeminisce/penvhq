@@ -1,5 +1,5 @@
 {
-  "name": "@penv/provider-contract",
+  "name": "@penvhq/provider-contract",
   "version": "0.0.0",
   "description": "The provider-agnostic acceptance suite every penv provider must pass, plus an in-memory provider that proves the seam is pluggable. Test-only.",
   "license": "MIT",
@@ -21,6 +21,6 @@
     "build": "tsup"
   },
   "dependencies": {
-    "@penv/core": "workspace:*"
+    "@penvhq/core": "workspace:*"
   }
 }

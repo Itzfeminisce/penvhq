@@ -8,7 +8,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SecretScope, Sink, SinkSecret } from "@penv/core";
+import type { SecretScope, Sink, SinkSecret } from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DoctorCheck, DoctorFinding } from "./doctor.js";
 import { runDoctor } from "./doctor.js";

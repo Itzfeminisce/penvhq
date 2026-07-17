@@ -1,5 +1,5 @@
 {
-  "name": "@penv/runtime",
+  "name": "@penvhq/runtime",
   "version": "0.0.0",
   "description": "penv's load() and the typed env surface. Ships into user apps — keep it light.",
   "license": "MIT",
@@ -26,8 +26,8 @@
     "build": "tsup"
   },
   "dependencies": {
-    "@penv/core": "workspace:*",
-    "@penv/provider-filesystem": "workspace:*"
+    "@penvhq/core": "workspace:*",
+    "@penvhq/provider-filesystem": "workspace:*"
   },
   "peerDependencies": {
     "zod": "^4.4.3"

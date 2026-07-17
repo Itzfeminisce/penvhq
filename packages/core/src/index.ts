@@ -1,5 +1,5 @@
 /**
- * The public surface of `@penv/core`.
+ * The public surface of `@penvhq/core`.
  *
  * Every consumer — the CLI, the runtime loader, future provider adapters —
  * speaks the vocabulary in `types.ts` and the errors in `errors.ts`. Nothing

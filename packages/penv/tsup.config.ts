@@ -35,12 +35,12 @@ export default defineConfig({
   format: ["esm", "cjs"],
   // `noExternal` governs the JS bundle only, so the declaration bundler needs
   // telling separately. Without `resolve`, index.d.ts re-exports from
-  // `@penv/runtime` — a package the consumer never installs — so the JS works
+  // `@penvhq/runtime` — a package the consumer never installs — so the JS works
   // and the types dangle.
-  dts: { resolve: [/^@penv\//] },
+  dts: { resolve: [/^@penvhq\//] },
   clean: true,
   sourcemap: true,
   target: "node20",
   external: ["zod", "jiti", "@napi-rs/keyring", "readline/promises", "node:readline/promises"],
-  noExternal: [/^@penv\//],
+  noExternal: [/^@penvhq\//],
 });

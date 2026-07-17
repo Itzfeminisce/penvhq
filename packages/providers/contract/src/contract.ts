@@ -3,15 +3,15 @@
  *
  * This is the suite the Vault adapter must pass unchanged. Nothing here may
  * assume a filesystem — no paths, no `node:fs`, no on-disk layout. It speaks
- * only the vocabulary of `@penv/core`: a provider is addressed by
+ * only the vocabulary of `@penvhq/core`: a provider is addressed by
  * `(namespace, name, scope, encrypted)` and nothing else.
  *
  * A provider handed to this suite must accept the environments `development`
  * and `production`, and must start empty.
  */
 
-import type { Meta, ParameterRef, Provider, Scope, ValueFile } from "@penv/core";
-import { assertNever } from "@penv/core";
+import type { Meta, ParameterRef, Provider, Scope, ValueFile } from "@penvhq/core";
+import { assertNever } from "@penvhq/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const ENVIRONMENT = "production";

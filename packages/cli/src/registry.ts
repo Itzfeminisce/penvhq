@@ -2,7 +2,7 @@
  * The provider registry: the one place the CLI turns a `providers.*.type` into a
  * concrete provider.
  *
- * It lives in the CLI, not in `@penv/core` and not in `@penv/runtime`. Core owns
+ * It lives in the CLI, not in `@penvhq/core` and not in `@penvhq/runtime`. Core owns
  * the `Provider` *contract* and must not know which implementations exist —
  * knowing would make the interface answerable to its callers. The runtime never
  * selects a provider at all: it reads the local `.penv` tree whatever an
@@ -13,9 +13,9 @@
  * here; nothing else in the CLI names an implementation.
  */
 
-import type { PenvConfig, Provider } from "@penv/core";
-import { PenvError } from "@penv/core";
-import { createFilesystemProvider } from "@penv/provider-filesystem";
+import type { PenvConfig, Provider } from "@penvhq/core";
+import { PenvError } from "@penvhq/core";
+import { createFilesystemProvider } from "@penvhq/provider-filesystem";
 
 /** What a factory needs to build a provider rooted at one project's `.penv`. */
 export interface ProviderContext {

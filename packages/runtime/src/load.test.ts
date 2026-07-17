@@ -11,7 +11,7 @@ import {
   type UndecryptableValueError,
   ValidationError,
   type ValueFile,
-} from "@penv/core";
+} from "@penvhq/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { load } from "./load.js";
@@ -414,7 +414,7 @@ describe("load", () => {
         peerDependencies: Readonly<Record<string, string>>;
       };
 
-      expect(Object.keys(dependencies)).toEqual(["@penv/core", "@penv/provider-filesystem"]);
+      expect(Object.keys(dependencies)).toEqual(["@penvhq/core", "@penvhq/provider-filesystem"]);
       expect(Object.keys(peerDependencies)).toEqual(["zod"]);
     });
   });
@@ -449,7 +449,7 @@ describe("load", () => {
         thrown = error;
       }
 
-      // `vi.resetModules()` gives the compat module its own copy of @penv/core,
+      // `vi.resetModules()` gives the compat module its own copy of @penvhq/core,
       // so the thrown class is not identity-equal to the one imported here.
       // Assert the contract the caller actually sees instead.
       const error = thrown as NameCollisionError;

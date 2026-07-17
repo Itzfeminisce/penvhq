@@ -1,5 +1,5 @@
 {
-  "name": "@penv/provider-filesystem",
+  "name": "@penvhq/provider-filesystem",
   "version": "0.0.0",
   "description": "The reference penv provider, and the ground truth for the provider contract.",
   "license": "MIT",
@@ -21,13 +21,13 @@
     "build": "tsup"
   },
   "dependencies": {
-    "@penv/core": "workspace:*"
+    "@penvhq/core": "workspace:*"
   },
   "peerDependencies": {
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@penv/provider-contract": "workspace:*",
+    "@penvhq/provider-contract": "workspace:*",
     "zod": "4.4.3"
   }
 }

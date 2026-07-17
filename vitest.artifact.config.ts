@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 /**
  * The artifact suite packs and installs the real tarball, so it deliberately does
- * NOT alias `@penv/*` to source the way the default config does — aliasing would
+ * NOT alias `@penvhq/*` to source the way the default config does — aliasing would
  * defeat the entire point of the test.
  */
 export default defineConfig({

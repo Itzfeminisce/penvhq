@@ -8,8 +8,8 @@
  * when you meant the default is a different file, so penv never picks for you.
  */
 
-import type { Scope, ValueFile } from "@penv/core";
-import { formatValueFile, isSecret, PenvError, parameterId, sealValue } from "@penv/core";
+import type { Scope, ValueFile } from "@penvhq/core";
+import { formatValueFile, isSecret, PenvError, parameterId, sealValue } from "@penvhq/core";
 import { defineCommand } from "citty";
 import type { Project } from "../project.js";
 import { keySourceFor, openProject, PENV_DIR, refFromKey, targetEnvironment } from "../project.js";

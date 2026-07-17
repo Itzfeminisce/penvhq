@@ -16,7 +16,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PenvError, parseEnvelope } from "@penv/core";
+import { PenvError, parseEnvelope } from "@penvhq/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runDoctor } from "./doctor.js";
 import { runGet } from "./get.js";

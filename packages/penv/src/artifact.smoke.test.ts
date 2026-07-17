@@ -1,7 +1,7 @@
 /**
  * The only test that exercises what a user actually receives.
  *
- * Every other test in this repo resolves `@penv/*` to TypeScript source through
+ * Every other test in this repo resolves `@penvhq/*` to TypeScript source through
  * a Vitest alias, so none of them load a bundle. That gap has already hidden
  * four separate defects that a green suite reported as fine: a declaration build
  * that could not run at all, `import.meta` in the CJS output, a tarball whose

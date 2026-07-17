@@ -7,7 +7,7 @@
  * tests call the commands rather than spawn them.
  */
 
-import { setKeychain } from "@penv/core";
+import { setKeychain } from "@penvhq/core";
 import { runMain as cittyRunMain, defineCommand } from "citty";
 import { doctorCommand } from "./commands/doctor.js";
 import { decryptCommand, encryptCommand } from "./commands/encrypt.js";
