@@ -90,12 +90,21 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
 
+  packages/providers/contract:
+    dependencies:
+      '@penv/core':
+        specifier: workspace:*
+        version: link:../../core
+
   packages/providers/filesystem:
     dependencies:
       '@penv/core':
         specifier: workspace:*
         version: link:../../core
     devDependencies:
+      '@penv/provider-contract':
+        specifier: workspace:*
+        version: link:../contract
       zod:
         specifier: 4.4.3
         version: 4.4.3

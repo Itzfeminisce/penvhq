@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PenvConfig, ValueFile } from "@penv/core";
 import { FilenameGrammarError, UnknownEnvironmentError } from "@penv/core";
+import { runProviderContractSuite } from "@penv/provider-contract";
 import { afterAll, describe, expect, it } from "vitest";
-import { runProviderContractSuite } from "./contract.js";
 import { createFilesystemProvider } from "./filesystem.js";
 
 const config: PenvConfig = {

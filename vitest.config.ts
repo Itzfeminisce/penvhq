@@ -11,6 +11,7 @@ export default defineConfig({
       "@penv/core": src("core"),
       "@penv/runtime": src("runtime"),
       "@penv/provider-filesystem": src("providers/filesystem"),
+      "@penv/provider-contract": src("providers/contract"),
       "@penv/sink-github": src("sinks/github"),
       "@penv/cli": src("cli"),
     },
