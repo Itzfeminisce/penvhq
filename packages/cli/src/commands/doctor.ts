@@ -25,10 +25,10 @@
  */
 
 import type { Meta, Resolution } from "@penv/core";
-import { accessPath, isRequired, isSecret } from "@penv/core";
+import { accessPath, isRequired, isSecret, resolveAll } from "@penv/core";
 import { defineCommand } from "citty";
 import type { z } from "zod";
-import { describeAll, openProject, targetEnvironment } from "../project.js";
+import { keySourceFor, openProject, targetEnvironment } from "../project.js";
 import type { DriftReport } from "../schema.js";
 import { computeDrift, lookup, minLengthOf } from "../schema.js";
 import { CHECK, formatRows, guard, type Row, WARN, write } from "../ui.js";
@@ -44,6 +44,7 @@ export type DoctorCheck =
   | "unused"
   | "unscoped-fallback"
   | "plaintext-secret"
+  | "encryption"
   | "provider";
 
 export interface DoctorFinding {
@@ -104,7 +105,11 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     }
   }
 
-  const resolutions = await describeAll(environment, project.provider);
+  const resolutions = await resolveAll(
+    environment,
+    project.provider,
+    keySourceFor(project, environment),
+  );
   const subjects: Subject[] = await Promise.all(
     resolutions.map(async (resolution) => ({
       resolution,
@@ -135,6 +140,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   }
   findings.push(...fallbackFindings(subjects, environment));
   findings.push(...plaintextSecretFindings(subjects, environment));
+  findings.push(...encryptionFindings(subjects, environment));
 
   findings.push({
     check: "provider",
@@ -227,6 +233,12 @@ function weakFindings(subjects: readonly Subject[], schema: z.ZodType): DoctorFi
 
   for (const { resolution } of subjects) {
     const value = resolution.value;
+    // A decrypted secret has a value here, so it is length-checked like any
+    // other — an encrypted secret used to be invisible to this check, which made
+    // "the schema declares a minimum" a promise that quietly excluded exactly the
+    // values a minimum is for. Absence is two other checks' business: an
+    // undecryptable winner is the encryption check's, and nothing at all is the
+    // missing check's.
     if (value === undefined) {
       continue;
     }
@@ -350,6 +362,52 @@ function plaintextSecretFindings(
         secrets.length === 0
           ? `no parameter is declared secret for ${environment}`
           : `every secret resolving for ${environment} is encrypted`,
+    },
+  ];
+}
+
+/**
+ * The other half of the encryption policy: `plaintext-secret` catches a secret
+ * that should be sealed and is not; this catches a sealed value penv cannot open.
+ *
+ * A failure, not a warning. An unopenable value is indistinguishable from an
+ * absent one to everything downstream — the app gets nothing either way — and
+ * the whole point of the `undecryptable` field is that penv can tell the
+ * difference even when the application cannot.
+ */
+function encryptionFindings(subjects: readonly Subject[], environment: string): DoctorFinding[] {
+  const sealed = subjects.filter(({ resolution }) => resolution.winner?.file.encrypted === true);
+  const findings: DoctorFinding[] = [];
+
+  for (const { resolution } of sealed) {
+    const failure = resolution.undecryptable;
+    if (failure === undefined) {
+      continue;
+    }
+    findings.push({
+      check: "encryption",
+      severity: "failure",
+      label: "Undecryptable value",
+      subject: resolution.winner?.location ?? resolution.parameter,
+      detail: failure.detail,
+    });
+  }
+
+  if (findings.length > 0) {
+    return findings;
+  }
+  // Two different quiets, reported differently. "Nothing is encrypted here" and
+  // "everything encrypted here opens" are both passes, and a reader who cannot
+  // tell them apart cannot tell whether the check ran.
+  return [
+    {
+      check: "encryption",
+      severity: "pass",
+      label: "Encryption",
+      subject:
+        sealed.length === 0
+          ? `no encrypted value resolves for ${environment}`
+          : `every encrypted value resolving for ${environment} decrypts`,
     },
   ];
 }

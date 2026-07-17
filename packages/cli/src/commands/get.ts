@@ -6,15 +6,9 @@
  * from a shared default has nowhere to hide.
  */
 
-import { PenvError, resolveParameter } from "@penv/core";
+import { PenvError, requireValue, resolveParameter } from "@penv/core";
 import { defineCommand } from "citty";
-import {
-  describeResolution,
-  openProject,
-  PENV_DIR,
-  refFromKey,
-  targetEnvironment,
-} from "../project.js";
+import { keySourceFor, openProject, PENV_DIR, refFromKey, targetEnvironment } from "../project.js";
 import { columns, guard, write } from "../ui.js";
 
 export interface GetOptions {
@@ -28,6 +22,14 @@ export interface GetExplanation {
   readonly environment: string;
   /** `undefined` when no candidate was present. */
   readonly location: string | undefined;
+  /**
+   * Why the winning file did not open, when it is `.enc` and did not.
+   *
+   * A winner that cannot be decrypted is not a skipped candidate — it won, and
+   * the cascade is over. Reporting it as a skip would say a lower scope should
+   * have been reached, which is the scope-widening answer the cascade refuses.
+   */
+  readonly undecryptable?: string;
   readonly candidates: readonly GetCandidate[];
 }
 
@@ -39,21 +41,30 @@ export interface GetCandidate {
   readonly skipped: string | undefined;
 }
 
-/** The value, or a named error. `.enc` winners are refused here, not described. */
+/**
+ * The value, or a named error.
+ *
+ * `requireValue` answers first, so a winner that exists but did not decrypt is
+ * reported as undecryptable rather than as absent. Only a genuine absence — no
+ * candidate at any scope — reaches the refusal below, which is what keeps `penv
+ * set` from being offered as the fix for a secret the user still has.
+ */
 export async function runGet(options: GetOptions): Promise<string> {
   const project = openProject(options.cwd);
   const environment = targetEnvironment(project, options.environment);
   const ref = refFromKey(options.key);
 
-  const resolution = await resolveParameter(ref, environment, project.provider);
-  if (resolution.value === undefined) {
+  const keys = keySourceFor(project, environment);
+  const resolution = await resolveParameter(ref, environment, project.provider, keys);
+  const value = requireValue(resolution, environment);
+  if (value === undefined) {
     throw new PenvError(
       "PARAMETER_ABSENT",
       `Parameter ${resolution.parameter} resolves to no value for environment ${environment}`,
       `Set it with \`penv set ${options.key} --env ${environment}\`, or run \`penv get ${options.key} --env ${environment} --explain\` to see every file penv looked at.`,
     );
   }
-  return resolution.value;
+  return value;
 }
 
 function skipReason(reason: string | undefined): string | undefined {
@@ -66,18 +77,27 @@ function skipReason(reason: string | undefined): string | undefined {
   return undefined;
 }
 
+/**
+ * Which file wins, and why — never a value, so this must not be stopped by the
+ * winner being unreadable. Core describes an `.enc` winner rather than refusing
+ * it, so `--explain` is the same walk every other command does.
+ */
 export async function runExplain(options: GetOptions): Promise<GetExplanation> {
   const project = openProject(options.cwd);
   const environment = targetEnvironment(project, options.environment);
   const ref = refFromKey(options.key);
 
-  const resolution = await describeResolution(ref, environment, project.provider);
+  const keys = keySourceFor(project, environment);
+  const resolution = await resolveParameter(ref, environment, project.provider, keys);
   const winner = resolution.winner;
 
   return {
     parameter: resolution.parameter,
     environment,
     location: winner === undefined ? undefined : winner.location,
+    ...(resolution.undecryptable === undefined
+      ? {}
+      : { undecryptable: resolution.undecryptable.detail }),
     candidates: resolution.candidates.map((candidate) => ({
       location: candidate.location,
       present: candidate.present,
@@ -104,6 +124,9 @@ export function renderExplain(explanation: GetExplanation): string[] {
 
   return [
     `${explanation.parameter} resolves to ${target} for environment ${explanation.environment}`,
+    ...(explanation.undecryptable === undefined
+      ? []
+      : [`  penv cannot decrypt it: ${explanation.undecryptable}`]),
     "",
     ...columns(rows).map((line) => `  ${line}`),
   ];

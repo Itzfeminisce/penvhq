@@ -15,8 +15,10 @@ Everything below describes the *finished* design (see docs). This table says whe
 | Filesystem provider, CLI, import/generate, value cascade | Yes | v0.1 |
 | `@env` / `.penv/env.ts`, one-schema typing, `penv validate` | Yes | v0.2 |
 | `.enc` encryption grammar | Yes | grammar reserved v0.1; encrypt/decrypt v0.3 |
-| Provider-backed keys (OS keychain / KMS) | Yes | v0.3 |
-| Rotation (`dual-valid`, `atomic-cutover`), `doctor` rotation checks | Yes | v0.3 |
+| KMS-derived keys, exported to the environment | Yes | v0.3 |
+| OS keychain key source | Yes | post-v0.3 |
+| Rotation (`dual-valid`, `atomic-cutover`), `doctor` rotation checks | Yes | v0.4 (with the first real provider) |
+| Mock provider, for rehearsing rotation | Yes | v0.4 |
 | Vault provider + cross-provider `doctor` drift | Yes | v0.4 |
 | `penv pull` — materialising the tree from a provider | Yes | v0.4 (with the first real provider) |
 | AWS SSM, Kubernetes providers | Yes | v0.5 |
@@ -28,6 +30,8 @@ Everything below describes the *finished* design (see docs). This table says whe
 | IDE integration | (Future possibilities) | post-v1.0 |
 
 **On "amber" claims.** Two statements in the docs are true of the finished design but unproven until a specific milestone, and should be read as promises until then: *provider portability* (proven at v0.4, generalized at v0.5) and *encryption as a security rather than organizational improvement* (true once keys are provider-backed at v0.3). Until those milestones, treat them as roadmap items.
+
+**On the docs' key sources.** The docs say keys are "the OS keychain locally, and KMS-derived keys in CI and production". The second half is true at v0.3; the first is a roadmap item until the keychain source ships. What is never true, at any milestone, is a key stored repo-adjacent — that is a design property, not a schedule.
 
 ---
 
@@ -59,30 +63,44 @@ Everything below describes the *finished* design (see docs). This table says whe
 
 **Gate to advance:** one schema visibly drives both a failing `penv validate` and a compile-time type error from the same source, with no duplicated type declarations.
 
-## v0.3 — Encryption and rotation
+## v0.3 — Encryption
 
-**Retires:** the risk that penv's security and rotation stories are decoration rather than mechanism.
+**Retires:** the risk that penv's security story is decoration rather than mechanism.
 
 - `.enc` encrypt/decrypt at any scope; policy-driven encryption (meta declares must-encrypt; marker validated against it).
-- **Provider-backed keys** — OS keychain locally, KMS-derived in CI/production, never repo-adjacent. *This is the milestone at which penv encryption becomes a security improvement rather than an organizational one.*
-- Plaintext-secret detection in `doctor`.
-- Rotation: `dual-valid` and `atomic-cutover` as distinct mechanisms; meta fields including the distinct `rotatingSince` clock.
-- `doctor` rotation checks: overdue (`now - lastRotated > rotationPolicy`) and stuck (`now - rotatingSince > stuckThreshold`, gated to `dual-valid`).
+- **Provider-backed keys** — KMS-derived in CI/production, never repo-adjacent. *This is the milestone at which penv encryption becomes a security improvement rather than an organizational one.*
+- Plaintext-secret detection in `doctor`, and an `encryption` check for a sealed value penv cannot open.
+- `penv encrypt` / `penv decrypt` / `penv key create`.
 
-**Gate to advance:** a `dual-valid` rotation runs `active → rotating → active` with grace-window overlap on a mock provider; `atomic-cutover` flips without a penv-layer grace window; `doctor` flags a stuck external rotation *without* false-positiving on atomic-cutover passwords.
+**Gate to advance:** a parameter meta declares a secret; `penv set` seals it with no flag at the keyboard; `penv get` returns it with the key and reports *why* without it — never as a missing value; and a ciphertext copied from another scope fails to open rather than silently widening scope.
 
-> Note the documented asymmetry: filesystem-backed environments cannot exercise true dual-valid rotation, because dual validity is a property of a live system. Local rehearsal uses the mock provider.
+### Deferred out of v0.3, and why
 
-## v0.4 — Provider proof (the pivotal milestone)
+**Rotation moved to v0.4**, to be built alongside the Vault adapter. Rotation needs provider-side previous-value retention for the grace window, and the provider contract has no such verb. Adding one now would mean shaping the contract around a *mock* — the one provider that cannot get it wrong, because it has no real behaviour to be wrong about — and then discovering at v0.4 what Vault actually needs. The contract rule exists precisely for this: a contract change is a finding, not an edit. Rotation is designed (see the docs) and is buildable; it is sequenced behind the provider that can prove its shape.
 
-**Retires:** the single highest-risk claim — that switching providers is a config change, not a rewrite.
+This is a real cost, stated plainly: v0.3 no longer retires the rotation risk, and v0.4 now carries two risks instead of one.
+
+**The OS keychain key source moved to post-v0.3.** The `env` source ships — a KMS-derived data key, unwrapped by the deploy and exported, which is the CI and production story in full. The local keychain needs a native, synchronous dependency, and that choice is not made yet. Until it lands, local development holds its key the same way CI does.
+
+**The mock provider** was a v0.3 item only because the rotation gate needed one. It moves with rotation.
+
+## v0.4 — Provider proof (the pivotal milestone) and rotation
+
+**Retires:** the single highest-risk claim — that switching providers is a config change, not a rewrite — and, with it, the rotation risk that v0.3 deferred here.
 
 - Vault adapter implementing the full provider contract: read, write, list, remove, encrypted values, and provider-side previous-value retention for the grace window.
 - Explicit `(env, namespace, name) → provider path` mapping from `providers.*.path`.
 - `penv doctor` cross-provider drift detection against a live Vault instance.
 - The provider contract extracted and documented as the interface future adapters must satisfy.
+- Rotation: `dual-valid` and `atomic-cutover` as distinct mechanisms; meta fields including the distinct `rotatingSince` clock.
+- `doctor` rotation checks: overdue (`now - lastRotated > rotationPolicy`) and stuck (`now - rotatingSince > stuckThreshold`, gated to `dual-valid`).
+- The mock provider, for rehearsing rotation flows locally.
 
-**Gate to advance:** the Vault adapter passes the *same* behavioural suite the filesystem provider passes, and flipping an environment from `filesystem` to `vault` requires zero application code changes. **Only after this passes is provider portability stated as a proven capability rather than a promise.**
+**Gate to advance:** the Vault adapter passes the *same* behavioural suite the filesystem provider passes, and flipping an environment from `filesystem` to `vault` requires zero application code changes. **Only after this passes is provider portability stated as a proven capability rather than a promise.** Separately: a `dual-valid` rotation runs `active → rotating → active` with grace-window overlap; `atomic-cutover` flips without a penv-layer grace window; `doctor` flags a stuck external rotation *without* false-positiving on atomic-cutover passwords.
+
+Retention is the reason these two arrived in the same milestone. The contract needs a verb for it, and shaping that verb around anything but a real provider is how a contract quietly becomes one provider's interface with extra steps. Vault is the first provider that can say what retention actually looks like — and if SSM and Kubernetes cannot satisfy the shape Vault implies, that is v0.5's finding, on the same terms as any other contract bend.
+
+> Note the documented asymmetry: filesystem-backed environments cannot exercise true dual-valid rotation, because dual validity is a property of a live system. Local rehearsal uses the mock provider.
 
 ## v0.5 — Second and third providers
 

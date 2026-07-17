@@ -6,9 +6,9 @@
  */
 
 import type { Scope } from "@penv/core";
-import { assertNever, variableName } from "@penv/core";
+import { assertNever, resolveAll, variableName } from "@penv/core";
 import { defineCommand } from "citty";
-import { describeAll, openProject, PENV_DIR, targetEnvironment } from "../project.js";
+import { keySourceFor, openProject, PENV_DIR, targetEnvironment } from "../project.js";
 import { columns, guard, write } from "../ui.js";
 
 export interface ListOptions {
@@ -58,8 +58,11 @@ export async function runList(options: ListOptions): Promise<ListResult> {
   const project = openProject(options.cwd);
   const environment = targetEnvironment(project, options.environment);
 
+  const keys = keySourceFor(project, environment);
   const parameters: ListEntry[] = [];
-  for (const resolution of await describeAll(environment, project.provider)) {
+  // `list` names which file wins, never a value, so an undecryptable winner is
+  // listed exactly like any other: the scope column is the answer here.
+  for (const resolution of await resolveAll(environment, project.provider, keys)) {
     const winner = resolution.winner;
     const scope = winner?.file.scope;
     parameters.push({

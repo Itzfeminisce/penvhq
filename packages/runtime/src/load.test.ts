@@ -1,7 +1,17 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { type NameCollisionError, PenvError, ValidationError } from "@penv/core";
+import { fileURLToPath } from "node:url";
+import {
+  createEnvKeySource,
+  KEY_BYTES,
+  type NameCollisionError,
+  PenvError,
+  sealValue,
+  type UndecryptableValueError,
+  ValidationError,
+  type ValueFile,
+} from "@penv/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { load } from "./load.js";
@@ -9,6 +19,7 @@ import { load } from "./load.js";
 const created: string[] = [];
 const originalPenvEnv = process.env.PENV_ENV;
 const originalNodeEnv = process.env.NODE_ENV;
+const originalKey = process.env.PENV_KEY_DEV;
 
 function setEnv(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -64,9 +75,48 @@ const FULL_TREE: Readonly<Record<string, string>> = {
   "redis/password.production": "prod-secret",
 };
 
+const KEY_ID = "dev";
+const KEY_CONFIG = {
+  ...CONFIG,
+  keys: {
+    development: { source: "env", id: KEY_ID },
+    production: { source: "env", id: KEY_ID },
+  },
+};
+
+/** Not a real key — a real one is 32 random bytes, and this only has to be 32. */
+const KEY = Buffer.alloc(KEY_BYTES, 7).toString("base64");
+
+const DATABASE_URL_ENC: ValueFile = {
+  namespace: [],
+  name: "database-url",
+  scope: { kind: "unscoped" },
+  encrypted: true,
+};
+
+/**
+ * Seals a fixture the way `penv encrypt` would, through the same `sealValue`
+ * `load` opens with. A hand-written envelope would be a second implementation of
+ * the format, and it is the one that would still pass after the format changed.
+ *
+ * Sealing needs the key exported, so a test asserting what happens *without* it
+ * unsets it after building its tree.
+ */
+function seal(file: ValueFile, value: string): string {
+  setEnv("PENV_KEY_DEV", KEY);
+  return sealValue(
+    file,
+    value,
+    createEnvKeySource({ source: "env", id: KEY_ID }),
+    file.name,
+    "development",
+  );
+}
+
 afterEach(() => {
   setEnv("PENV_ENV", originalPenvEnv);
   setEnv("NODE_ENV", originalNodeEnv);
+  setEnv("PENV_KEY_DEV", originalKey);
   for (const dir of created.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -260,6 +310,111 @@ describe("load", () => {
 
       expect(env.databaseUrl).toBe("postgres://default/app");
       expect(env.redis.host).toBe("127.0.0.1");
+    });
+  });
+
+  describe("encrypted values", () => {
+    it("decrypts an .enc unscoped default with the key exported", () => {
+      // The documented tradeoff — "a developer must hold the decrypt key to run
+      // locally" — is a tradeoff only if holding the key actually works. If this
+      // fails, encrypting the unscoped default is a prohibition rather than a
+      // choice about the scope of encryption.
+      const cwd = makeProject(
+        {
+          "database-url.enc": seal(DATABASE_URL_ENC, "postgres://sealed/app"),
+          "redis/host": "127.0.0.1",
+        },
+        KEY_CONFIG,
+      );
+
+      expect(load(schema, { cwd, environment: "development" }).databaseUrl).toBe(
+        "postgres://sealed/app",
+      );
+    });
+
+    it("throws VALUE_UNDECRYPTABLE naming the parameter and the file when no key is exported", () => {
+      const cwd = makeProject(
+        {
+          "database-url.enc": seal(DATABASE_URL_ENC, "postgres://sealed/app"),
+          "redis/host": "127.0.0.1",
+        },
+        KEY_CONFIG,
+      );
+      // The deploy that exports the key is the half that did not run.
+      setEnv("PENV_KEY_DEV", undefined);
+
+      let thrown: unknown;
+      try {
+        load(schema, { cwd, environment: "development" });
+      } catch (error) {
+        thrown = error;
+      }
+
+      const error = thrown as UndecryptableValueError;
+      expect(error).toBeInstanceOf(PenvError);
+      expect(error.code).toBe("VALUE_UNDECRYPTABLE");
+      expect(error.parameter).toBe("database-url");
+      expect(error.environment).toBe("development");
+      expect(error.message).toContain("database-url.enc");
+      expect(error.failure.reason).toBe("key-absent");
+    });
+
+    it("refuses rather than falling through to a plaintext twin at a lower scope", () => {
+      // The load-bearing one. `database-url.production.enc` wins the cascade, and
+      // it keeps winning when it does not open: treating "I cannot read this" as
+      // "this is not here" would serve the unscoped default to production — a
+      // secret silently widening its scope, which is the failure the cascade
+      // exists to prevent, and it would do it at the moment the key is missing.
+      const cwd = makeProject(
+        {
+          "database-url.production.enc": seal(
+            { ...DATABASE_URL_ENC, scope: { kind: "environment", environment: "production" } },
+            "postgres://sealed-production/app",
+          ),
+          "database-url": "postgres://default/app",
+          "redis/host": "127.0.0.1",
+        },
+        KEY_CONFIG,
+      );
+      setEnv("PENV_KEY_DEV", undefined);
+
+      // The lower-scope plaintext is really there, and really resolvable — this
+      // test would pass vacuously against a tree that simply had no fallback.
+      expect(readFileSync(join(cwd, ".penv", "database-url"), "utf8")).toBe(
+        "postgres://default/app",
+      );
+      expect(load(schema, { cwd, environment: "development" }).databaseUrl).toBe(
+        "postgres://default/app",
+      );
+
+      let thrown: unknown;
+      try {
+        load(schema, { cwd, environment: "production" });
+      } catch (error) {
+        thrown = error;
+      }
+
+      const error = thrown as UndecryptableValueError;
+      expect(error.code).toBe("VALUE_UNDECRYPTABLE");
+      expect(error.message).toContain("database-url.production.enc");
+      expect(error.message).not.toContain("postgres://default/app");
+    });
+
+    it("ships no keychain or native dependency", () => {
+      // The env key source exists so decryption costs the app nothing: `load`
+      // runs in every deploy, and a native module in its dependency tree is a
+      // build failure in someone's container. `keychain` is refused loudly by
+      // core instead — a source penv cannot read must say so, not be shimmed in.
+      const manifest: unknown = JSON.parse(
+        readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+      );
+      const { dependencies, peerDependencies } = manifest as {
+        dependencies: Readonly<Record<string, string>>;
+        peerDependencies: Readonly<Record<string, string>>;
+      };
+
+      expect(Object.keys(dependencies)).toEqual(["@penv/core", "@penv/provider-filesystem"]);
+      expect(Object.keys(peerDependencies)).toEqual(["zod"]);
     });
   });
 

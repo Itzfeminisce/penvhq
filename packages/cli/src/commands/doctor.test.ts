@@ -557,10 +557,14 @@ describe("the report", () => {
       "unused",
       "unscoped-fallback",
       "plaintext-secret",
+      "encryption",
       "provider",
     ]);
     expect(report.findings.every((finding) => finding.severity === "pass")).toBe(true);
-    expect(report.findings[0]?.label).toBe("Schema valid");
-    expect(report.findings[7]?.subject).toBe("filesystem");
+    // By check rather than by index: every new check shifts the positions, and a
+    // test that has to be renumbered to stay green is one that gets renumbered
+    // without being read.
+    expect(findingsOf(report.findings, "schema")[0]?.label).toBe("Schema valid");
+    expect(findingsOf(report.findings, "provider")[0]?.subject).toBe("filesystem");
   });
 });

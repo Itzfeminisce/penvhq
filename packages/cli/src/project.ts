@@ -6,24 +6,23 @@
 
 import { dirname, resolve } from "node:path";
 import type {
+  DecryptFailure,
+  KeySource,
   ParameterRef,
   PenvConfig,
-  Provider,
-  Resolution,
   ResolutionCandidate,
-  Scope,
-  ValueFile,
 } from "@penv/core";
 import {
   candidatesFor,
   formatValueFile,
   isReservedToken,
   loadConfig,
+  openValue,
   PenvError,
   parameterId,
   ReservedTokenError,
   resolveEnvironment,
-  resolveParameter,
+  resolveKeySource,
 } from "@penv/core";
 import type { FilesystemProvider } from "@penv/provider-filesystem";
 import { createFilesystemProvider } from "@penv/provider-filesystem";
@@ -92,139 +91,34 @@ export function refFromKey(key: string, config?: PenvConfig): ParameterRef {
   return { namespace: segments.slice(0, -1), name };
 }
 
-/** The environment whose runs must be reproducible, so personal overrides never apply. */
-const TEST_ENVIRONMENT = "test";
-
-/** A `PenvError` raised by `resolveParameter` because the winning file is `.enc`. */
-function isEncryptedWinner(error: unknown): boolean {
-  return error instanceof PenvError && error.code === "ENCRYPTED_VALUE_UNSUPPORTED";
+/**
+ * The key source for one environment, chosen by core.
+ *
+ * The CLI does not decide where keys live — it asks. Two choosers would be two
+ * answers to one question, and the runtime is the other caller: a CLI that
+ * sealed under a key the runtime could not find would make `penv set` and `load`
+ * disagree about the same file.
+ */
+export function keySourceFor(project: Project, environment: string): KeySource {
+  return resolveKeySource(project.config, environment);
 }
 
 /**
- * The personal-override scopes of the cascade, highest precedence first — both
- * `.local` kinds, which are the scopes `test` skips (invariant 4).
+ * One parameter resolved against the filesystem, without reading it twice.
  *
- * Named here rather than recovered from `candidatesFor` under some other
- * environment: `<name>.<env>.local` carries the environment in the filename, so
- * another environment's cascade no longer yields *these* files, it yields that
- * environment's. The order mirrors the cascade because these rows are printed
- * above the rows that were read.
+ * The winner is a `ResolutionCandidate` rather than a bare `ValueFile` so this
+ * satisfies core's `ResolvedValue`: the sync walk and the async one then hand the
+ * same shape to the same `requireValue`, and there is one place that decides
+ * what an unreadable value is.
  */
-function personalOverrideScopes(environment: string): Scope[] {
-  return [{ kind: "environment-local", environment }, { kind: "local" }];
-}
-
-/** Plaintext before encrypted, matching the order the cascade considers a scope's pair. */
-function scopedPair(ref: ParameterRef, scope: Scope): ValueFile[] {
-  return [false, true].map((encrypted) => ({
-    namespace: ref.namespace,
-    name: ref.name,
-    scope,
-    encrypted,
-  }));
-}
-
-/**
- * The `.local` rows the cascade removed before it ever read anything.
- *
- * Only reached for an encrypted winner: on every other path core reports these
- * itself. Both `.local` scopes appear — a developer whose `<name>.<env>.local`
- * is being ignored in `test` is exactly the person running `--explain`, and a
- * missing row is an unanswered question.
- */
-function skippedLocalCandidates(ref: ParameterRef, environment: string): ResolutionCandidate[] {
-  if (environment !== TEST_ENVIRONMENT) {
-    return [];
-  }
-  return personalOverrideScopes(environment)
-    .flatMap((scope) => scopedPair(ref, scope))
-    .map((file) => ({
-      file,
-      location: formatValueFile(file),
-      present: false,
-      skippedReason: "local-skipped-in-test",
-    }));
-}
-
-/** The encrypted-winner walk: identical to core's, minus the refusal at the end. */
-async function describeEncryptedWinner(
-  ref: ParameterRef,
-  environment: string,
-  provider: Provider,
-): Promise<Resolution> {
-  const files = candidatesFor(ref, environment);
-  const reads = await Promise.all(files.map((file) => provider.read(file)));
-
-  const candidates: ResolutionCandidate[] = skippedLocalCandidates(ref, environment);
-  let winner: ResolutionCandidate | undefined;
-  let value: string | undefined;
-
-  for (const [index, file] of files.entries()) {
-    const read = reads[index];
-    const location = formatValueFile(file);
-    if (read === undefined) {
-      candidates.push({ file, location, present: false });
-      continue;
-    }
-    if (winner === undefined) {
-      const candidate: ResolutionCandidate = { file, location, present: true };
-      winner = candidate;
-      // An encrypted winner is present but unreadable: it wins, and it has no value here.
-      value = file.encrypted ? undefined : read;
-      candidates.push(candidate);
-      continue;
-    }
-    candidates.push({ file, location, present: true, skippedReason: "lower-precedence" });
-  }
-
-  return {
-    ref,
-    parameter: parameterId(ref),
-    value,
-    winner,
-    candidates,
-    viaUnscopedFallback: winner !== undefined && winner.file.scope.kind === "unscoped",
-  };
-}
-
-/**
- * Resolution that describes an `.enc` winner instead of refusing it.
- *
- * `resolveParameter` in `@penv/core` throws when the winning file is encrypted,
- * because a caller asking for a *value* cannot be handed one penv cannot
- * decrypt. `penv get --explain` and `doctor`'s plaintext-secret check ask a
- * different question — *which file wins* — and both must be able to see an
- * encrypted winner.
- *
- * That is the *only* difference, so core answers first and this refuses to
- * restate it. A second candidate list here is what silently dropped the `.local`
- * rows `test` skips: `--explain` is the command whose whole job is saying why a
- * file did not win, and it could not say the one thing core already knew. The
- * walk below runs only once core has refused, where the question genuinely
- * differs.
- */
-export async function describeResolution(
-  ref: ParameterRef,
-  environment: string,
-  provider: Provider,
-): Promise<Resolution> {
-  try {
-    return await resolveParameter(ref, environment, provider);
-  } catch (error) {
-    if (!isEncryptedWinner(error)) {
-      throw error;
-    }
-  }
-  return describeEncryptedWinner(ref, environment, provider);
-}
-
-/** One parameter resolved against the filesystem, without reading it twice. */
 export interface SyncResolution {
   readonly ref: ParameterRef;
   readonly parameter: string;
-  /** `undefined` when nothing is present, or when the winner is encrypted. */
+  /** `undefined` when nothing is present, or when the winner did not open. */
   readonly value: string | undefined;
-  readonly winner: ValueFile | undefined;
+  readonly winner: ResolutionCandidate | undefined;
+  /** Set only when the winner is `.enc` and did not decrypt. Mirrors `Resolution`. */
+  readonly undecryptable?: DecryptFailure;
 }
 
 /**
@@ -241,17 +135,23 @@ export function resolveSync(
   provider: FilesystemProvider,
   ref: ParameterRef,
   environment: string,
+  keys: KeySource,
 ): SyncResolution {
   for (const file of candidatesFor(ref, environment)) {
     const read = provider.readSync(file);
     if (read === undefined) {
       continue;
     }
+    // Unconditional, including for a plaintext file, which comes back verbatim:
+    // a branch on `file.encrypted` here would be a second place deciding what
+    // encryption means, and this walker is already the second walker.
+    const opened = openValue(file, read, keys);
     return {
       ref,
       parameter: parameterId(ref),
-      value: file.encrypted ? undefined : read,
-      winner: file,
+      value: opened.kind === "plaintext" ? opened.value : undefined,
+      ...(opened.kind === "failed" ? { undecryptable: opened.failure } : {}),
+      winner: { file, location: formatValueFile(file), present: true },
     };
   }
   return { ref, parameter: parameterId(ref), value: undefined, winner: undefined };
@@ -260,11 +160,15 @@ export function resolveSync(
 export function resolveAllSync(
   provider: FilesystemProvider,
   environment: string,
+  keys: KeySource,
 ): SyncResolution[] {
-  return refsFrom(provider.listSync()).map((ref) => resolveSync(provider, ref, environment));
+  return refsFrom(provider.listSync()).map((ref) => resolveSync(provider, ref, environment, keys));
 }
 
-/** The parameters a provider holds, scopes collapsed and ordered identically everywhere. */
+/**
+ * The parameters a provider holds, scopes collapsed and ordered identically
+ * everywhere.
+ */
 export function refsFrom(files: readonly ParameterRef[]): ParameterRef[] {
   const refs = new Map<string, ParameterRef>();
   for (const file of files) {
@@ -280,10 +184,4 @@ export function refsFrom(files: readonly ParameterRef[]): ParameterRef[] {
     const right = parameterId(b);
     return left < right ? -1 : left > right ? 1 : 0;
   });
-}
-
-/** `describeResolution` for every parameter the provider holds. */
-export async function describeAll(environment: string, provider: Provider): Promise<Resolution[]> {
-  const refs = refsFrom(await provider.list());
-  return Promise.all(refs.map((ref) => describeResolution(ref, environment, provider)));
 }

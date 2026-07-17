@@ -33,12 +33,19 @@ function copyPolicyKeys(source: MetaBlock, target: Record<string, unknown>): voi
  *
  * An undeclared environment inherits the base unchanged — absence means
  * "optional by default", not an error.
+ *
+ * `undefined` asks for the base block alone, and is not the same question. It is
+ * what the unscoped default is judged by: that file is read by every environment,
+ * so no single environment's block governs it, and answering with one would apply
+ * production's policy to a file development also reads.
  */
-export function effectiveMeta(meta: Meta | undefined, environment: string): MetaBlock {
+export function effectiveMeta(meta: Meta | undefined, environment: string | undefined): MetaBlock {
   const merged: Record<string, unknown> = {};
   if (!meta) return merged;
 
   copyPolicyKeys(meta, merged);
+
+  if (environment === undefined) return merged;
 
   const block = meta.environments?.[environment];
   if (block) copyPolicyKeys(block, merged);
@@ -46,11 +53,11 @@ export function effectiveMeta(meta: Meta | undefined, environment: string): Meta
   return merged;
 }
 
-export function isRequired(meta: Meta | undefined, environment: string): boolean {
+export function isRequired(meta: Meta | undefined, environment: string | undefined): boolean {
   return effectiveMeta(meta, environment).required === true;
 }
 
-export function isSecret(meta: Meta | undefined, environment: string): boolean {
+export function isSecret(meta: Meta | undefined, environment: string | undefined): boolean {
   return effectiveMeta(meta, environment).secret === true;
 }
 

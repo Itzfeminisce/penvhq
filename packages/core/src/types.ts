@@ -96,6 +96,20 @@ export interface ProviderConfig {
   readonly path?: string;
 }
 
+/**
+ * Where one environment's encryption key comes from. Declared, never guessed: a
+ * key source penv picked for you is a key you did not choose.
+ */
+export interface KeyConfig {
+  readonly source: "env" | "keychain";
+  /**
+   * Names the key. Written into every value file sealed under it, so it must
+   * outlive any one machine — and cannot contain `:`, which separates the
+   * envelope's fields.
+   */
+  readonly id: string;
+}
+
 export interface PenvConfig {
   /**
    * The whitelist of valid environment names — the only source of truth for
@@ -106,6 +120,11 @@ export interface PenvConfig {
   readonly providers: Readonly<Record<string, ProviderConfig>>;
   /** Overrides the default name transform for generated `.env` output. */
   readonly names?: Readonly<Record<string, string>>;
+  /**
+   * Where each environment's encryption key lives. An environment with no entry
+   * has no key source, which is not the same as having no key — see `keys.ts`.
+   */
+  readonly keys?: Readonly<Record<string, KeyConfig>>;
 }
 
 /**
@@ -129,6 +148,30 @@ export interface Provider {
   writeMeta(ref: ParameterRef, meta: Meta): Promise<void>;
 }
 
+/**
+ * Why a value did not open. Four reasons, each one penv is certain of; there is
+ * deliberately no "unknown".
+ *
+ * `undecipherable` covers three causes at once — the wrong key, damaged bytes, or
+ * a ciphertext moved from another address — because authenticated encryption
+ * genuinely cannot tell them apart: all three are the same failed tag check. penv
+ * does not guess between them, so the remedy names all three.
+ */
+export type DecryptReason =
+  /** The key source could not be consulted, so penv cannot say whether the key exists. */
+  | "key-source-unavailable"
+  /** The source was consulted and holds no key with the envelope's id. */
+  | "key-absent"
+  /** The stored bytes are not a penv envelope. Decided without touching a key. */
+  | "malformed-envelope"
+  /** The envelope parsed and the key was found, and the value still did not open. */
+  | "undecipherable";
+
+export interface DecryptFailure {
+  readonly reason: DecryptReason;
+  readonly detail: string;
+}
+
 /** One value file considered during resolution, in precedence order. */
 export interface ResolutionCandidate {
   readonly file: ValueFile;
@@ -145,9 +188,21 @@ export interface Resolution {
   readonly ref: ParameterRef;
   /** Dotted access path — `redis.password`. */
   readonly parameter: string;
-  /** `undefined` when no candidate was present. */
+  /** `undefined` when no candidate was present, or when the winner did not open. */
   readonly value: string | undefined;
   readonly winner: ResolutionCandidate | undefined;
+  /**
+   * Set only when `winner` is present, encrypted, and did not decrypt.
+   *
+   * A present winner yields exactly one of `value` or `undecryptable`, and that
+   * is what keeps "there is no value" and "there is a value penv cannot read"
+   * from being one answer to two questions. They have opposite remedies: one
+   * says `penv set`, the other says find your key — and a caller that offered
+   * the first would be telling you to overwrite a secret you still have.
+   *
+   * Both absent means no candidate was present at all.
+   */
+  readonly undecryptable?: DecryptFailure;
   /** Every candidate, highest precedence first. */
   readonly candidates: readonly ResolutionCandidate[];
   /**

@@ -14,6 +14,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { createJiti } from "jiti";
 import { ConfigError, PenvError, UnknownEnvironmentError } from "./errors.js";
 import { validateEnvironmentNames } from "./grammar.js";
+import { validateKeys } from "./keys.js";
 import type { PenvConfig } from "./types.js";
 
 const CONFIG_FILENAMES = ["penv.config.ts", "penv.config.js", "penv.config.mjs"] as const;
@@ -234,6 +235,8 @@ export function validateConfig(config: PenvConfig): PenvError[] {
       errors.push(new UnknownEnvironmentError(environment, environments));
     }
   }
+
+  errors.push(...validateKeys(config, declared));
 
   const names: unknown = config.names;
   if (names === undefined) {

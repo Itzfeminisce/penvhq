@@ -25,7 +25,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PenvError } from "@penv/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openProject, resolveSync } from "../project.js";
+import { keySourceFor, openProject, resolveSync } from "../project.js";
 import { EMPTY_DRIFT } from "../schema.js";
 import type { ImportReport } from "./import.js";
 import { importDotenv, renderImport } from "./import.js";
@@ -268,7 +268,8 @@ const API_KEY = { namespace: [], name: "api-key" };
 /** What the environment reads once the import has run, through the real cascade. */
 function resolveFor(root: string, environment: string): string | undefined {
   const project = openProject(root);
-  return resolveSync(project.provider, API_KEY, environment).value;
+  return resolveSync(project.provider, API_KEY, environment, keySourceFor(project, environment))
+    .value;
 }
 
 describe("the scope the source filename names", () => {

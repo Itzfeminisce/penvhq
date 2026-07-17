@@ -16,8 +16,9 @@
  * considered before the encrypted one, so the pair has a deterministic order.
  */
 
-import { PenvError } from "./errors.js";
+import { openValue, UndecryptableValueError } from "./crypto.js";
 import { formatValueFile, parameterId } from "./grammar.js";
+import type { KeySource } from "./keys.js";
 import type {
   ParameterRef,
   Provider,
@@ -94,10 +95,24 @@ function skippedPersonalCandidates(ref: ParameterRef, environment: string): Reso
     }));
 }
 
+/**
+ * Resolves one parameter, opening the winner if it is sealed.
+ *
+ * `keys` is required rather than optional, and that is load-bearing. An optional
+ * key source would let a caller who merely forgot to pass one be told "no key" —
+ * turning a bug in penv into a report about the user's tree. Every caller states
+ * where keys come from, even if the answer is `nullKeySource`, which says so.
+ *
+ * Only the winner is opened. A losing `.enc` candidate at a lower scope is read
+ * but never decrypted, so a value sealed under a key that is long gone cannot
+ * fail a resolution it did not win — precedence is decided by the cascade, and
+ * encryption sits below it (invariants 4 and 6).
+ */
 export async function resolveParameter(
   ref: ParameterRef,
   environment: string,
   provider: Provider,
+  keys: KeySource,
 ): Promise<Resolution> {
   const files = candidatesFor(ref, environment);
   const values = await Promise.all(files.map((file) => provider.read(file)));
@@ -128,18 +143,17 @@ export async function resolveParameter(
 
   const parameter = parameterId(ref);
 
-  if (winner?.file.encrypted) {
-    throw new PenvError(
-      "ENCRYPTED_VALUE_UNSUPPORTED",
-      `Parameter ${parameter} for environment ${environment} resolves to the encrypted value file ${winner.location}, which penv cannot decrypt`,
-      `Decrypting \`.enc\` value files is not part of this release. Provide a plaintext value file for ${parameter}, or read this value from a provider that holds it in plaintext.`,
-    );
-  }
+  // `openValue` is called unconditionally, including for a plaintext winner,
+  // which it returns verbatim. A branch on `file.encrypted` here would be a
+  // second place that decides what encryption means.
+  const opened =
+    winner === undefined || value === undefined ? undefined : openValue(winner.file, value, keys);
 
   return {
     ref,
     parameter,
-    value,
+    value: opened?.kind === "plaintext" ? opened.value : undefined,
+    ...(opened?.kind === "failed" ? { undecryptable: opened.failure } : {}),
     winner,
     candidates,
     // Only the unscoped default is a fallback. A winner at either `.local`
@@ -149,10 +163,43 @@ export async function resolveParameter(
 }
 
 /**
+ * The part of a resolution a failure has to be able to name. penv walks the
+ * cascade twice — here, and synchronously in the CLI where `generate` and
+ * `import` cannot await — and this is the part both walks agree on, so one
+ * helper serves both rather than each growing its own.
+ */
+export type ResolvedValue = Pick<Resolution, "parameter" | "value" | "undecryptable" | "winner">;
+
+/**
+ * The value, or the named error for why there isn't one.
+ *
+ * The one place `UndecryptableValueError` is constructed, and the helper every
+ * caller that wants a *value* — rather than a report about one — must use. It
+ * exists because the two absences on a `Resolution` are not the same absence:
+ * a caller that treated `value === undefined` as "missing" would report a secret
+ * it cannot decrypt as one that was never set, and send the user to overwrite it.
+ */
+export function requireValue(resolution: ResolvedValue, environment: string): string | undefined {
+  if (resolution.undecryptable !== undefined) {
+    throw new UndecryptableValueError(
+      resolution.parameter,
+      environment,
+      resolution.winner?.location ?? "an encrypted value file",
+      resolution.undecryptable,
+    );
+  }
+  return resolution.value;
+}
+
+/**
  * Resolves every parameter the provider holds. Scopes are collapsed first:
  * `redis/password.production` and `redis/password` are one parameter.
  */
-export async function resolveAll(environment: string, provider: Provider): Promise<Resolution[]> {
+export async function resolveAll(
+  environment: string,
+  provider: Provider,
+  keys: KeySource,
+): Promise<Resolution[]> {
   const files = await provider.list();
 
   const refs = new Map<string, ParameterRef>();
@@ -165,7 +212,7 @@ export async function resolveAll(environment: string, provider: Provider): Promi
   }
 
   const resolutions = await Promise.all(
-    [...refs.values()].map((ref) => resolveParameter(ref, environment, provider)),
+    [...refs.values()].map((ref) => resolveParameter(ref, environment, provider, keys)),
   );
   // Code-unit order, not locale order: generated output must be identical on every machine.
   return resolutions.sort((a, b) =>

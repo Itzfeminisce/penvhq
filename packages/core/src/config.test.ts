@@ -294,6 +294,113 @@ describe("validateConfig", () => {
     expect(duplicate?.message).toContain("DATABASE_URL");
   });
 
+  it("accepts a keys block declaring an env source per environment", () => {
+    const config: PenvConfig = {
+      ...valid,
+      keys: {
+        staging: { source: "env", id: "staging-key" },
+        production: { source: "env", id: "prod.2024_key-a" },
+      },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
+  it("accepts a config with no keys block at all", () => {
+    // An environment with no entry has no key source, which is not the same as
+    // having no key — and is not a misconfiguration to report.
+    expect(validateConfig(valid)).toEqual([]);
+  });
+
+  it("rejects a keys entry naming an undeclared environment", () => {
+    const config: PenvConfig = { ...valid, keys: { qa: { source: "env", id: "prod" } } };
+
+    const errors = validateConfig(config);
+    const unknown = errors.find((error) => error.message.includes("`keys` block"));
+
+    expect(unknown).toBeInstanceOf(ConfigError);
+    expect(unknown?.message).toContain("qa");
+    expect(unknown?.remedy).toContain("whitelist");
+  });
+
+  it("rejects an id containing `:`, which separates the envelope's fields", () => {
+    const config: PenvConfig = {
+      ...valid,
+      keys: { production: { source: "env", id: "prod:2024" } },
+    };
+
+    const errors = validateConfig(config);
+    const badId = errors.find((error) => error.message.includes("declares id"));
+
+    expect(badId).toBeInstanceOf(ConfigError);
+    expect(badId?.message).toContain("production");
+    expect(badId?.message).toContain("prod:2024");
+    expect(badId?.remedy).toContain("`:`");
+  });
+
+  it("rejects an empty id", () => {
+    const config: PenvConfig = { ...valid, keys: { production: { source: "env", id: "" } } };
+
+    expect(validateConfig(config).some((error) => error.message.includes("declares id"))).toBe(
+      true,
+    );
+  });
+
+  it("rejects an unknown key source, naming the ones penv knows", () => {
+    const config = {
+      ...valid,
+      keys: { production: { source: "vault", id: "prod" } },
+    } as unknown as PenvConfig;
+
+    const errors = validateConfig(config);
+    const source = errors.find((error) => error.message.includes("declares source"));
+
+    expect(source).toBeInstanceOf(ConfigError);
+    expect(source?.message).toContain("production");
+    expect(source?.message).toContain("vault");
+    expect(source?.remedy).toContain("`env`");
+  });
+
+  it("accepts `keychain` as a source — it is a config-grammar name, refused at use", () => {
+    // The stays-quiet half: `keychain` is a valid declaration that this release
+    // cannot read. `resolveKeySource` is what refuses it, loudly, so `validate`
+    // must not also report a config that is spelled correctly.
+    const config: PenvConfig = {
+      ...valid,
+      keys: { production: { source: "keychain", id: "prod" } },
+    };
+
+    expect(validateConfig(config)).toEqual([]);
+  });
+
+  it("rejects a keys entry that is not a key-source object", () => {
+    const config = { ...valid, keys: { production: "prod" } } as unknown as PenvConfig;
+
+    const errors = validateConfig(config);
+
+    expect(errors.some((error) => error.message.includes("not a key-source object"))).toBe(true);
+  });
+
+  it("rejects a keys block that is not an object", () => {
+    const config = { ...valid, keys: ["prod"] } as unknown as PenvConfig;
+
+    const errors = validateConfig(config);
+
+    expect(errors.some((error) => error.message.includes("`keys` in penv.config.ts"))).toBe(true);
+  });
+
+  it("reports every bad keys entry in one pass", () => {
+    const config = {
+      ...valid,
+      keys: {
+        qa: { source: "env", id: "qa" },
+        production: { source: "vault", id: "prod:2024" },
+      },
+    } as unknown as PenvConfig;
+
+    expect(validateConfig(config).length).toBeGreaterThanOrEqual(3);
+  });
+
   it("collects rather than throws", () => {
     const config: PenvConfig = { environments: [], providers: { production: { type: "" } } };
 

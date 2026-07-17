@@ -295,6 +295,11 @@ export default defineConfig({
     production:  { type: "aws-ssm", path: "/prod/app" },
   },
 
+  keys: {
+    staging:    { source: "keychain", id: "staging" },
+    production: { source: "env",      id: "prod" },
+  },
+
   names: {
     "database-url": "DATABASE_URL",
   },
@@ -306,6 +311,9 @@ export default defineConfig({
 | `environments` | Whitelist of valid environment names. The only source of truth for what counts as an environment; segments are matched against this list, never inferred. |
 | `providers` | Per-environment backend. |
 | `providers.*.path` | The provider-side base path penv maps records onto. This explicit mapping is the translation penv owns on your behalf. |
+| `keys` | Per-environment encryption key source. An environment with no entry has no key source, which is not the same as having no key: penv reports that it was never told where to look, rather than that the key is missing. |
+| `keys.*.source` | `env` (read from `PENV_KEY_<ID>`, which is where a deploy exports the unwrapped KMS-derived key) or `keychain` (the OS keychain). A source penv does not recognise is an error, never a fallback to one it does. |
+| `keys.*.id` | Names the key. It is written into every value file sealed under it, so it outlives any one machine — and cannot contain `:`. |
 | `names` | Overrides the default name transform for generated `.env` output. Collision-checked. |
 
 ## Providers
@@ -352,7 +360,23 @@ Each parameter encrypts independently — the `.enc` terminal marker denotes an 
 
 Whether a parameter *must* be encrypted is a **policy** declared in its meta, and the on-disk `.enc` marker is validated against that policy. The filename is not the sole authority on what is secret, which is what lets `penv doctor` catch a secret parameter that has a committed *plaintext* value file for some environment.
 
-Encryption keys are provider-backed: the OS keychain locally, and KMS-derived keys in CI and production. Keys are never stored repo-adjacent.
+Encryption keys are provider-backed: the OS keychain locally, and KMS-derived keys in CI and production. Keys are never stored repo-adjacent. Each environment declares where its key lives:
+
+```ts
+export default defineConfig({
+  environments: ["development", "production"],
+  providers: { development: { type: "filesystem" }, production: { type: "filesystem" } },
+  keys: { production: { source: "env", id: "prod" } },
+});
+```
+
+`penv key create --env production` mints a key of the right shape and prints it; penv stores no copy, because the only places it could put one are the places a key must never be. Anything sealed under a key is unreadable without it.
+
+**Which command seals what.** `penv set` reads the policy and seals when it says to, so there is no `--encrypt` flag — a flag would make the command line the authority on what is secret, which is the inversion this section's second paragraph forbids. `penv encrypt` and `penv decrypt` exist for the two moments the policy cannot handle on its own: adopting a tree that already has plaintext values when `secret: true` is added, and re-sealing a value file after a rename or a change of scope. `penv decrypt` refuses a parameter meta declares secret — penv does not ship a command whose purpose is to fail its own check.
+
+**A sealed value is bound to the file it lives in.** Copying `db-password.production.enc` over `db-password.enc` does not promote a production secret to the default every environment falls back to; it produces a file that will not open, even with the right key. This is why a value file that moves scope must be re-sealed at its new address.
+
+**"penv cannot read this" is never reported as "this is not set".** They are opposite situations with opposite remedies — one wants `penv set`, the other wants your key — and answering the first with the second would tell you to overwrite a secret you still have. `penv get` names the file and the reason; `doctor` reports it as an encryption failure; `validate` reports it as itself rather than as a schema violation.
 
 Note one consequence of encrypting the unscoped default (`<name>.enc`): because the unscoped default doubles as the local-dev value, a developer must hold the decrypt key to run locally. Encrypting per-environment values (`<name>.production.enc`) while leaving the default plaintext avoids this; choose the scope of encryption accordingly.
 
@@ -422,7 +446,7 @@ $ penv doctor
 ⚠ Drifted from provider     stripe.secret-key   local ≠ vault:secret/production
 ⚠ Unscoped fallback in use  api-url             production resolving to default
 ⚠ Plaintext secret          db-password.staging value file is not encrypted
-✓ Encryption enabled
+⚠ Undecryptable value       redis/password.production.enc PENV_KEY_PROD is not set
 ✓ Provider                  vault
   penv set redis/password --env production
   penv set app/api-key --env production
@@ -448,9 +472,12 @@ Reporting is all it does. penv will not materialise a value file from a declarat
 | `penv set <key>` | Update a parameter and push to the active provider. |
 | `penv remove <key>` | Delete a parameter. |
 | `penv list` | List parameters. |
-| `penv encrypt` / `penv decrypt` | Encrypt / decrypt selected parameters. |
+| `penv encrypt` / `penv decrypt` | Encrypt / decrypt one parameter's value file at one scope. Both need `--env`. |
+| `penv key create` | Generate a key for an environment. penv prints it and stores nothing. |
 | `penv validate` | Validate configuration against the schema; non-zero on failure. |
-| `penv doctor` | Report drift, missing, unused, weak, fallback, plaintext-secret, and rotation issues. |
+| `penv doctor` | Report drift, missing, unused, weak, fallback, plaintext-secret, encryption, and rotation issues. |
+
+`penv generate` writes plaintext, so it refuses an encrypted value unless you pass `--allow-decrypt`, and says how many secrets it unsealed when you do. The leaving guarantee below is why the flag exists rather than a refusal; the flag is why it is never a surprise.
 
 ## Migrating and leaving
 
@@ -460,7 +487,7 @@ Reporting is all it does. penv will not materialise a value file from a declarat
 
 **Committing safely.** `penv init` and `penv import` write a `.gitignore` so value files are ignored and only structure, `env.ts`, meta, and config are committed. A committed plaintext secret is a `penv doctor` failure, not a soft warning.
 
-**Leaving.** `penv generate` produces a working `.env` at any time, so you are never locked behind a proprietary store. Your `.penv/env.ts` is an ordinary Zod schema you own; the schema and its inferred types port to plain tooling without penv.
+**Leaving.** `penv generate` produces a working `.env` at any time, so you are never locked behind a proprietary store. Encrypted values are part of that guarantee rather than an exception to it: `penv generate --allow-decrypt` unseals them into the artifact, because a store you cannot leave with your own secrets is the thing penv exists not to be. The flag is there because unsealing a secret should be a moment you chose, not a side effect of a command you ran for another reason — and `generate` says how many it unsealed. Your `.penv/env.ts` is an ordinary Zod schema you own; the schema and its inferred types port to plain tooling without penv.
 
 ## Design tradeoffs
 

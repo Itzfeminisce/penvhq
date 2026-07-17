@@ -17,8 +17,19 @@ export {
   resolveEnvironment,
   validateConfig,
 } from "./config.js";
+export type { DecryptResult } from "./crypto.js";
+export {
+  decryptValue,
+  KeyUnavailableError,
+  openValue,
+  sameKey,
+  sealValue,
+  UndecryptableValueError,
+} from "./crypto.js";
 export type { DotenvEntry, DotenvParseResult } from "./dotenv.js";
 export { parseDotenv, serializeDotenv } from "./dotenv.js";
+export type { Envelope } from "./envelope.js";
+export { formatEnvelope, NONCE_BYTES, parseEnvelope, TAG_BYTES } from "./envelope.js";
 export {
   ConfigError,
   FilenameGrammarError,
@@ -39,6 +50,14 @@ export {
   reservedTokensFor,
   validateEnvironmentNames,
 } from "./grammar.js";
+export type { KeyLookup, KeySource } from "./keys.js";
+export {
+  createEnvKeySource,
+  KEY_BYTES,
+  nullKeySource,
+  resolveKeySource,
+  validateKeys,
+} from "./keys.js";
 export { effectiveMeta, isRequired, isSecret, parseMeta, serializeMeta } from "./meta.js";
 export {
   accessPath,
@@ -49,8 +68,11 @@ export {
   roundTripsCleanly,
   variableName,
 } from "./names.js";
-export { candidatesFor, resolveAll, resolveParameter } from "./resolve.js";
+export { candidatesFor, requireValue, resolveAll, resolveParameter } from "./resolve.js";
 export type {
+  DecryptFailure,
+  DecryptReason,
+  KeyConfig,
   Meta,
   MetaBlock,
   MetaFileRef,

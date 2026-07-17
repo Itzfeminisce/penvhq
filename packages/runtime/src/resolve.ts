@@ -16,6 +16,17 @@
  * `providers.*.type` — a Vault-backed environment resolves through exactly the
  * code path a filesystem-backed one does, which is what makes changing provider
  * a configuration change rather than an application rewrite.
+ *
+ * Decryption happens here, synchronously, and that is the same knife applied a
+ * second time. Key *acquisition* is async and happens before the process starts:
+ * a deploy unwraps the KMS-derived data key and exports it, exactly as it already
+ * runs `penv pull` to materialise the tree. Key *use* is a synchronous pure
+ * function over bytes. penv never calls a KMS in-process — a key is where an
+ * environment's secret material *lives*, not what the runtime dials at boot, just
+ * as a provider is a sync target and not a runtime source. So invariant 3 is not
+ * traded against encryption: `load` stays generic and synchronous because the
+ * network half of both problems was moved out of the process entirely, rather
+ * than awaited inside it.
  */
 
 import { dirname, resolve as resolvePath } from "node:path";
@@ -24,9 +35,11 @@ import {
   candidatesFor,
   formatValueFile,
   loadConfig,
-  PenvError,
+  openValue,
   parameterId,
   resolveEnvironment,
+  resolveKeySource,
+  UndecryptableValueError,
 } from "@penv/core";
 import { createFilesystemProvider } from "@penv/provider-filesystem";
 
@@ -68,17 +81,6 @@ function refsFrom(files: readonly ValueFile[]): ParameterRef[] {
   });
 }
 
-function encryptedWinner(ref: ParameterRef, environment: string, file: ValueFile): PenvError {
-  const parameter = parameterId(ref);
-  return new PenvError(
-    "ENCRYPTED_VALUE_UNSUPPORTED",
-    `Parameter ${parameter} for environment ${environment} resolves to the encrypted value file ` +
-      `${formatValueFile(file)}, which penv cannot decrypt`,
-    `Decrypting \`.enc\` value files is not part of this release. Provide a plaintext value file ` +
-      `for ${parameter}, or read this value from a provider that holds it in plaintext.`,
-  );
-}
-
 /**
  * Loads the config, settles the environment, and resolves every parameter the
  * local tree holds — the work `load` and `penv/config` both start from.
@@ -92,6 +94,8 @@ export function resolveSync(cwd: string, environment?: string): ResolvedConfig {
     config,
   });
 
+  const keys = resolveKeySource(config, target);
+
   const values: ResolvedValue[] = [];
   for (const ref of refsFrom(provider.listSync())) {
     for (const candidate of candidatesFor(ref, target)) {
@@ -99,10 +103,20 @@ export function resolveSync(cwd: string, environment?: string): ResolvedConfig {
       if (read === undefined) {
         continue;
       }
-      if (candidate.encrypted) {
-        throw encryptedWinner(ref, target, candidate);
+      // The winner is the winner whether or not it opens. Continuing the walk on
+      // a failed decrypt would serve a lower scope's plaintext twin instead —
+      // the scope widening the cascade exists to prevent, arrived at by treating
+      // "I cannot read this" as "this is not here".
+      const opened = openValue(candidate, read, keys);
+      if (opened.kind === "failed") {
+        throw new UndecryptableValueError(
+          parameterId(ref),
+          target,
+          formatValueFile(candidate),
+          opened.failure,
+        );
       }
-      values.push({ ref, value: read });
+      values.push({ ref, value: opened.value });
       break;
     }
   }

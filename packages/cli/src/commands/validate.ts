@@ -24,13 +24,13 @@ import { defineCommand } from "citty";
 import { createJiti } from "jiti";
 import type { z } from "zod";
 import type { Project } from "../project.js";
-import { openProject, refsFrom, targetEnvironment } from "../project.js";
+import { keySourceFor, openProject, refsFrom, targetEnvironment } from "../project.js";
 import type { DriftReport } from "../schema.js";
 import { computeDrift, EMPTY_DRIFT } from "../schema.js";
 import { CHECK, formatRows, guard, type Row, WARN, write } from "../ui.js";
 import { SCHEMA_FILE } from "./init.js";
 
-export type ValidateIssueKind = "config" | "reserved" | "collision" | "schema";
+export type ValidateIssueKind = "config" | "reserved" | "collision" | "schema" | "undecryptable";
 
 export interface ValidateIssue {
   readonly kind: ValidateIssueKind;
@@ -68,6 +68,7 @@ const LABELS: Readonly<Record<ValidateIssueKind, string>> = {
   reserved: "Reserved token",
   collision: "Name collision",
   schema: "Invalid parameter",
+  undecryptable: "Undecryptable value",
 };
 
 function firstLine(text: string): string {
@@ -298,9 +299,28 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
   let drift: DriftReport = EMPTY_DRIFT;
 
   if (schema !== undefined) {
-    const resolutions = await resolveAll(environment, project.provider);
+    const resolutions = await resolveAll(
+      environment,
+      project.provider,
+      keySourceFor(project, environment),
+    );
     const object: Record<string, unknown> = {};
+    // The access paths whose value exists and could not be read. Nothing is
+    // placed at them, so the schema will call each one absent — see below.
+    const undecryptable = new Set<string>();
     for (const resolution of resolutions) {
+      if (resolution.undecryptable !== undefined) {
+        undecryptable.add(accessPath(resolution.ref).join("."));
+        issues.push({
+          kind: "undecryptable",
+          subject: resolution.parameter,
+          message: `${resolution.winner?.location ?? "the winning value file"} could not be decrypted: ${resolution.undecryptable.detail}`,
+          remedy:
+            "Make the key available, or re-seal the value under a key you hold with `penv encrypt`. " +
+            "The value is there — penv cannot read it.",
+        });
+        continue;
+      }
       if (resolution.value !== undefined) {
         place(object, accessPath(resolution.ref), resolution.value);
       }
@@ -312,9 +332,18 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
     const result = schema.safeParse(object);
     if (!result.success) {
       for (const problem of result.error.issues) {
+        const path = problem.path.join(".");
+        // One absence, one line. The schema is right that nothing is there, but
+        // "expected string, received undefined" is the wrong answer to why: the
+        // value exists and penv could not read it, which is already reported
+        // above with the remedy that fixes it. Printing both puts the true line
+        // and the misleading one next to each other and lets the reader pick.
+        if (undecryptable.has(path)) {
+          continue;
+        }
         issues.push({
           kind: "schema",
-          subject: problem.path.join(".") || SCHEMA_PATH,
+          subject: path || SCHEMA_PATH,
           message: problem.message,
           remedy: `Fix the value, or adjust the schema in ${SCHEMA_PATH} if the shape is wrong.`,
         });

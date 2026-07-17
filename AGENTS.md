@@ -54,7 +54,13 @@ Run `pnpm typecheck && pnpm test && pnpm lint` before proposing a change as done
 
 13. **Fallback resolution is never silent.** Unscoped-default resolution for a real environment must surface in `penv doctor`.
 
-14. **Encryption is policy-driven, not filename-driven.** Meta declares must-encrypt; the `.enc` marker is validated against it. A secret with a committed plaintext value file is a `doctor` failure.
+14. **Encryption is policy-driven, not filename-driven.** Meta declares must-encrypt; the `.enc` marker is validated against it. A secret with a committed plaintext value file is a `doctor` failure. Do not add an `--encrypt` flag: it would make the command line the authority on what is secret, inverting the direction the check runs in.
+
+15. **A key source never falls back to another one.** An unrecognised or unavailable source refuses, loudly. Sealing under a key penv picked because it could not find the one you named is the failure that makes encryption decoration. Relatedly: "the source could not be consulted" and "the source holds no such key" are different answers with opposite remedies and must never collapse into one.
+
+16. **"Cannot decrypt" is never reported as "no value".** A present-but-unopenable winner carries `undecryptable`; a genuine absence carries neither that nor a value. Any caller that treats `value === undefined` as missing will tell a user to overwrite a secret they still have.
+
+17. **A ciphertext is bound to its address.** The AAD is the value file's full name, so a sealed value cannot be copied between scopes. Never widen the AAD to the parameter alone — that reopens the scope-widening leak at the one layer below the cascade.
 
 15. **`import` is one-directional.** After import, `.penv/` is source of truth; generated `.env` is an artifact. No silent reverse-sync of hand-edits.
 

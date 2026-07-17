@@ -9,10 +9,12 @@
 
 import { runMain as cittyRunMain, defineCommand } from "citty";
 import { doctorCommand } from "./commands/doctor.js";
+import { decryptCommand, encryptCommand } from "./commands/encrypt.js";
 import { generateCommand } from "./commands/generate.js";
 import { getCommand } from "./commands/get.js";
 import { importCommand } from "./commands/import.js";
 import { initCommand } from "./commands/init.js";
+import { keyCommand } from "./commands/key.js";
 import { listCommand } from "./commands/list.js";
 import { removeCommand } from "./commands/remove.js";
 import { setCommand } from "./commands/set.js";
@@ -32,6 +34,9 @@ export const main = defineCommand({
     set: setCommand,
     remove: removeCommand,
     list: listCommand,
+    encrypt: encryptCommand,
+    decrypt: decryptCommand,
+    key: keyCommand,
     validate: validateCommand,
     doctor: doctorCommand,
     watch: watchCommand,
@@ -44,6 +49,8 @@ export function runMain(): Promise<void> {
 
 export type { DoctorFinding, DoctorReport, DoctorSeverity } from "./commands/doctor.js";
 export { renderDoctor, runDoctor } from "./commands/doctor.js";
+export type { ResealResult } from "./commands/encrypt.js";
+export { runDecrypt, runEncrypt } from "./commands/encrypt.js";
 export type { GenerateResult } from "./commands/generate.js";
 export { generateDotenv, runGenerate } from "./commands/generate.js";
 export type { GetExplanation } from "./commands/get.js";
