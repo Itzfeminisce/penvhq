@@ -1,7 +1,7 @@
 {
-  "name": "@penv/provider-filesystem",
+  "name": "@penv/provider-contract",
   "version": "0.0.0",
-  "description": "The reference penv provider, and the ground truth for the provider contract.",
+  "description": "The provider-agnostic acceptance suite every penv provider must pass, plus an in-memory provider that proves the seam is pluggable. Test-only.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -22,12 +22,5 @@
   },
   "dependencies": {
     "@penv/core": "workspace:*"
-  },
-  "peerDependencies": {
-    "zod": "^4.4.3"
-  },
-  "devDependencies": {
-    "@penv/provider-contract": "workspace:*",
-    "zod": "4.4.3"
   }
 }

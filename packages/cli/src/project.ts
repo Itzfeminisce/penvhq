@@ -10,6 +10,7 @@ import type {
   KeySource,
   ParameterRef,
   PenvConfig,
+  Provider,
   ResolutionCandidate,
 } from "@penv/core";
 import {
@@ -24,8 +25,8 @@ import {
   resolveEnvironment,
   resolveKeySource,
 } from "@penv/core";
-import type { FilesystemProvider } from "@penv/provider-filesystem";
-import { createFilesystemProvider } from "@penv/provider-filesystem";
+import { FilesystemProvider } from "@penv/provider-filesystem";
+import { assertProvidersRegistered, createProvider, LOCAL_TREE_TYPE } from "./registry.js";
 
 export const PENV_DIR = ".penv";
 
@@ -35,20 +36,52 @@ export interface Project {
   readonly configFile: string;
   readonly config: PenvConfig;
   readonly penvDir: string;
-  readonly provider: FilesystemProvider;
+  /**
+   * The project's provider, as the contract — never the concrete
+   * implementation. Shared commands speak the async interface and nothing more;
+   * the sync twins a command genuinely needs are reached through `localTree`,
+   * which is the one place the filesystem-only surface is named.
+   */
+  readonly provider: Provider;
 }
 
 export function openProject(cwd: string): Project {
   const { config, file } = loadConfig(cwd);
   const root = dirname(file);
   const penvDir = resolve(root, PENV_DIR);
+  // Refuse a config naming a provider this build cannot construct here, at open
+  // time, rather than as a crash from whichever command first reached it.
+  assertProvidersRegistered(config);
   return {
     root,
     configFile: file,
     config,
     penvDir,
-    provider: createFilesystemProvider({ root: penvDir, config }),
+    provider: createProvider(LOCAL_TREE_TYPE, { root: penvDir, config }),
   };
+}
+
+/**
+ * The project's provider as the concrete filesystem tree, for the sync reads and
+ * writes a synchronous command cannot get from the async contract.
+ *
+ * `import`, `generate`, and `push` are synchronous — they are the adoption path
+ * and the leaving guarantee — and they act on the local `.penv` tree, which is
+ * always the filesystem provider (`penv pull` materialises it; the runtime reads
+ * it). This narrows to that provider and names the reliance, so the type of
+ * `Project.provider` stays the contract everywhere else. The refusal is a
+ * belt-and-braces guard: `openProject` builds the tree as filesystem, so a
+ * project in hand always narrows.
+ */
+export function localTree(project: Project): FilesystemProvider {
+  if (!(project.provider instanceof FilesystemProvider)) {
+    throw new PenvError(
+      "PROVIDER_NOT_LOCAL",
+      `This command reads the local .penv tree synchronously, which the \`${project.provider.type}\` provider is not`,
+      "Run this against a filesystem-backed project, or use a command that speaks the async provider contract.",
+    );
+  }
+  return project.provider;
 }
 
 /** The environment to act on: `--env`, then `PENV_ENV`, then `NODE_ENV`. */
