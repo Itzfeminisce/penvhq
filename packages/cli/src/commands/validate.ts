@@ -19,6 +19,7 @@ import {
   PenvError,
   ReservedTokenError,
   resolveAll,
+  validateConfig,
 } from "@penv/core";
 import { defineCommand } from "citty";
 import { createJiti } from "jiti";
@@ -286,6 +287,16 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
   }
 
   const refs: ParameterRef[] = refsFrom(files);
+
+  // The config decides what an environment is, so a broken config is not a
+  // smaller problem than a broken value — it is the problem that makes value
+  // files unreadable. `validateConfig` collects every one of them, and until it
+  // was called from here it collected them for nobody: a config declaring an
+  // environment with no provider, or a name no filename can hold, passed
+  // `penv validate` with a ✓.
+  for (const error of validateConfig(project.config)) {
+    issues.push(issueFrom(error, "penv.config.ts"));
+  }
 
   // Invariant 12: two parameters mapping to one generated variable would lose a
   // value on `penv generate`. It fails here rather than there.

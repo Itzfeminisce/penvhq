@@ -8,6 +8,7 @@
 
 import {
   FilenameGrammarError,
+  IllegalEnvironmentNameError,
   PenvError,
   ReservedTokenError,
   UnknownEnvironmentError,
@@ -314,16 +315,42 @@ export function parseFilename(relativePath: string, config: PenvConfig): ParsedF
 }
 
 /**
- * Reserved-token collisions in `environments`. Collected rather than thrown so
- * `penv validate` reports every bad name in one pass.
+ * The names a dot segment can be. An environment name becomes a filename segment
+ * verbatim, and filenames are split on `.`, so a name carrying one would be read
+ * back as two segments that mean something else — or, when it starts with a dot,
+ * as an empty segment the grammar refuses outright.
  */
-export function validateEnvironmentNames(config: PenvConfig): ReservedTokenError[] {
-  const errors: ReservedTokenError[] = [];
+const ENVIRONMENT_NAME = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * True when `name` can survive a round trip through a filename.
+ *
+ * Whitelist membership is necessary and not sufficient: it says a name was
+ * *declared*, not that it can be *written*. `.env.development.local` is a name a
+ * user can genuinely reach for — it is what their file is called — and declaring
+ * it produced `api-key..env.development.local`, which the grammar then refuses to
+ * read. Every later `list`/`get`/`generate`/`validate` on that tree threw, and
+ * the only repair was deleting the file by hand.
+ */
+export function isLegalEnvironmentName(name: string): boolean {
+  return ENVIRONMENT_NAME.test(name);
+}
+
+/**
+ * Bad names in `environments`. Collected rather than thrown so `penv validate`
+ * reports every one in one pass.
+ */
+export function validateEnvironmentNames(config: PenvConfig): PenvError[] {
+  const errors: PenvError[] = [];
   for (const environment of config.environments) {
     // Deliberately the static tokens, not `isReservedToken` — that reserves the
     // declared environments too, so every name here would collide with itself.
     if ((RESERVED_TOKENS as readonly string[]).includes(environment)) {
       errors.push(new ReservedTokenError("environment", environment, "penv.config.ts"));
+      continue;
+    }
+    if (typeof environment === "string" && !isLegalEnvironmentName(environment)) {
+      errors.push(new IllegalEnvironmentNameError(environment));
     }
   }
   return errors;

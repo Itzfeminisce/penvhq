@@ -33,6 +33,7 @@ export { formatEnvelope, NONCE_BYTES, parseEnvelope, TAG_BYTES } from "./envelop
 export {
   ConfigError,
   FilenameGrammarError,
+  IllegalEnvironmentNameError,
   MissingParameterError,
   NameCollisionError,
   PenvError,
@@ -43,6 +44,7 @@ export {
 export {
   formatMetaFile,
   formatValueFile,
+  isLegalEnvironmentName,
   isParameterFile,
   isReservedToken,
   parameterId,

@@ -12,8 +12,13 @@
 import { existsSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { createJiti } from "jiti";
-import { ConfigError, PenvError, UnknownEnvironmentError } from "./errors.js";
-import { validateEnvironmentNames } from "./grammar.js";
+import {
+  ConfigError,
+  IllegalEnvironmentNameError,
+  PenvError,
+  UnknownEnvironmentError,
+} from "./errors.js";
+import { isLegalEnvironmentName, validateEnvironmentNames } from "./grammar.js";
 import { validateKeys } from "./keys.js";
 import type { PenvConfig } from "./types.js";
 
@@ -294,10 +299,23 @@ export function validateConfig(config: PenvConfig): PenvError[] {
   return errors;
 }
 
-/** Environments are a whitelist: an undeclared name is an error, never inferred. */
+/**
+ * Environments are a whitelist: an undeclared name is an error, never inferred.
+ *
+ * Declared is necessary and not sufficient. The whitelist says which names a
+ * project *chose*, not which names penv can *write* — and a name reaches a
+ * filename verbatim from here. A declared `.env.development.local` wrote
+ * `api-key..env.development.local`, which the grammar then refused to read, so
+ * every later command on that tree threw. The list is checked against the
+ * grammar rather than trusted, because nothing else stands between a config
+ * typo and an unreadable tree.
+ */
 export function assertEnvironment(environment: string, config: PenvConfig): void {
   if (!config.environments.includes(environment)) {
     throw new UnknownEnvironmentError(environment, config.environments);
+  }
+  if (!isLegalEnvironmentName(environment)) {
+    throw new IllegalEnvironmentNameError(environment);
   }
 }
 

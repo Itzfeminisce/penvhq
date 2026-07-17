@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FilenameGrammarError,
+  IllegalEnvironmentNameError,
   PenvError,
   ReservedTokenError,
   UnknownEnvironmentError,
@@ -16,6 +17,11 @@ import {
   validateEnvironmentNames,
 } from "./grammar.js";
 import type { ParsedFile, PenvConfig, Scope, ValueFile } from "./types.js";
+
+/** The reserved tokens among a collected batch. `validateEnvironmentNames` reports two kinds. */
+function tokensOf(errors: readonly PenvError[]): string[] {
+  return errors.filter((e) => e instanceof ReservedTokenError).map((e) => e.token);
+}
 
 const config: PenvConfig = {
   environments: ["development", "staging", "production", "test"],
@@ -664,7 +670,7 @@ describe("validateEnvironmentNames", () => {
     });
     expect(errors).toHaveLength(1);
     expect(errors[0]).toBeInstanceOf(ReservedTokenError);
-    expect(errors[0]?.token).toBe("local");
+    expect(tokensOf(errors)).toEqual(["local"]);
     expect(errors[0]?.message).toMatch(/environment name `local`.*is a reserved token/s);
   });
 
@@ -673,6 +679,55 @@ describe("validateEnvironmentNames", () => {
       environments: ["local", "enc", "json", "toml", "yml", "production"],
       providers: {},
     });
-    expect(errors.map((e) => e.token)).toEqual(["local", "enc", "json", "toml", "yml"]);
+    expect(tokensOf(errors)).toEqual(["local", "enc", "json", "toml", "yml"]);
+  });
+});
+
+/**
+ * A name becomes a dot segment verbatim, so a name carrying a dot is read back as
+ * segments that mean something else. Found in a real project, whose config
+ * declared `.env.development.local` — the name of their dotenv file — as an
+ * environment. `penv set --env .env.development.local` then wrote
+ * `api-key..env.development.local`, which the grammar refuses to read, so every
+ * later command on that tree threw and the only repair was deleting the file.
+ */
+describe("environment names that cannot be written", () => {
+  it("rejects a name containing a dot", () => {
+    const errors = validateEnvironmentNames({
+      environments: ["development", ".env.development.local"],
+      providers: {},
+    });
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(IllegalEnvironmentNameError);
+    expect(errors[0]?.message).toMatch(/cannot be part of a filename/);
+  });
+
+  it("rejects a name with a space or a path separator", () => {
+    const errors = validateEnvironmentNames({
+      environments: ["pro duction", "a/b", "c\\d"],
+      providers: {},
+    });
+
+    expect(errors).toHaveLength(3);
+    expect(errors.every((e) => e instanceof IllegalEnvironmentNameError)).toBe(true);
+  });
+
+  /** The negative: the names real projects actually use must all survive. */
+  it("accepts letters, digits, underscores and hyphens", () => {
+    const errors = validateEnvironmentNames({
+      environments: ["development", "production", "staging_2", "pre-prod", "e2e"],
+      providers: {},
+    });
+
+    expect(errors).toEqual([]);
+  });
+
+  /** A reserved token is reported as reserved, not as unspellable — one reason, the true one. */
+  it("reports a reserved name as reserved rather than as illegal", () => {
+    const errors = validateEnvironmentNames({ environments: ["local"], providers: {} });
+
+    expect(errors[0]).toBeInstanceOf(ReservedTokenError);
+    expect(errors).toHaveLength(1);
   });
 });

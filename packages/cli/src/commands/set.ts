@@ -171,6 +171,18 @@ export async function runSet(options: SetOptions): Promise<SetResult> {
 
   await project.provider.write(file, stored);
 
+  // The twin at this scope is removed, because one scope holds one value.
+  //
+  // `.enc` is orthogonal to precedence, so `<name>.<env>` and `<name>.<env>.enc`
+  // are two candidates at one address, and the plaintext is considered first.
+  // Leaving the twin behind therefore does not leave a harmless extra file — it
+  // leaves the one that *wins*. Marking a parameter secret and running `penv set`
+  // reported writing a sealed file while `penv get` kept handing back the stale
+  // plaintext underneath it: the value you set was not the value you got, and the
+  // new secret was inert on disk. Written before the removal, so the value is
+  // never in neither file.
+  await project.provider.remove({ ...file, encrypted: !secret });
+
   return { parameter: options.key, location: formatValueFile(file), encrypted: secret };
 }
 

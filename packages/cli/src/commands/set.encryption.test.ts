@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { PenvError, parseEnvelope } from "@penv/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runDoctor } from "./doctor.js";
+import { runGet } from "./get.js";
 import { runSet } from "./set.js";
 
 /**
@@ -280,5 +281,119 @@ describe("a secret penv cannot seal", () => {
     expect(code).toBe("SECRET_SCOPE_AMBIGUOUS");
     expect(valueFile(root, "db-password")).toBeUndefined();
     expect(valueFile(root, "db-password.enc")).toBeUndefined();
+  });
+});
+
+/**
+ * Found by pointing penv at a real project, and the worst kind of bug: `set`
+ * reported success and `get` handed back something else.
+ *
+ * `.enc` is orthogonal to precedence, so `<name>.<env>` and `<name>.<env>.enc`
+ * are two candidates at one address and the plaintext is considered first.
+ * Marking an already-imported parameter `secret: true` and running `penv set`
+ * therefore wrote the sealed file, printed a ✓ naming it, and left the stale
+ * plaintext sitting on top of it — where it went on winning every read. The new
+ * secret was inert on disk. One scope holds one value, so the twin goes.
+ */
+describe("the twin at the scope being written", () => {
+  it("removes the plaintext when the value becomes a secret", async () => {
+    const key = freshKey();
+    process.env[KEY_VARIABLE] = key;
+    const root = makeProject({
+      tree: {
+        "db-password.production": "stale-plaintext",
+        "db-password.json": JSON.stringify({ secret: true }),
+      },
+    });
+
+    await runSet({
+      cwd: root,
+      key: "db-password",
+      value: "hunter2",
+      environment: "production",
+    });
+
+    expect(valueFile(root, "db-password.production")).toBeUndefined();
+    expect(parseEnvelope(valueFile(root, "db-password.production.enc") ?? "")).toBeDefined();
+  });
+
+  /** The value you set is the value you get. That is the whole of it. */
+  it("makes the written secret the value that resolves", async () => {
+    process.env[KEY_VARIABLE] = freshKey();
+    const root = makeProject({
+      tree: {
+        "db-password.production": "stale-plaintext",
+        "db-password.json": JSON.stringify({ secret: true }),
+      },
+    });
+
+    await runSet({
+      cwd: root,
+      key: "db-password",
+      value: "hunter2",
+      environment: "production",
+    });
+
+    expect(await runGet({ cwd: root, key: "db-password", environment: "production" })).toBe(
+      "hunter2",
+    );
+  });
+
+  /** And doctor is clean afterwards, rather than reporting the twin `set` left. */
+  it("leaves no plaintext secret for doctor to find", async () => {
+    process.env[KEY_VARIABLE] = freshKey();
+    const root = makeProject({
+      tree: {
+        "db-password.production": "stale-plaintext",
+        "db-password.json": JSON.stringify({ secret: true }),
+      },
+    });
+
+    await runSet({
+      cwd: root,
+      key: "db-password",
+      value: "hunter2",
+      environment: "production",
+    });
+    const report = await runDoctor({ cwd: root, environment: "production" });
+
+    expect(
+      report.findings.filter((f) => f.check === "plaintext-secret" && f.severity !== "pass"),
+    ).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  /** The mirror: a parameter that stops being secret must not keep its ciphertext. */
+  it("removes the ciphertext when the value stops being a secret", async () => {
+    const root = makeProject({
+      tree: { "db-password.production.enc": "penv:1:prod:AAECAwQFBgcICQoL:AAECAwQFBgcICQoLDQ4PEA" },
+    });
+
+    await runSet({
+      cwd: root,
+      key: "db-password",
+      value: "now-public",
+      environment: "production",
+    });
+
+    expect(valueFile(root, "db-password.production.enc")).toBeUndefined();
+    expect(valueFile(root, "db-password.production")).toBe("now-public");
+  });
+
+  /** Only the scope being written. A twin at another scope is another value. */
+  it("leaves other scopes alone", async () => {
+    const root = makeProject({
+      tree: { "db-password": "the-default", "db-password.development": "for-dev" },
+    });
+
+    await runSet({
+      cwd: root,
+      key: "db-password",
+      value: "for-prod",
+      environment: "production",
+    });
+
+    expect(valueFile(root, "db-password")).toBe("the-default");
+    expect(valueFile(root, "db-password.development")).toBe("for-dev");
   });
 });

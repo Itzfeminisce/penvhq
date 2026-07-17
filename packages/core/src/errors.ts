@@ -98,6 +98,30 @@ export class ValidationError extends PenvError {
   }
 }
 
+/**
+ * A declared environment name that cannot be written into a filename.
+ *
+ * Distinct from `UnknownEnvironmentError`, which says a name was never declared.
+ * This one *was* declared, and is still unusable — so the remedy is to rename it,
+ * not to add it.
+ */
+export class IllegalEnvironmentNameError extends PenvError {
+  override readonly name = "IllegalEnvironmentNameError";
+  readonly environment: string;
+
+  constructor(environment: string) {
+    super(
+      "ENVIRONMENT_NAME_ILLEGAL",
+      `The environment \`${environment}\` in penv.config.ts cannot be part of a filename`,
+      "An environment name becomes a dot segment verbatim, and filenames are split on `.`, so " +
+        "the name must be letters, digits, `_` or `-` — no dots. If you are naming it after a " +
+        "dotenv file, use the environment inside that name: `.env.development.local` is the " +
+        "`development` environment's personal override, so declare `development`.",
+    );
+    this.environment = environment;
+  }
+}
+
 /** A filename segment looks like an environment but was never declared. */
 export class UnknownEnvironmentError extends PenvError {
   override readonly name = "UnknownEnvironmentError";

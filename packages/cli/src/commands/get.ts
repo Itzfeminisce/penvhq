@@ -69,7 +69,11 @@ export async function runGet(options: GetOptions): Promise<string> {
 
 function skipReason(reason: string | undefined): string | undefined {
   if (reason === "lower-precedence") {
-    return "skipped, a more specific scope wins";
+    // Not "a more specific scope wins". Within one scope the plaintext file is
+    // considered before its `.enc` twin, so the file that beat this one is
+    // sometimes at the *same* scope — and a reader told the winner was more
+    // specific would go looking for a scope that does not exist.
+    return "skipped, a higher-precedence file wins";
   }
   if (reason === "local-skipped-in-test") {
     return "skipped, .local never applies in test";

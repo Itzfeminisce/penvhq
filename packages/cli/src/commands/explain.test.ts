@@ -96,6 +96,14 @@ describe("penv get --explain", () => {
     ]);
   });
 
+  /**
+   * The wording is "a higher-precedence file", not "a more specific scope",
+   * because the loser is not always at a lower scope: within one scope the
+   * plaintext file is considered before its `.enc` twin, so a skipped candidate
+   * can sit at the same scope as the winner. Every one of these three genuinely
+   * is at a lower scope — and the line still has to be true for the twin that
+   * is not, or it sends that reader hunting for a scope that does not exist.
+   */
   it("says the levels below the winner were passed over", async () => {
     const root = makeProject(FOUR_LEVELS);
 
@@ -103,7 +111,7 @@ describe("penv get --explain", () => {
 
     for (const location of ["api/key.local", "api/key.production", "api/key"]) {
       const candidate = explanation.candidates.find((c) => c.location === location);
-      expect(candidate?.skipped).toBe("skipped, a more specific scope wins");
+      expect(candidate?.skipped).toBe("skipped, a higher-precedence file wins");
     }
   });
 
