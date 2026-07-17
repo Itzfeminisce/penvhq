@@ -91,6 +91,10 @@ export class FilesystemProvider implements Provider {
     this.writeMetaSync(ref, meta);
   }
 
+  async removeMeta(ref: ParameterRef): Promise<void> {
+    this.removeMetaSync(ref);
+  }
+
   /**
    * The value, with the one trailing newline the file was written with removed.
    * No other whitespace is touched — a value is opaque bytes.
@@ -123,7 +127,15 @@ export class FilesystemProvider implements Provider {
   }
 
   removeSync(file: ValueFile): void {
-    const path = this.#pathOf(formatValueFile(file));
+    this.#unlink(this.#pathOf(formatValueFile(file)));
+  }
+
+  removeMetaSync(ref: ParameterRef): void {
+    this.#unlink(this.#pathOf(formatMetaFile({ ...ref, format: META_FORMAT })));
+  }
+
+  /** Deletes a file that may not be there, and tidies the namespace it emptied. */
+  #unlink(path: string): void {
     try {
       unlinkSync(path);
     } catch (error) {

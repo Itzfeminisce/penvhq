@@ -445,5 +445,49 @@ export function runProviderContractSuite(
         expect(await provider.read(valueFile(redisPassword, { kind: "unscoped" }))).toBeUndefined();
       });
     });
+
+    describe("removeMeta", () => {
+      it("deletes the meta", async () => {
+        await provider.writeMeta(redisPassword, { description: "Redis auth" });
+
+        await provider.removeMeta(redisPassword);
+
+        expect(await provider.readMeta(redisPassword)).toBeUndefined();
+      });
+
+      it("is idempotent — removing absent meta is not an error", async () => {
+        await expect(provider.removeMeta(redisPassword)).resolves.toBeUndefined();
+        await expect(provider.removeMeta(redisPassword)).resolves.toBeUndefined();
+      });
+
+      /*
+       * The mirror of `remove`'s "leaves meta alone". Policy and value are two
+       * faces of one record and are removed independently, so a provider that
+       * dropped the values with the policy would delete a secret on a `penv mv`
+       * that was only meant to move its description.
+       */
+      it("leaves every value alone", async () => {
+        const unscoped = valueFile(redisPassword, { kind: "unscoped" });
+        const scoped = valueFile(redisPassword, { kind: "environment", environment: ENVIRONMENT });
+        await provider.write(unscoped, "default");
+        await provider.write(scoped, "production");
+        await provider.writeMeta(redisPassword, { description: "Redis auth" });
+
+        await provider.removeMeta(redisPassword);
+
+        expect(await provider.read(unscoped)).toBe("default");
+        expect(await provider.read(scoped)).toBe("production");
+      });
+
+      it("removes only the parameter it was given", async () => {
+        await provider.writeMeta(redisPassword, { description: "Redis auth" });
+        await provider.writeMeta(databaseUrl, { description: "Primary database" });
+
+        await provider.removeMeta(redisPassword);
+
+        expect(await provider.readMeta(redisPassword)).toBeUndefined();
+        expect(await provider.readMeta(databaseUrl)).toEqual({ description: "Primary database" });
+      });
+    });
   });
 }

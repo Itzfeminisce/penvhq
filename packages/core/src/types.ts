@@ -146,6 +146,16 @@ export interface Provider {
   readMeta(ref: ParameterRef): Promise<Meta | undefined>;
   /** Writes a parameter's meta. */
   writeMeta(ref: ParameterRef, meta: Meta): Promise<void>;
+  /**
+   * Removes a parameter's meta. Absent is not an error, mirroring `remove`.
+   *
+   * The counterpart `writeMeta` lacked. Without it a parameter's policy could be
+   * created and never destroyed, so renaming one could only ever leave the old
+   * policy behind — and an orphaned meta file is invisible to every check penv
+   * has, because `list` reports values and a parameter with no value files is a
+   * parameter nothing walks.
+   */
+  removeMeta(ref: ParameterRef): Promise<void>;
 }
 
 /**

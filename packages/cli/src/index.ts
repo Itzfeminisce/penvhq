@@ -16,6 +16,7 @@ import { importCommand } from "./commands/import.js";
 import { initCommand } from "./commands/init.js";
 import { keyCommand } from "./commands/key.js";
 import { listCommand } from "./commands/list.js";
+import { mvCommand } from "./commands/mv.js";
 import { removeCommand } from "./commands/remove.js";
 import { setCommand } from "./commands/set.js";
 import { validateCommand } from "./commands/validate.js";
@@ -32,6 +33,7 @@ export const main = defineCommand({
     generate: generateCommand,
     get: getCommand,
     set: setCommand,
+    mv: mvCommand,
     remove: removeCommand,
     list: listCommand,
     encrypt: encryptCommand,
@@ -61,6 +63,8 @@ export type { InitResult, InitStep } from "./commands/init.js";
 export { insertEnvAlias, runInit } from "./commands/init.js";
 export type { ListResult } from "./commands/list.js";
 export { runList } from "./commands/list.js";
+export type { MoveResult } from "./commands/mv.js";
+export { renderMove, runMove } from "./commands/mv.js";
 export type { RemoveResult } from "./commands/remove.js";
 export { runRemove } from "./commands/remove.js";
 export type { SetResult } from "./commands/set.js";

@@ -39,6 +39,7 @@ function fakeProvider(entries: Readonly<Record<string, string>>): Provider {
     },
     readMeta: () => Promise.resolve(undefined),
     writeMeta: (_ref: ParameterRef, _meta: Meta) => Promise.resolve(),
+    removeMeta: (_ref: ParameterRef) => Promise.resolve(),
   };
 }
 
