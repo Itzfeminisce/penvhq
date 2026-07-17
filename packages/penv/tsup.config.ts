@@ -2,7 +2,7 @@ import { defineConfig } from "tsup";
 
 /**
  * `penv` is the one package users install, and it carries two surfaces with very
- * different weight budgets: `import { load } from "penv"` ships into the app, and
+ * different weight budgets: `import { load } from "@penvhq/penv"` ships into the app, and
  * `npx penv` does not.
  *
  * The workspace packages are bundled in rather than declared as dependencies, so

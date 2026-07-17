@@ -662,7 +662,7 @@ describe("an env.ts the import kept", () => {
 /*
  * The unscaffolded case — `penv import .env` on a fresh directory — is not
  * covered here. It cannot be: the config `penv init` writes opens with
- * `import { defineConfig } from "penv"`, so loading it needs the `penv` package
+ * `import { defineConfig } from "@penvhq/penv"`, so loading it needs the `penv` package
  * built, and a fixture project resolves that no better than it resolves zod.
  * `importDotenv` has always had to load the config it scaffolds, so this is a
  * limit of the fixtures rather than of the checks — every check above runs on
