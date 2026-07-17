@@ -29,7 +29,10 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      # Build first: some tests load a scaffolded penv.config.ts that imports the
+      # built package by name (turbo's `test`/`typecheck` already dependsOn `^build`;
+      # the root `vitest run` bypasses that, so order it explicitly here).
+      - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm lint
-      - run: pnpm build
