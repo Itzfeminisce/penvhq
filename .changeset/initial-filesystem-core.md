@@ -3,7 +3,7 @@
 "@penvhq/runtime": minor
 "@penvhq/core": minor
 "@penvhq/cli": minor
-"penv": minor
+"@penvhq/penv": minor
 ---
 
 Filesystem core, schema and types — roadmap v0.1 and v0.2.
