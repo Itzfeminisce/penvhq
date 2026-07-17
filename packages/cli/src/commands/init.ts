@@ -279,6 +279,13 @@ export function planInit(root: string, flags: InitFlags = {}): InitPlan {
     );
   } else {
     notes.push(`Detected ${detected.name}.`);
+    if (detected.displacedFrom !== undefined) {
+      notes.push(
+        `${detected.displacedFrom} is already a module of yours that exports no \`schema\`, so ` +
+          `the schema goes to ${detected.schemaFile}. penv never writes over a file it did not ` +
+          `write — delete yours and re-run if you want it there, or pass \`--schema\`.`,
+      );
+    }
   }
 
   // Flag, then what the project already declared, then detection. `schemaFileOf`

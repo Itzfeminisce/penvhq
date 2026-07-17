@@ -19,6 +19,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { DEFAULT_SCHEMA_FILE } from "@penv/core";
 
 /** A framework penv recognised, and what it implies about a project's layout. */
 export interface Detected {
@@ -26,6 +27,12 @@ export interface Detected {
   readonly name: string;
   /** Where this framework's projects keep their modules, relative to the root. */
   readonly schemaFile: string;
+  /**
+   * The conventional path penv stepped aside from, because a module that is not
+   * penv's schema already lives there. Set only when it happened, so the plan can
+   * say why the schema is not where the convention would have put it.
+   */
+  readonly displacedFrom?: string;
   /** The prefixes this framework inlines into its client bundle. */
   readonly publicPrefixes: readonly string[];
 }
@@ -62,9 +69,70 @@ const SIGNATURES: readonly Signature[] = [
   { name: "Vite", packages: ["vite"], publicPrefixes: ["VITE_"] },
 ];
 
-/** The schema module's suggested home, at the root unless `src/` is really there. */
-function schemaFileFor(cwd: string): string {
-  return existsSync(join(cwd, "src")) ? "src/env.ts" : "env.ts";
+/**
+ * Whether the module at `file` looks like it exports penv's schema.
+ *
+ * A scan, not a parse, and deliberately conservative in one direction: it can
+ * fail to recognise an exotic re-export and say "no", which costs a note and a
+ * different filename. It cannot invent a `schema` that is not written down, so it
+ * never claims someone else's module is penv's.
+ *
+ * The question this answers is not "does the file exist". `src/env.ts` existing
+ * is the common case on a re-run — it is the schema penv wrote, and keeping it is
+ * invariant 2 working. The question is whether the file at the path penv wants is
+ * *penv's*, because the alternative is penv choosing a path already occupied by
+ * someone else's module and then reporting, later and from somewhere else, that
+ * it exports no schema.
+ */
+function exportsSchema(file: string): boolean {
+  let source: string;
+  try {
+    source = readFileSync(file, "utf8");
+  } catch {
+    return false;
+  }
+  return (
+    // `export const schema = z.object({ ... })` — what penv scaffolds.
+    /export\s+(?:const|let|var)\s+schema\b/.test(source) ||
+    // `export { schema }`, `export { shape as schema }`.
+    /export\s*\{[^}]*\bschema\b[^}]*\}/.test(source)
+  );
+}
+
+/** True when something that is not penv's schema already lives at `relative`. */
+function occupied(cwd: string, relative: string): boolean {
+  const file = join(cwd, ...relative.split("/"));
+  return existsSync(file) && !exportsSchema(file);
+}
+
+/**
+ * Where a framework's projects keep the schema — and where penv puts it instead
+ * when that address is already someone else's.
+ *
+ * `src/env.ts` is the convention and it is also a name projects already use for
+ * their own env module. Proposing it regardless is how penv came to scaffold
+ * around a file it could not use: it kept the user's module (invariant 2, right),
+ * then `validate` failed with "src/env.ts exports no `schema`" — a complaint
+ * about a path penv itself had chosen.
+ *
+ * Stepping aside is not a guess. The file being there, and not exporting a
+ * schema, is a fact about the codebase — the kind penv may default from, because
+ * a wrong answer is visible in the plan and writes nothing over anything.
+ */
+export function schemaFileFor(cwd: string): { file: string; displaced?: string } {
+  const dir = existsSync(join(cwd, "src")) ? "src/" : "";
+  const preferred = `${dir}env.ts`;
+  if (!occupied(cwd, preferred)) {
+    return { file: preferred };
+  }
+
+  const beside = `${dir}penv-env.ts`;
+  if (!occupied(cwd, beside)) {
+    return { file: beside, displaced: preferred };
+  }
+  // Both names taken by modules that are not penv's. `.penv/` is penv's own
+  // directory, so it is the one address no other tool has a claim on.
+  return { file: DEFAULT_SCHEMA_FILE, displaced: preferred };
 }
 
 /**
@@ -127,9 +195,11 @@ export function detectFramework(cwd: string): Detected | undefined {
   }
   for (const signature of SIGNATURES) {
     if (signature.packages.some((name) => dependencies.has(name))) {
+      const schema = schemaFileFor(cwd);
       return {
         name: signature.name,
-        schemaFile: schemaFileFor(cwd),
+        schemaFile: schema.file,
+        ...(schema.displaced === undefined ? {} : { displacedFrom: schema.displaced }),
         publicPrefixes: signature.publicPrefixes,
       };
     }

@@ -185,3 +185,81 @@ describe("detectAlias", () => {
     expect(detectAlias(makeProject({ manifest: { name: "app", imports: ["#db"] } }))).toBe("@env");
   });
 });
+
+/**
+ * `src/env.ts` is the convention and also a name projects already use for their
+ * own env module. Proposing it regardless is how penv scaffolded around a file it
+ * could not use: it kept the user's module (invariant 2, right), and then
+ * `validate` failed with "src/env.ts exports no `schema`" — a complaint about a
+ * path penv itself had chosen.
+ */
+describe("detectFramework when src/env.ts is already someone else's", () => {
+  function withSrcEnv(contents: string): string {
+    const root = makeProject({ manifest: { dependencies: { next: "15.0.0" } }, src: true });
+    writeFileSync(join(root, "src", "env.ts"), contents, "utf8");
+    return root;
+  }
+
+  it("steps aside to penv-env.ts and says which path it left alone", () => {
+    const root = withSrcEnv("export const env = { mine: 1 };\n");
+
+    const detected = detectFramework(root);
+
+    expect(detected?.schemaFile).toBe("src/penv-env.ts");
+    expect(detected?.displacedFrom).toBe("src/env.ts");
+  });
+
+  /**
+   * The negative that matters most: on a re-run the file at that path is penv's
+   * own schema, and stepping aside would scaffold a second one beside it.
+   */
+  it("keeps src/env.ts when it is penv's own schema", () => {
+    const root = withSrcEnv('import { z } from "zod";\nexport const schema = z.object({});\n');
+
+    const detected = detectFramework(root);
+
+    expect(detected?.schemaFile).toBe("src/env.ts");
+    expect(detected?.displacedFrom).toBeUndefined();
+  });
+
+  it("recognises a re-exported schema", () => {
+    const root = withSrcEnv('import { schema } from "./shape";\nexport { schema };\n');
+
+    expect(detectFramework(root)?.schemaFile).toBe("src/env.ts");
+  });
+
+  it("recognises a renamed re-export", () => {
+    const root = withSrcEnv("const shape = 1;\nexport { shape as schema };\n");
+
+    expect(detectFramework(root)?.schemaFile).toBe("src/env.ts");
+  });
+
+  /** Both conventional names taken, so penv's own directory is the free address. */
+  it("falls back to .penv/env.ts when penv-env.ts is taken too", () => {
+    const root = withSrcEnv("export const env = { mine: 1 };\n");
+    writeFileSync(join(root, "src", "penv-env.ts"), "export const other = 2;\n", "utf8");
+
+    const detected = detectFramework(root);
+
+    expect(detected?.schemaFile).toBe(".penv/env.ts");
+    expect(detected?.displacedFrom).toBe("src/env.ts");
+  });
+
+  /** A free path is the ordinary case and must stay silent. */
+  it("says nothing about displacement when the path is free", () => {
+    const root = makeProject({ manifest: { dependencies: { next: "15.0.0" } }, src: true });
+
+    const detected = detectFramework(root);
+
+    expect(detected?.schemaFile).toBe("src/env.ts");
+    expect(detected?.displacedFrom).toBeUndefined();
+  });
+
+  /** No `src/`, same rule at the root. */
+  it("steps aside at the root too", () => {
+    const root = makeProject({ manifest: { dependencies: { next: "15.0.0" } } });
+    writeFileSync(join(root, "env.ts"), "export const env = { mine: 1 };\n", "utf8");
+
+    expect(detectFramework(root)?.schemaFile).toBe("penv-env.ts");
+  });
+});
