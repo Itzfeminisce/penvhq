@@ -17,14 +17,14 @@
  * understand produces no line at all.
  */
 
-import type { ParameterRef, PenvConfig, Resolution } from "@penv/core";
+import type { ParameterRef, PenvConfig, Resolution } from "@penvhq/core";
 import {
   accessPath,
   isReservedToken,
   parameterId,
   refFromAccessPath,
   variableName,
-} from "@penv/core";
+} from "@penvhq/core";
 import type { z } from "zod";
 
 function defOf(node: unknown): Record<string, unknown> | undefined {

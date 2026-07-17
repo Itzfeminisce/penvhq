@@ -13,7 +13,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SecretScope, Sink } from "@penv/core";
+import type { SecretScope, Sink } from "@penvhq/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LAST_PUSHED_KEY, runPush } from "./push.js";
 import { runSet } from "./set.js";

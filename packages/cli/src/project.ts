@@ -12,7 +12,7 @@ import type {
   PenvConfig,
   Provider,
   ResolutionCandidate,
-} from "@penv/core";
+} from "@penvhq/core";
 import {
   candidatesFor,
   formatValueFile,
@@ -24,8 +24,8 @@ import {
   ReservedTokenError,
   resolveEnvironment,
   resolveKeySource,
-} from "@penv/core";
-import { FilesystemProvider } from "@penv/provider-filesystem";
+} from "@penvhq/core";
+import { FilesystemProvider } from "@penvhq/provider-filesystem";
 import { assertProvidersRegistered, createProvider, LOCAL_TREE_TYPE } from "./registry.js";
 
 export const PENV_DIR = ".penv";

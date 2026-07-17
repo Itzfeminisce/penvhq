@@ -15,10 +15,10 @@
  * mechanism rather than flattened at the boundary.
  */
 
-import type { Meta, MetaBlock, ParameterRef, PenvConfig, SecretScope, Sink } from "@penv/core";
-import { checkNameCollisions, PenvError, requireValue, variableName } from "@penv/core";
-import type { FilesystemProvider } from "@penv/provider-filesystem";
-import { checkGithubNames, createGithubSink } from "@penv/sink-github";
+import type { Meta, MetaBlock, ParameterRef, PenvConfig, SecretScope, Sink } from "@penvhq/core";
+import { checkNameCollisions, PenvError, requireValue, variableName } from "@penvhq/core";
+import type { FilesystemProvider } from "@penvhq/provider-filesystem";
+import { checkGithubNames, createGithubSink } from "@penvhq/sink-github";
 import { defineCommand } from "citty";
 import type { Project, SyncResolution } from "../project.js";
 import {

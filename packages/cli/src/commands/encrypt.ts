@@ -18,7 +18,7 @@
  * thing that writes a value, and never a value it made up.
  */
 
-import type { ValueFile } from "@penv/core";
+import type { ValueFile } from "@penvhq/core";
 import {
   formatValueFile,
   isSecret,
@@ -26,7 +26,7 @@ import {
   PenvError,
   parameterId,
   sealValue,
-} from "@penv/core";
+} from "@penvhq/core";
 import { defineCommand } from "citty";
 import type { Project } from "../project.js";
 import { keySourceFor, openProject, PENV_DIR, refFromKey, targetEnvironment } from "../project.js";

@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PenvConfig, ValueFile } from "@penv/core";
-import { FilenameGrammarError, UnknownEnvironmentError } from "@penv/core";
-import { runProviderContractSuite } from "@penv/provider-contract";
+import type { PenvConfig, ValueFile } from "@penvhq/core";
+import { FilenameGrammarError, UnknownEnvironmentError } from "@penvhq/core";
+import { runProviderContractSuite } from "@penvhq/provider-contract";
 import { afterAll, describe, expect, it } from "vitest";
 import { createFilesystemProvider } from "./filesystem.js";
 

@@ -16,8 +16,8 @@
  */
 
 import { randomBytes } from "node:crypto";
-import type { Keychain } from "@penv/core";
-import { KEY_BYTES, KEYCHAIN_SERVICE, PenvError } from "@penv/core";
+import type { Keychain } from "@penvhq/core";
+import { KEY_BYTES, KEYCHAIN_SERVICE, PenvError } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { defaultKeychain } from "../keychain.js";
 import { openProject, targetEnvironment } from "../project.js";

@@ -26,7 +26,7 @@
 
 import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, relative, resolve } from "node:path";
-import type { DotenvEntry, Meta, ParameterRef, PenvConfig, Scope } from "@penv/core";
+import type { DotenvEntry, Meta, ParameterRef, PenvConfig, Scope } from "@penvhq/core";
 import {
   accessPath,
   assertNever,
@@ -44,7 +44,7 @@ import {
   schemaFileOf,
   UnknownEnvironmentError,
   variableName,
-} from "@penv/core";
+} from "@penvhq/core";
 import { defineCommand } from "citty";
 import { detectAlias } from "../detect.js";
 import { localTree, openProject } from "../project.js";

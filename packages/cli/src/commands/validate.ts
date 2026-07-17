@@ -12,7 +12,7 @@
 
 import { resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ParameterRef, ValueFile } from "@penv/core";
+import type { ParameterRef, ValueFile } from "@penvhq/core";
 import {
   accessPath,
   checkNameCollisions,
@@ -22,7 +22,7 @@ import {
   resolveAll,
   schemaFileOf,
   validateConfig,
-} from "@penv/core";
+} from "@penvhq/core";
 import { defineCommand } from "citty";
 import { createJiti } from "jiti";
 import type { z } from "zod";

@@ -11,8 +11,8 @@
  * re-deriving it, so it cannot drift from what a push actually sends.
  */
 
-import type { ParameterRef, PenvConfig } from "@penv/core";
-import { parameterId, variableName } from "@penv/core";
+import type { ParameterRef, PenvConfig } from "@penvhq/core";
+import { parameterId, variableName } from "@penvhq/core";
 import { GithubNameError } from "./errors.js";
 
 /** GitHub reserves this prefix for its own secrets. */

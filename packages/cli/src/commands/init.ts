@@ -29,7 +29,7 @@ import {
   schemaFileOf,
   schemaInsideTree,
   validateSchemaFile,
-} from "@penv/core";
+} from "@penvhq/core";
 import { defineCommand } from "citty";
 import { DEFAULT_ALIAS, type Detected, detectAlias, detectFramework } from "../detect.js";
 import { CHECK, columns, formatSteps, guard, type Step, WARN, write } from "../ui.js";

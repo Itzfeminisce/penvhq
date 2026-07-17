@@ -1,7 +1,7 @@
 /**
  * The reference provider, and the ground truth for the provider contract.
  *
- * The contract in `@penv/core` is the shape every provider satisfies; this
+ * The contract in `@penvhq/core` is the shape every provider satisfies; this
  * module implements it against a `.penv/` directory and never bends it to suit
  * the filesystem. The sync read path below is *additional* to the contract, not
  * a replacement for it: the runtime `load(schema)` is synchronous, and a
@@ -18,7 +18,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
-import type { Meta, ParameterRef, PenvConfig, Provider, ValueFile } from "@penv/core";
+import type { Meta, ParameterRef, PenvConfig, Provider, ValueFile } from "@penvhq/core";
 import {
   formatMetaFile,
   formatValueFile,
@@ -26,7 +26,7 @@ import {
   parseFilename,
   parseMeta,
   serializeMeta,
-} from "@penv/core";
+} from "@penvhq/core";
 
 /** The only meta format parsed today. The grammar reserves `toml` and `yml`. */
 const META_FORMAT = "json";

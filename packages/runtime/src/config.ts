@@ -11,7 +11,7 @@
  * the recommended path.
  */
 
-import { checkNameCollisions, variableName } from "@penv/core";
+import { checkNameCollisions, variableName } from "@penvhq/core";
 import { resolveSync } from "./resolve.js";
 
 const { config, values } = resolveSync(process.cwd());

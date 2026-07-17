@@ -7,7 +7,7 @@
  * rather than assembling its own spacing.
  */
 
-import { PenvError } from "@penv/core";
+import { PenvError } from "@penvhq/core";
 
 export const CHECK = "✓";
 export const WARN = "⚠";

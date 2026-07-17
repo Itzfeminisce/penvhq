@@ -1,5 +1,5 @@
 /**
- * The filesystem provider — the reference implementation of the `@penv/core`
+ * The filesystem provider — the reference implementation of the `@penvhq/core`
  * provider contract.
  *
  * The contract suite lives in `./contract.js` and is deliberately not re-exported

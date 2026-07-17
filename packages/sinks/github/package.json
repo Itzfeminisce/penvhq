@@ -1,5 +1,5 @@
 {
-  "name": "@penv/sink-github",
+  "name": "@penvhq/sink-github",
   "version": "0.0.0",
   "description": "The GitHub Actions Secrets sink — a write-only destination penv pushes to through the gh CLI.",
   "license": "MIT",
@@ -21,6 +21,6 @@
     "build": "tsup"
   },
   "dependencies": {
-    "@penv/core": "workspace:*"
+    "@penvhq/core": "workspace:*"
   }
 }

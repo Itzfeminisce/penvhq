@@ -28,7 +28,7 @@
 import type { FSWatcher } from "node:fs";
 import { existsSync, watch } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { schemaFileOf, schemaInsideTree } from "@penv/core";
+import { schemaFileOf, schemaInsideTree } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { openProject } from "../project.js";
 import type { DriftReport } from "../schema.js";

@@ -6,7 +6,7 @@
  * from a shared default has nowhere to hide.
  */
 
-import { PenvError, requireValue, resolveParameter } from "@penv/core";
+import { PenvError, requireValue, resolveParameter } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { keySourceFor, openProject, PENV_DIR, refFromKey, targetEnvironment } from "../project.js";
 import { columns, guard, write } from "../ui.js";

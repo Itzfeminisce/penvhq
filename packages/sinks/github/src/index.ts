@@ -1,5 +1,5 @@
 /**
- * The public surface of `@penv/sink-github`.
+ * The public surface of `@penvhq/sink-github`.
  *
  * A GitHub Actions Secrets sink and the name pre-flight a push runs before it.
  * Everything GitHub-specific lives here; core stays destination-agnostic.

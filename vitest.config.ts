@@ -8,12 +8,12 @@ export default defineConfig({
   resolve: {
     // Tests run against source, not dist, so `pnpm test` needs no prior build.
     alias: {
-      "@penv/core": src("core"),
-      "@penv/runtime": src("runtime"),
-      "@penv/provider-filesystem": src("providers/filesystem"),
-      "@penv/provider-contract": src("providers/contract"),
-      "@penv/sink-github": src("sinks/github"),
-      "@penv/cli": src("cli"),
+      "@penvhq/core": src("core"),
+      "@penvhq/runtime": src("runtime"),
+      "@penvhq/provider-filesystem": src("providers/filesystem"),
+      "@penvhq/provider-contract": src("providers/contract"),
+      "@penvhq/sink-github": src("sinks/github"),
+      "@penvhq/cli": src("cli"),
     },
   },
   test: {

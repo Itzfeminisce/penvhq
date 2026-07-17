@@ -6,7 +6,7 @@
  * Core stays destination-agnostic; the destination's rules live with the sink.
  */
 
-import { PenvError } from "@penv/core";
+import { PenvError } from "@penvhq/core";
 
 /** Which of GitHub's name rules a generated variable breaks. */
 export type GithubNameReason = "reserved-prefix" | "leading-digit" | "charset" | "case-collision";

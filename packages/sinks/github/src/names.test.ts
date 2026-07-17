@@ -1,4 +1,4 @@
-import type { ParameterRef, PenvConfig } from "@penv/core";
+import type { ParameterRef, PenvConfig } from "@penvhq/core";
 import { describe, expect, it } from "vitest";
 import { checkGithubNames } from "./names.js";
 

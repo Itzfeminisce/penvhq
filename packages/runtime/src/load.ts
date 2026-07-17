@@ -5,7 +5,7 @@
  * so the type you code against and the value you receive cannot diverge.
  */
 
-import { accessPath, ValidationError } from "@penv/core";
+import { accessPath, ValidationError } from "@penvhq/core";
 import type { z } from "zod";
 import { resolveSync } from "./resolve.js";
 

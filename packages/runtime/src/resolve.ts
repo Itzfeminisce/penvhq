@@ -2,7 +2,7 @@
  * The synchronous half of the value cascade, shared by `load` and the
  * `penv/config` compatibility entry.
  *
- * `resolveParameter` in `@penv/core` is async because the provider contract is,
+ * `resolveParameter` in `@penvhq/core` is async because the provider contract is,
  * and `load` is synchronous — so this module walks the cascade against the
  * filesystem provider's synchronous reads instead. It does not restate the
  * precedence rule: `candidatesFor` owns the order and everything here only
@@ -30,7 +30,7 @@
  */
 
 import { dirname, resolve as resolvePath } from "node:path";
-import type { ParameterRef, PenvConfig, ValueFile } from "@penv/core";
+import type { ParameterRef, PenvConfig, ValueFile } from "@penvhq/core";
 import {
   candidatesFor,
   formatValueFile,
@@ -40,8 +40,8 @@ import {
   resolveEnvironment,
   resolveKeySource,
   UndecryptableValueError,
-} from "@penv/core";
-import { createFilesystemProvider } from "@penv/provider-filesystem";
+} from "@penvhq/core";
+import { createFilesystemProvider } from "@penvhq/provider-filesystem";
 
 /** One parameter that resolved to a present value for the target environment. */
 export interface ResolvedValue {

@@ -5,12 +5,12 @@
  * This file is a re-export and nothing else. `penv` is one install carrying two
  * surfaces with different weight budgets, and the boundary between them is drawn
  * here: everything below ships into the app, while `npx penv` reaches
- * `@penv/cli` through `./cli.js` and never through this module. Anything that is
- * not `@penv/runtime`'s barrel is an implementation detail of the workspace and
+ * `@penvhq/cli` through `./cli.js` and never through this module. Anything that is
+ * not `@penvhq/runtime`'s barrel is an implementation detail of the workspace and
  * deliberately not visible under the `penv` specifier.
  */
 
-export type { LoadOptions } from "@penv/runtime";
+export type { LoadOptions } from "@penvhq/runtime";
 export {
   ConfigError,
   defineConfig,
@@ -22,4 +22,4 @@ export {
   ReservedTokenError,
   UnknownEnvironmentError,
   ValidationError,
-} from "@penv/runtime";
+} from "@penvhq/runtime";

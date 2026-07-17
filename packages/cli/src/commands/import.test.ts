@@ -31,7 +31,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PenvError } from "@penv/core";
+import { PenvError } from "@penvhq/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { keySourceFor, localTree, openProject, resolveSync } from "../project.js";
 import { EMPTY_DRIFT } from "../schema.js";

@@ -22,7 +22,7 @@
  * it. This command's report says which line to change rather than changing it.
  */
 
-import type { Meta, ParameterRef, ValueFile } from "@penv/core";
+import type { Meta, ParameterRef, ValueFile } from "@penvhq/core";
 import {
   accessPath,
   formatMetaFile,
@@ -31,7 +31,7 @@ import {
   PenvError,
   parameterId,
   sealValue,
-} from "@penv/core";
+} from "@penvhq/core";
 import { defineCommand } from "citty";
 import type { Project } from "../project.js";
 import { keySourceFor, openProject, PENV_DIR, refFromKey } from "../project.js";
