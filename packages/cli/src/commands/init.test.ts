@@ -14,11 +14,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { InitDecisions, InitPlan, InitResult, InitTarget, PromptIo } from "./init.js";
 import {
+  DEFAULT_DECISIONS,
   environmentsFromFlag,
   insertEnvAlias,
   planInit,
   promptForDecisions,
   renderConfigModule,
+  renderInit,
   runInit,
   suggestEnvironments,
 } from "./init.js";
@@ -220,6 +222,52 @@ describe("the @env alias", () => {
     });
   });
 
+  /**
+   * The alias is how the user's code reaches penv, so an `@env` that resolves
+   * anywhere else is not a smaller problem than a missing one: the import
+   * compiles, runs, and hands back another module's export.
+   *
+   * penv reported `Kept the @env path alias` for this, because it asked whether
+   * the *key* was there rather than where it pointed — a silent seam, in the
+   * scaffolder of the tool whose whole subject is silent seams.
+   */
+  describe("when the project already maps @env somewhere else", () => {
+    const foreign =
+      '{\n  "compilerOptions": {\n    "paths": { "@env": ["./src/legacy-env.ts"] }\n  }\n}\n';
+
+    it("reports the conflict rather than reporting success", () => {
+      const edited = insertEnvAlias(foreign, "src/env.ts");
+
+      expect(edited.changed).toBe(false);
+      expect(edited.conflict).toBe('["./src/legacy-env.ts"]');
+    });
+
+    /** The file is the user's, and penv cannot tell a stale mapping from a deliberate one. */
+    it("leaves their mapping exactly as it found it", () => {
+      expect(insertEnvAlias(foreign, "src/env.ts").source).toBe(foreign);
+    });
+
+    /** The negative: an alias already pointing at the schema is agreement, not conflict. */
+    it("stays quiet when the alias already points at the schema", () => {
+      const edited = insertEnvAlias(foreign, "./src/legacy-env.ts");
+
+      expect(edited.changed).toBe(false);
+      expect(edited.conflict).toBeUndefined();
+    });
+
+    it("reports it as a warning step rather than a ✓", () => {
+      const root = makeProject({ name: "app" });
+      writeFileSync(join(root, "tsconfig.json"), foreign, "utf8");
+
+      const result = runInit({ cwd: root });
+      const step = result.steps.find((s) => s.target === "tsconfig");
+
+      expect(step?.action).toBe("conflicted");
+      expect(step?.text).toContain("already maps @env");
+      expect(renderInit(result).join("\n")).toContain("⚠");
+    });
+  });
+
   it("creates compilerOptions when the file has none", () => {
     const edited = insertEnvAlias('{\n  "include": ["src"]\n}\n');
 
@@ -309,6 +357,7 @@ describe("environments", () => {
       environments: [],
       schemaFile: ".penv/env.ts",
       publicPrefixes: [],
+      alias: "@env",
     });
 
     expect(config).toContain("never infers one");
@@ -321,6 +370,7 @@ describe("environments", () => {
       environments: ["development", "production"],
       schemaFile: ".penv/env.ts",
       publicPrefixes: [],
+      alias: "@env",
     });
 
     expect(config).toContain('environments: ["development", "production"],');
@@ -428,6 +478,7 @@ describe("the prompt", () => {
       environments: ["production"],
       schemaFile: "src/env.ts",
       publicPrefixes: ["NEXT_PUBLIC_"],
+      alias: "@env",
     });
   });
 
@@ -485,6 +536,7 @@ describe("the schema's home", () => {
     environments: [],
     schemaFile: "src/config/env.ts",
     publicPrefixes: [],
+    alias: "@env",
   };
 
   it("writes the schema where the decisions say, creating the directories for it", () => {
@@ -517,6 +569,7 @@ describe("the schema's home", () => {
       environments: [],
       schemaFile: ".penv/env.ts",
       publicPrefixes: [],
+      alias: "@env",
     });
 
     expect(custom).toContain('schemaFile: "src/config/env.ts",');
@@ -550,6 +603,10 @@ describe("publicPrefixes", () => {
     runInit({ cwd: root, decisions: planFor(root).decisions });
 
     expect(read(root, "penv.config.ts")).toContain('publicPrefixes: ["NEXT_PUBLIC_"],');
+    // The alias is not a config key: it lives in the file that resolves it —
+    // tsconfig `paths` or package.json `imports` — and a copy here would be a
+    // second authority on one fact.
+    expect(read(root, "penv.config.ts")).not.toContain("alias:");
   });
 
   it("writes no prefixes when no framework was detected", () => {
@@ -558,5 +615,109 @@ describe("publicPrefixes", () => {
     runInit({ cwd: root });
 
     expect(read(root, "penv.config.ts")).not.toContain("publicPrefixes");
+  });
+});
+
+/**
+ * `#env` is not a style preference. `@env` is a tsconfig `paths` entry, which
+ * TypeScript understands and a bundler resolves — and which plain `node
+ * dist/index.js` does not, because `paths` is erased by the compiler. `#env` is
+ * a package.json `imports` entry Node resolves itself. A project that already
+ * carries an `imports` block has answered the question, so init offers its answer.
+ */
+describe("the alias form", () => {
+  it("writes #env into package.json for a project that speaks subpath imports", () => {
+    const root = makeProject({ name: "app", imports: { "#db": "./src/db.ts" } });
+
+    const result = runInit({ cwd: root });
+
+    expect(result.decisions.alias).toBe("#env");
+    expect(JSON.parse(read(root, "package.json"))).toEqual({
+      name: "app",
+      imports: { "#env": "./.penv/env.ts", "#db": "./src/db.ts" },
+    });
+    // And nothing was written to the tsconfig: one alias, in the file that resolves it.
+    expect(existsSync(join(root, "tsconfig.json"))).toBe(false);
+  });
+
+  it("writes @env into tsconfig for a project that does not", () => {
+    const root = makeProject(NEXT);
+
+    const result = runInit({ cwd: root });
+
+    expect(result.decisions.alias).toBe("@env");
+    expect(read(root, "tsconfig.json")).toContain('"@env"');
+  });
+
+  it("takes --alias over what it detected", () => {
+    const root = makeProject({ name: "app", imports: { "#db": "./src/db.ts" } });
+
+    const plan = planInit(root, { alias: "@env" });
+
+    expect(plan.decisions.alias).toBe("@env");
+  });
+
+  it("refuses an alias that is neither form", () => {
+    const root = makeProject({ name: "app" });
+
+    expect(() => planInit(root, { alias: "env" })).toThrow(/not an alias penv can write/);
+    expect(() => planInit(root, { alias: "" })).toThrow(/without a value/);
+  });
+
+  /** The same conflict rule as the tsconfig: the key being there is not the question. */
+  it("reports a conflicting #env rather than reporting success", () => {
+    const root = makeProject({ name: "app", imports: { "#env": "./src/legacy.ts" } });
+
+    const step = stepFor(runInit({ cwd: root }), "tsconfig");
+
+    expect(step.action).toBe("conflicted");
+    expect(step.text).toContain("already maps #env");
+  });
+
+  /** Re-running is idempotent through the manifest, which is where the alias lives. */
+  it("keeps an #env that already points at the schema", () => {
+    const root = makeProject({ name: "app", imports: { "#db": "./src/db.ts" } });
+
+    runInit({ cwd: root });
+    const second = stepFor(runInit({ cwd: root }), "tsconfig");
+
+    expect(second.action).toBe("kept");
+    expect(read(root, "package.json").match(/#env/g)).toHaveLength(1);
+  });
+
+  /** `imports` is a key on a manifest that exists; penv does not invent one. */
+  it("refuses to invent a package.json for #env", () => {
+    const root = makeDir();
+
+    const step = stepFor(
+      runInit({ cwd: root, decisions: { ...DEFAULT_DECISIONS, alias: "#env" } }),
+      "tsconfig",
+    );
+
+    expect(step.action).toBe("conflicted");
+    expect(step.note).toContain("--alias @env");
+  });
+});
+
+/**
+ * The note explains why penv chose what it chose, so it must not explain a choice
+ * penv did not make. It fired on the alias's *form* rather than on where the
+ * alias came from, and told a project whose manifest said `{"name":"svc"}` that
+ * its own `imports` block had asked for `#env`.
+ */
+describe("the alias note", () => {
+  it("explains a detected #env", () => {
+    const root = makeProject({ name: "app", imports: { "#db": "./src/db.ts" } });
+
+    expect(planInit(root).notes.join("\n")).toContain("declares `imports`");
+  });
+
+  it("claims nothing about the manifest when --alias forced it", () => {
+    const root = makeProject({ name: "svc" });
+
+    const plan = planInit(root, { alias: "#env" });
+
+    expect(plan.decisions.alias).toBe("#env");
+    expect(plan.notes.join("\n")).not.toContain("declares `imports`");
   });
 });

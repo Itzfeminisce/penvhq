@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { detectFramework } from "./detect.js";
+import { detectAlias, detectFramework } from "./detect.js";
 
 const created: string[] = [];
 
@@ -145,5 +145,43 @@ describe("src/", () => {
     const root = makeProject({ manifest: { dependencies: { next: "15.0.0" } }, src: true });
 
     expect(detectFramework(root)?.schemaFile).toBe("src/env.ts");
+  });
+});
+
+/**
+ * The two alias forms are resolved by different things, and that is the whole
+ * reason to detect rather than default: `@env` is a tsconfig `paths` entry that a
+ * bundler resolves and plain Node does not, and `#env` is a package.json
+ * `imports` entry Node resolves itself. A project carrying an `imports` block has
+ * already answered.
+ */
+describe("detectAlias", () => {
+  it("offers #env to a project that already speaks subpath imports", () => {
+    const root = makeProject({ manifest: { name: "app", imports: { "#db": "./src/db.ts" } } });
+
+    expect(detectAlias(root)).toBe("#env");
+  });
+
+  it("offers @env to a project that does not", () => {
+    expect(
+      detectAlias(makeProject({ manifest: { name: "app", dependencies: { next: "15.0.0" } } })),
+    ).toBe("@env");
+  });
+
+  /** No manifest is not an error: init scaffolds projects that do not exist yet. */
+  it("offers @env when there is no manifest to read", () => {
+    expect(detectAlias(makeProject({}))).toBe("@env");
+  });
+
+  it("offers @env when the manifest is unreadable", () => {
+    const root = makeProject({});
+    writeFileSync(join(root, "package.json"), "{ not json", "utf8");
+
+    expect(detectAlias(root)).toBe("@env");
+  });
+
+  /** An `imports` that is not an object is not an imports block penv can read. */
+  it("offers @env when imports is not an object", () => {
+    expect(detectAlias(makeProject({ manifest: { name: "app", imports: ["#db"] } }))).toBe("@env");
   });
 });

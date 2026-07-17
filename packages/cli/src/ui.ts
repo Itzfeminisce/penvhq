@@ -73,7 +73,12 @@ export function formatSteps(steps: readonly Step[]): string[] {
     if (step.note === undefined) {
       return `${step.glyph} ${step.text}`;
     }
-    return `${step.glyph} ${step.text.padEnd(NOTE_COLUMN)}${step.note}`;
+    // A text wider than the column gets a single space instead of alignment.
+    // `padEnd` returns the string untouched when it is already too long, so the
+    // aside ran straight into the last word — legible right up until the day a
+    // step had something long to say, which is the day it mattered.
+    const text = step.text.length >= NOTE_COLUMN ? `${step.text} ` : step.text.padEnd(NOTE_COLUMN);
+    return `${step.glyph} ${text}${step.note}`;
   });
 }
 

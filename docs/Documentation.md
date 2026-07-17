@@ -329,6 +329,8 @@ export default defineConfig({
 
 **What `penv init` writes here, and what it refuses to.** `init` reads your `package.json`, recognises your framework, and *proposes* — a schema next to your source, your framework's public prefix. You confirm, and what lands in this file is the decision, not the detection: there is no `framework` key, because a config that stored an identity would let penv reinterpret your project later. It records what you chose, so nothing shifts under you.
 
+**The alias is not a key here**, because it already lives in the file that resolves it. `@env` is a `tsconfig.json` `paths` entry — TypeScript understands it, a bundler resolves it, and plain `node dist/index.js` does not, since `paths` is erased by the compiler. `#env` is a `package.json` `imports` entry, which Node resolves natively. `init` offers `#env` to a project already carrying an `imports` block and `@env` otherwise, `--alias` overrides, and either way the answer is recorded where it functions rather than copied here.
+
 It will not invent `environments`. penv cannot observe your deployment topology — no `package.json` says whether you have a staging tier — so `init` asks, and an unanswered `init` writes an empty list and tells you so. An environment penv guessed is one that accepts writes for a tier that does not exist.
 
 | Field | Meaning |

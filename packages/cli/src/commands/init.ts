@@ -29,8 +29,8 @@ import {
   validateSchemaFile,
 } from "@penv/core";
 import { defineCommand } from "citty";
-import { type Detected, detectFramework } from "../detect.js";
-import { CHECK, columns, formatSteps, guard, type Step, write } from "../ui.js";
+import { DEFAULT_ALIAS, type Detected, detectAlias, detectFramework } from "../detect.js";
+import { CHECK, columns, formatSteps, guard, type Step, WARN, write } from "../ui.js";
 
 export const SCHEMA_FILE = "env.ts";
 export const CONFIG_FILE = "penv.config.ts";
@@ -38,11 +38,27 @@ export const TSCONFIG_FILE = "tsconfig.json";
 export const GITIGNORE_FILE = ".gitignore";
 export const PENV_DIR = ".penv";
 
-const ALIAS = "@env";
+/**
+ * The alias forms penv can write, and the only two a specifier can take that is
+ * not a package: `@name` resolves through tsconfig `paths`, `#name` through
+ * package.json `imports`.
+ */
+const ALIAS_NAME = /^[@#][A-Za-z0-9_-]+$/;
+
+/** The prefix that means Node resolves the alias itself, with no bundler involved. */
+const IMPORTS_PREFIX = "#";
+
+const PACKAGE_FILE = "package.json";
 
 /** What init touched, so a caller can report it and a test can assert it. */
 export type InitTarget = "penv-dir" | "schema" | "config" | "tsconfig" | "gitignore";
-export type InitAction = "created" | "kept" | "updated";
+/**
+ * `conflicted` is the one that is not a success. penv wanted to write something,
+ * found the user's file already saying something else about the same thing, and
+ * left it alone — so the step is reported with a warning rather than a ✓, and the
+ * text says what will not work until the user decides.
+ */
+export type InitAction = "created" | "kept" | "updated" | "conflicted";
 
 export interface InitStep {
   readonly target: InitTarget;
@@ -66,6 +82,16 @@ export interface InitDecisions {
   readonly schemaFile: string;
   /** The prefixes the framework inlines into its client bundle. */
   readonly publicPrefixes: readonly string[];
+  /**
+   * How the user's code names the schema module — `@env` or `#env`.
+   *
+   * Two forms, resolved by two different things: `@env` is a tsconfig `paths`
+   * entry that a bundler resolves and plain Node does not, and `#env` is a
+   * package.json `imports` entry that Node resolves itself. Which one a project
+   * wants is a fact about the project, so penv reads what it already does and
+   * offers that.
+   */
+  readonly alias: string;
 }
 
 /** What init would write with no further input: the defaults, and nothing invented. */
@@ -73,6 +99,7 @@ export const DEFAULT_DECISIONS: InitDecisions = {
   environments: [],
   schemaFile: DEFAULT_SCHEMA_FILE,
   publicPrefixes: [],
+  alias: DEFAULT_ALIAS,
 };
 
 export interface InitResult {
@@ -97,6 +124,8 @@ export interface InitFlags {
   readonly schema?: string;
   /** `--env`, already split. Absent means no answer; present means the answer. */
   readonly environments?: readonly string[];
+  /** `--alias <name>`. */
+  readonly alias?: string;
 }
 
 export interface InitPlan {
@@ -156,7 +185,7 @@ export function suggestEnvironments(root: string): string[] {
 }
 
 /** A flag that is present but says nothing is refused, never read as absent. */
-function emptyFlag(flag: "schema" | "env"): PenvError {
+function emptyFlag(flag: "schema" | "env" | "alias"): PenvError {
   return new PenvError(
     "INIT_FLAG_EMPTY",
     `\`--${flag}\` was given without a value`,
@@ -236,6 +265,29 @@ export function planInit(root: string, flags: InitFlags = {}): InitPlan {
     }
   }
 
+  const alias = flags.alias === undefined ? detectAlias(root) : flags.alias.trim();
+  if (flags.alias !== undefined && alias.length === 0) {
+    throw emptyFlag("alias");
+  }
+  if (!ALIAS_NAME.test(alias)) {
+    throw new PenvError(
+      "INIT_ALIAS_INVALID",
+      `\`${alias}\` is not an alias penv can write`,
+      `An alias is \`@name\` — a tsconfig \`paths\` entry a bundler resolves — or \`#name\`, a ` +
+        "package.json `imports` entry Node resolves itself. Those are the two things a module " +
+        "specifier can be that is not a package.",
+    );
+  }
+  // Only when penv worked it out. `--alias` needs no explanation of why penv
+  // chose it, and this note would have explained a reason that was not true:
+  // it fired on the *form* of the alias rather than on where it came from, so a
+  // forced `#env` was told its own package.json had asked for it.
+  if (flags.alias === undefined && alias.startsWith(IMPORTS_PREFIX)) {
+    notes.push(
+      `Your ${PACKAGE_FILE} declares \`imports\`, so the alias is \`${alias}\` — Node resolves it without a bundler.`,
+    );
+  }
+
   const suggestedEnvironments = suggestEnvironments(root);
   const environments = flags.environments ?? [];
   if (flags.environments === undefined) {
@@ -256,6 +308,7 @@ export function planInit(root: string, flags: InitFlags = {}): InitPlan {
       environments,
       schemaFile,
       publicPrefixes: detected?.publicPrefixes ?? [],
+      alias,
     },
     suggestedEnvironments,
     notes,
@@ -628,17 +681,30 @@ function insertMember(source: string, open: number, member: string, unit: string
   return `${source.slice(0, open + 1)}\n${entryIndent}${member},${source.slice(open + 1)}`;
 }
 
-function shapeError(what: string, target: string): PenvError {
+function shapeError(what: string, target: string, alias: string): PenvError {
   return new PenvError(
     "TSCONFIG_SHAPE",
-    `penv cannot add the \`${ALIAS}\` path alias to tsconfig.json: ${what}`,
-    `Add it by hand: \`{ "compilerOptions": { "paths": { "${ALIAS}": ["${target}"] } } }\`.`,
+    `penv cannot add the \`${alias}\` path alias to tsconfig.json: ${what}`,
+    `Add it by hand: \`{ "compilerOptions": { "paths": { "${alias}": ["${target}"] } } }\`.`,
   );
 }
 
 export interface AliasEdit {
   readonly source: string;
   readonly changed: boolean;
+  /**
+   * What the alias already points at, when that is not penv's schema.
+   *
+   * The alias is how the user's code reaches penv, so an alias that resolves
+   * somewhere else is not a small problem: `import { env } from "@env"` compiles,
+   * runs, and hands back another module's export. Reporting "kept the alias"
+   * because the *key* was present is how penv would say that was fine — a silent
+   * seam, in the scaffolder of the tool whose subject is silent seams.
+   *
+   * Left as the user's, never rewritten: penv cannot tell a stale mapping from a
+   * deliberate one, and the file is theirs.
+   */
+  readonly conflict?: string;
 }
 
 /**
@@ -648,11 +714,15 @@ export interface AliasEdit {
  * The alias is why the schema can live anywhere: application code imports
  * `@env`, and this line is the only thing that has to know where that is.
  */
-export function insertEnvAlias(source: string, target: string = DEFAULT_SCHEMA_FILE): AliasEdit {
-  const alias = `"${ALIAS}": ["${target}"]`;
+export function insertEnvAlias(
+  source: string,
+  target: string = DEFAULT_SCHEMA_FILE,
+  name: string = DEFAULT_ALIAS,
+): AliasEdit {
+  const alias = `"${name}": ["${target}"]`;
   const root = skipTrivia(source, 0);
   if (source.charAt(root) !== "{") {
-    throw shapeError("its contents are not a JSON object", target);
+    throw shapeError("its contents are not a JSON object", target, name);
   }
 
   const unit = indentUnit(source);
@@ -664,7 +734,7 @@ export function insertEnvAlias(source: string, target: string = DEFAULT_SCHEMA_F
     };
   }
   if (source.charAt(compilerOptions.valueStart) !== "{") {
-    throw shapeError("`compilerOptions` is not an object", target);
+    throw shapeError("`compilerOptions` is not an object", target, name);
   }
 
   const paths = findMember(source, compilerOptions.valueStart, "paths");
@@ -675,17 +745,58 @@ export function insertEnvAlias(source: string, target: string = DEFAULT_SCHEMA_F
     };
   }
   if (source.charAt(paths.valueStart) !== "{") {
-    throw shapeError("`compilerOptions.paths` is not an object", target);
+    throw shapeError("`compilerOptions.paths` is not an object", target, name);
   }
 
-  if (findMember(source, paths.valueStart, ALIAS) !== undefined) {
-    return { source, changed: false };
+  const existing = findMember(source, paths.valueStart, name);
+  if (existing !== undefined) {
+    // The key being present is not the question. Where it points is.
+    const points = source.slice(existing.valueStart, endOfValue(source, existing.valueStart));
+    return points.includes(`"${target}"`)
+      ? { source, changed: false }
+      : { source, changed: false, conflict: points.trim() };
   }
   return { source: insertMember(source, paths.valueStart, alias, unit), changed: true };
 }
 
-function renderTsconfig(target: string): string {
-  return `{\n  "compilerOptions": {\n    "paths": { "${ALIAS}": ["${target}"] }\n  }\n}\n`;
+/**
+ * `package.json` with the `#env` subpath import present, everything else untouched.
+ *
+ * The same scanning edit the tsconfig gets, for the same reason: a manifest is
+ * the project's file, and rewriting it through `JSON.parse`/`stringify` to add
+ * one key resorts nothing but reformats everything.
+ *
+ * `imports` is Node's own mechanism, so an alias written here needs no bundler to
+ * resolve — which is the whole reason a project would choose it.
+ */
+export function insertImportsAlias(source: string, target: string, name: string): AliasEdit {
+  const entry = `"${name}": "./${target}"`;
+  const root = skipTrivia(source, 0);
+  if (source.charAt(root) !== "{") {
+    throw shapeError("its contents are not a JSON object", target, name);
+  }
+
+  const unit = indentUnit(source);
+  const imports = findMember(source, root, "imports");
+  if (imports === undefined) {
+    return { source: insertMember(source, root, `"imports": { ${entry} }`, unit), changed: true };
+  }
+  if (source.charAt(imports.valueStart) !== "{") {
+    throw shapeError("`imports` is not an object", target, name);
+  }
+
+  const existing = findMember(source, imports.valueStart, name);
+  if (existing !== undefined) {
+    const points = source.slice(existing.valueStart, endOfValue(source, existing.valueStart));
+    return points.includes(`"./${target}"`)
+      ? { source, changed: false }
+      : { source, changed: false, conflict: points.trim() };
+  }
+  return { source: insertMember(source, imports.valueStart, entry, unit), changed: true };
+}
+
+function renderTsconfig(target: string, alias: string): string {
+  return `{\n  "compilerOptions": {\n    "paths": { "${alias}": ["${target}"] }\n  }\n}\n`;
 }
 
 /*
@@ -748,28 +859,60 @@ export function writeTsconfigAlias(
   root: string,
   decisions: InitDecisions = DEFAULT_DECISIONS,
 ): InitStep {
-  const file = join(root, TSCONFIG_FILE);
+  const alias = decisions.alias;
+  // `#env` is Node's mechanism and lives in the manifest; `@env` is TypeScript's
+  // and lives in the tsconfig. Writing one into the other's file produces a key
+  // nothing reads — the alias would simply never resolve, and penv would have
+  // reported writing it.
+  const imports = alias.startsWith(IMPORTS_PREFIX);
+  const file = join(root, imports ? PACKAGE_FILE : TSCONFIG_FILE);
+  const where = imports ? PACKAGE_FILE : TSCONFIG_FILE;
+
   if (!existsSync(file)) {
-    writeFileSync(file, renderTsconfig(decisions.schemaFile), "utf8");
+    // A project with no manifest is not one penv invents a manifest for: the
+    // manifest is the project's identity, and `imports` is a key on something
+    // that already exists. A tsconfig penv can honestly create from nothing.
+    if (imports) {
+      return {
+        target: "tsconfig",
+        action: "conflicted",
+        text: `No ${PACKAGE_FILE} to add the ${alias} import to`,
+        note: `(run \`npm init\` first, or use \`--alias @env\` to alias through ${TSCONFIG_FILE})`,
+      };
+    }
+    writeFileSync(file, renderTsconfig(decisions.schemaFile, alias), "utf8");
     return {
       target: "tsconfig",
       action: "created",
-      text: `Created ${TSCONFIG_FILE} with the ${ALIAS} path alias`,
+      text: `Created ${TSCONFIG_FILE} with the ${alias} path alias`,
     };
   }
-  const edit = insertEnvAlias(readFileSync(file, "utf8"), decisions.schemaFile);
+
+  const source = readFileSync(file, "utf8");
+  const edit = imports
+    ? insertImportsAlias(source, decisions.schemaFile, alias)
+    : insertEnvAlias(source, decisions.schemaFile, alias);
+
+  if (edit.conflict !== undefined) {
+    return {
+      target: "tsconfig",
+      action: "conflicted",
+      text: `${where} already maps ${alias} to ${edit.conflict}`,
+      note: `(left alone — \`import { env } from "${alias}"\` will not reach ${decisions.schemaFile})`,
+    };
+  }
   if (!edit.changed) {
     return {
       target: "tsconfig",
       action: "kept",
-      text: `Kept the ${ALIAS} path alias in ${TSCONFIG_FILE}`,
+      text: `Kept the ${alias} alias in ${where}`,
     };
   }
   writeFileSync(file, edit.source, "utf8");
   return {
     target: "tsconfig",
     action: "updated",
-    text: `Added ${ALIAS} path alias to ${TSCONFIG_FILE}`,
+    text: `Added ${alias} alias to ${where}`,
   };
 }
 
@@ -821,11 +964,15 @@ export function runInit(options: InitOptions): InitResult {
 }
 
 export function renderInit(result: InitResult): string[] {
-  const steps: Step[] = result.steps.map((step) =>
-    step.note === undefined
-      ? { glyph: CHECK, text: step.text }
-      : { glyph: CHECK, text: step.text, note: step.note },
-  );
+  const steps: Step[] = result.steps.map((step) => {
+    // A conflict is the one step that is not a success, so it must not wear the
+    // glyph every success wears: a ✓ beside "penv could not wire your alias" is
+    // the line a reader skims past.
+    const glyph = step.action === "conflicted" ? WARN : CHECK;
+    return step.note === undefined
+      ? { glyph, text: step.text }
+      : { glyph, text: step.text, note: step.note };
+  });
   return [
     ...formatSteps(steps),
     "",
@@ -865,6 +1012,12 @@ export const initCommand = defineCommand({
       type: "string",
       description: `Where the schema module goes, e.g. src/env.ts (default: ${DEFAULT_SCHEMA_FILE})`,
     },
+    alias: {
+      type: "string",
+      description:
+        "How your code names the schema: @env (tsconfig paths, needs a bundler) or #env " +
+        "(package.json imports, resolved by node itself)",
+    },
     env: {
       type: "string",
       description:
@@ -877,6 +1030,7 @@ export const initCommand = defineCommand({
       const environments = environmentsFromFlag(args.env);
       const plan = planInit(root, {
         ...(args.schema === undefined ? {} : { schema: args.schema }),
+        ...(args.alias === undefined ? {} : { alias: args.alias }),
         ...(environments === undefined ? {} : { environments }),
       });
 

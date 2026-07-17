@@ -624,10 +624,13 @@ export function renderImport(
       steps.push(keptSchemaStep(result.variables));
       continue;
     }
+    // A conflicted step is the one init reports that is not a success — the same
+    // reason it wears a warning there.
+    const glyph = step.action === "conflicted" ? WARN : CHECK;
     steps.push(
       step.note === undefined
-        ? { glyph: CHECK, text: step.text }
-        : { glyph: CHECK, text: step.text, note: step.note },
+        ? { glyph, text: step.text }
+        : { glyph, text: step.text, note: step.note },
     );
   }
   steps.push({ glyph: CHECK, text: `Created ${displayPath(result.root, result.backup)}` });
