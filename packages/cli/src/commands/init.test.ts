@@ -1,16 +1,27 @@
 /**
- * `penv init` scaffolds; it does not own what it scaffolded. The two properties
- * under test are that `.penv/env.ts` is written exactly once (invariant 2) and
- * that the `@env` alias lands in the user's `tsconfig.json` without taking the
- * rest of the file with it.
+ * `penv init` scaffolds; it does not own what it scaffolded. The properties
+ * under test are that the schema module is written exactly once wherever it
+ * lives (invariant 2), that the `@env` alias lands in the user's
+ * `tsconfig.json` without taking the rest of the file with it, and that init
+ * writes down only decisions — never an environment nobody declared (invariant
+ * 10). The prompting is tested through a fake terminal: the decision is a plain
+ * function, so no test here needs a TTY to exist.
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { InitResult, InitTarget } from "./init.js";
-import { insertEnvAlias, runInit } from "./init.js";
+import type { InitDecisions, InitPlan, InitResult, InitTarget, PromptIo } from "./init.js";
+import {
+  environmentsFromFlag,
+  insertEnvAlias,
+  planInit,
+  promptForDecisions,
+  renderConfigModule,
+  runInit,
+  suggestEnvironments,
+} from "./init.js";
 
 const created: string[] = [];
 
@@ -18,6 +29,38 @@ function makeDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "penv-init-"));
   created.push(dir);
   return dir;
+}
+
+/** A project that says what it is, so detection has something true to read. */
+function makeProject(manifest: unknown, options: { src?: boolean } = {}): string {
+  const root = makeDir();
+  writeFileSync(join(root, "package.json"), JSON.stringify(manifest), "utf8");
+  if (options.src === true) {
+    mkdirSync(join(root, "src"), { recursive: true });
+  }
+  return root;
+}
+
+const NEXT = { dependencies: { next: "15.0.0" } };
+
+/** A terminal that answers what it was told to and remembers what it was shown. */
+function fakeTerminal(answers: readonly string[]): PromptIo & { readonly shown: string[] } {
+  const queue = [...answers];
+  const shown: string[] = [];
+  return {
+    shown,
+    ask: (question: string) => {
+      shown.push(question);
+      return Promise.resolve(queue.shift() ?? "");
+    },
+    write: (line: string) => {
+      shown.push(line);
+    },
+  };
+}
+
+function planFor(root: string): InitPlan {
+  return planInit(root);
 }
 
 function stepFor(result: InitResult, target: InitTarget) {
@@ -207,5 +250,313 @@ describe("the @env alias", () => {
     expect(() => insertEnvAlias('{ "compilerOptions": { "paths": "nope" } }')).toThrow(
       /compilerOptions.paths` is not an object/,
     );
+  });
+
+  /** The alias is the only thing that knows where the schema is; moving one moves both. */
+  it("points at the schema wherever it was put", () => {
+    const root = makeProject(NEXT, { src: true });
+
+    runInit({ cwd: root, decisions: planFor(root).decisions });
+
+    expect(read(root, "tsconfig.json")).toContain('"@env": ["src/env.ts"]');
+  });
+
+  it("points an existing tsconfig at the chosen schema too", () => {
+    const root = makeProject(NEXT, { src: true });
+    writeFileSync(join(root, "tsconfig.json"), '{\n  "compilerOptions": {}\n}\n', "utf8");
+
+    runInit({ cwd: root, decisions: planFor(root).decisions });
+
+    expect(JSON.parse(read(root, "tsconfig.json"))).toEqual({
+      compilerOptions: { paths: { "@env": ["src/env.ts"] } },
+    });
+  });
+});
+
+describe("environments", () => {
+  /**
+   * The bug this fixes: init used to write `["development", "staging", "production"]`,
+   * so every project began by declaring infrastructure it had never been asked
+   * about — a real one carried a fictional `staging` for months. Invariant 10
+   * says an environment exists because it is declared, and penv cannot declare
+   * one on your behalf without inventing it.
+   */
+  it("declares none by default, because penv cannot see your infrastructure", () => {
+    const root = makeDir();
+
+    const result = runInit({ cwd: root });
+    const config = read(root, "penv.config.ts");
+
+    expect(result.decisions.environments).toEqual([]);
+    expect(config).toContain("environments: [],");
+    expect(config).toContain("providers: {},");
+    expect(config).not.toContain("staging");
+  });
+
+  /** `--yes` trusts penv's reading of the codebase. Infrastructure is not in the codebase. */
+  it("still declares none when the detected defaults are taken unasked", () => {
+    const root = makeProject(NEXT, { src: true });
+
+    const plan = planFor(root);
+
+    expect(plan.decisions.environments).toEqual([]);
+    expect(plan.decisions.schemaFile).toBe("src/env.ts");
+  });
+
+  /** An empty whitelist is a decision penv made for the user, so it is explained on the spot. */
+  it("says in the config why the whitelist is empty and what fills it", () => {
+    const config = renderConfigModule({
+      environments: [],
+      schemaFile: ".penv/env.ts",
+      publicPrefixes: [],
+    });
+
+    expect(config).toContain("never infers one");
+    expect(config).toContain('environments: ["development", "production"],');
+    expect(config).toContain("environments: [],");
+  });
+
+  it("gives every declared environment a provider to read from", () => {
+    const config = renderConfigModule({
+      environments: ["development", "production"],
+      schemaFile: ".penv/env.ts",
+      publicPrefixes: [],
+    });
+
+    expect(config).toContain('environments: ["development", "production"],');
+    expect(config).toContain('"development": { type: "filesystem" },');
+    expect(config).toContain('"production": { type: "filesystem" },');
+  });
+
+  it("declares what --env names, however it was written", () => {
+    expect(environmentsFromFlag(["development", "production"])).toEqual([
+      "development",
+      "production",
+    ]);
+    expect(environmentsFromFlag("development,production")).toEqual(["development", "production"]);
+    expect(environmentsFromFlag(undefined)).toBeUndefined();
+  });
+
+  /** Present-but-blank is refused, never normalized into "no answer". */
+  it("refuses --env with no name rather than reading it as none", () => {
+    expect(() => environmentsFromFlag("")).toThrow(/`--env` was given without a value/);
+  });
+});
+
+describe("the environments the .env files are evidence for", () => {
+  /**
+   * Suggestion is not inference: nothing here reaches the config unless a human
+   * reads it and presses Enter. The test is that penv offers what the project
+   * already wrote down, and offers nothing it would have had to invent.
+   */
+  it("reads the environments out of the .env files on disk", () => {
+    const root = makeDir();
+    for (const file of [".env", ".env.production", ".env.development.local", ".env.local"]) {
+      writeFileSync(join(root, file), "", "utf8");
+    }
+
+    expect(suggestEnvironments(root)).toEqual(["development", "production"]);
+  });
+
+  /** `.env.example` is documentation and `local` is a scope. Neither is an environment. */
+  it("suggests nothing from a filename that names no environment", () => {
+    const root = makeDir();
+    for (const file of [".env.example", ".env.local", ".env.sample", ".envrc"]) {
+      writeFileSync(join(root, file), "", "utf8");
+    }
+
+    expect(suggestEnvironments(root)).toEqual([]);
+  });
+
+  it("suggests nothing when there are no .env files at all", () => {
+    expect(suggestEnvironments(makeDir())).toEqual([]);
+    expect(planFor(makeDir()).suggestedEnvironments).toEqual([]);
+  });
+});
+
+describe("the plan", () => {
+  it("carries what was detected and what it implies", () => {
+    const root = makeProject(NEXT, { src: true });
+
+    const plan = planFor(root);
+
+    expect(plan.detected?.name).toBe("Next.js");
+    expect(plan.decisions.schemaFile).toBe("src/env.ts");
+    expect(plan.decisions.publicPrefixes).toEqual(["NEXT_PUBLIC_"]);
+    expect(plan.notes.join("\n")).toContain("Detected Next.js");
+  });
+
+  /** Invariant 13's habit: a fallback penv takes without saying so is a guess. */
+  it("reports the fallback rather than taking it silently", () => {
+    const plan = planFor(makeDir());
+
+    expect(plan.detected).toBeUndefined();
+    expect(plan.decisions.schemaFile).toBe(".penv/env.ts");
+    expect(plan.notes.join("\n")).toContain("No framework detected");
+    expect(plan.notes.join("\n")).toContain("No environments declared");
+  });
+
+  it("takes --schema over what it detected", () => {
+    const root = makeProject(NEXT, { src: true });
+
+    expect(planInit(root, { schema: "app/config/env.ts" }).decisions.schemaFile).toBe(
+      "app/config/env.ts",
+    );
+  });
+
+  /** The config is committed, so a path only its author's machine can read is refused now. */
+  it("refuses a --schema the config could not carry, before anything is written", () => {
+    const root = makeDir();
+
+    expect(() => planInit(root, { schema: "/etc/env.ts" })).toThrow(/absolute path/);
+    expect(() => planInit(root, { schema: "../shared/env.ts" })).toThrow(/outside the project/);
+    expect(() => planInit(root, { schema: "" })).toThrow(/`--schema` was given without a value/);
+  });
+});
+
+describe("the prompt", () => {
+  it("shows one screen and takes the suggested environments on Enter", async () => {
+    const root = makeProject(NEXT, { src: true });
+    writeFileSync(join(root, ".env.production"), "", "utf8");
+    const io = fakeTerminal(["", "y"]);
+
+    const decisions = await promptForDecisions(planFor(root), io);
+
+    expect(io.shown.join("\n")).toContain("Detected Next.js.");
+    expect(io.shown.join("\n")).toContain("[production]");
+    expect(decisions).toEqual({
+      environments: ["production"],
+      schemaFile: "src/env.ts",
+      publicPrefixes: ["NEXT_PUBLIC_"],
+    });
+  });
+
+  /** Enter with nothing suggested is a valid answer: an empty whitelist, declared. */
+  it("takes an empty answer as an empty whitelist", async () => {
+    const decisions = await promptForDecisions(planFor(makeDir()), fakeTerminal(["", ""]));
+
+    expect(decisions?.environments).toEqual([]);
+  });
+
+  it("takes the environments the human types over the ones penv suggested", async () => {
+    const root = makeDir();
+    writeFileSync(join(root, ".env.production"), "", "utf8");
+
+    const decisions = await promptForDecisions(planFor(root), fakeTerminal(["dev, prod", "y"]));
+
+    expect(decisions?.environments).toEqual(["dev", "prod"]);
+  });
+
+  it("lets the human refuse a suggestion outright", async () => {
+    const root = makeDir();
+    writeFileSync(join(root, ".env.production"), "", "utf8");
+
+    const decisions = await promptForDecisions(planFor(root), fakeTerminal(["none", "y"]));
+
+    expect(decisions?.environments).toEqual([]);
+  });
+
+  /**
+   * Declining is an outcome, not a failure. The two mistakes are not symmetrical:
+   * a decline costs a re-run, while reading "n" as consent scaffolds a project
+   * into a repository whose owner said no.
+   */
+  it("writes nothing when the plan is declined", async () => {
+    const root = makeProject(NEXT, { src: true });
+
+    const decisions = await promptForDecisions(planFor(root), fakeTerminal(["", "n"]));
+
+    expect(decisions).toBeUndefined();
+    expect(existsSync(join(root, "penv.config.ts"))).toBe(false);
+    expect(existsSync(join(root, ".penv"))).toBe(false);
+  });
+
+  it("declines an answer it cannot read as consent", async () => {
+    const root = makeProject(NEXT, { src: true });
+
+    expect(
+      await promptForDecisions(planFor(root), fakeTerminal(["", "maybe later"])),
+    ).toBeUndefined();
+  });
+});
+
+describe("the schema's home", () => {
+  const CUSTOM: InitDecisions = {
+    environments: [],
+    schemaFile: "src/config/env.ts",
+    publicPrefixes: [],
+  };
+
+  it("writes the schema where the decisions say, creating the directories for it", () => {
+    const root = makeDir();
+
+    const result = runInit({ cwd: root, decisions: CUSTOM });
+
+    expect(read(root, "src", "config", "env.ts")).toContain("export const env = load(schema);");
+    expect(existsSync(join(root, ".penv", "env.ts"))).toBe(false);
+    expect(stepFor(result, "schema").text).toContain("Generated src/config/env.ts");
+  });
+
+  /** Invariant 2 is about the file, not about the path penv would have chosen for it. */
+  it("keeps an existing schema at a custom path", () => {
+    const root = makeDir();
+    const mine = "export const schema = 'mine, hand-written, and quite wrong';\n";
+    mkdirSync(join(root, "src", "config"), { recursive: true });
+    writeFileSync(join(root, "src", "config", "env.ts"), mine, "utf8");
+
+    const result = runInit({ cwd: root, decisions: CUSTOM });
+
+    expect(read(root, "src", "config", "env.ts")).toBe(mine);
+    expect(stepFor(result, "schema").action).toBe("kept");
+    expect(stepFor(result, "schema").text).toContain("Kept src/config/env.ts");
+  });
+
+  it("records the schema's home in the config only when it is not the default", () => {
+    const custom = renderConfigModule(CUSTOM);
+    const standard = renderConfigModule({
+      environments: [],
+      schemaFile: ".penv/env.ts",
+      publicPrefixes: [],
+    });
+
+    expect(custom).toContain('schemaFile: "src/config/env.ts",');
+    expect(standard).not.toContain("schemaFile:");
+  });
+
+  /**
+   * The un-ignore names the schema by name, so outside the tree it names nothing:
+   * a `!env.ts` matching no file is a line the next reader has to prove is dead
+   * before they can leave it alone.
+   */
+  it("drops the schema's un-ignore line when the schema is not in .penv/", () => {
+    const root = makeDir();
+
+    runInit({ cwd: root, decisions: CUSTOM });
+    const ignore = read(root, ".penv", ".gitignore");
+
+    expect(ignore).not.toContain("!env.ts");
+    // Invariant 17 is untouched: values are still ignored, structure still committed.
+    expect(ignore).toContain("*\n");
+    expect(ignore).toContain("!*/");
+    expect(ignore).toContain("!*.json");
+  });
+});
+
+describe("publicPrefixes", () => {
+  /** penv holds the policy (`secret: true`) and the name; only it can see the collision. */
+  it("records the prefixes a framework inlines into the browser", () => {
+    const root = makeProject(NEXT, { src: true });
+
+    runInit({ cwd: root, decisions: planFor(root).decisions });
+
+    expect(read(root, "penv.config.ts")).toContain('publicPrefixes: ["NEXT_PUBLIC_"],');
+  });
+
+  it("writes no prefixes when no framework was detected", () => {
+    const root = makeDir();
+
+    runInit({ cwd: root });
+
+    expect(read(root, "penv.config.ts")).not.toContain("publicPrefixes");
   });
 });

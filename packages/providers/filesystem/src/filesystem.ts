@@ -200,7 +200,7 @@ export class FilesystemProvider implements Provider {
        * ones that do.
        */
       const relativePath = [...namespace, entry.name].join("/");
-      if (!isParameterFile(relativePath)) continue;
+      if (!isParameterFile(relativePath, this.#config)) continue;
 
       const parsed = parseFilename(relativePath, this.#config);
       if (parsed.kind === "value") {

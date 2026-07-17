@@ -55,7 +55,7 @@ $ penv import .env
 Done. .penv/ is now your source of truth.
 ```
 
-Then read configuration anywhere in your app, fully typed:
+Then read configuration anywhere your code runs on a server, fully typed:
 
 ```ts
 import { env } from "@env";
@@ -69,6 +69,24 @@ Generate a flat `.env` for deploy targets that expect one, any time:
 ```bash
 penv generate
 ```
+
+## Where penv sits next to a framework
+
+A browser has no filesystem, and penv reads files. Frameworks bridge that gap by **substituting text at build time**: Next replaces the literal `process.env.NEXT_PUBLIC_API_URL` in your source with a string before it ships, and Vite does the same for `import.meta.env.VITE_*`. That substitution is why every tool in this space — penv included — asks you to write those reads out longhand: a build step can only replace text it can see.
+
+So the division is:
+
+- **Server code** — route handlers, server components, scripts, `next.config.ts` — reads `import { env } from "@env"`. This is penv's blessed path, and it is where secrets live.
+- **Client code** reads whatever its framework inlines. penv feeds that in one line:
+
+```ts
+// next.config.ts
+import "penv/config";       // loads .penv/ into process.env before the build reads it
+```
+
+Next then inlines `NEXT_PUBLIC_*` from `.penv/` exactly as it would from a `.env`. Your parameter tree is the source of truth for both halves; only the delivery differs. `penv generate` is the other route, and the one deploy targets that read a `.env` file already expect.
+
+The framework's prefix is the boundary, and the framework enforces it: nothing without `NEXT_PUBLIC_` reaches a browser. penv's job there is to catch the case the framework cannot — a parameter your meta calls a secret whose *name* makes the framework publish it. Declare `publicPrefixes` and `penv doctor` reports it as a failure.
 
 ## How typing works
 
@@ -300,17 +318,26 @@ export default defineConfig({
     production: { source: "env",      id: "prod" },
   },
 
+  schemaFile: "src/env.ts",
+  publicPrefixes: ["NEXT_PUBLIC_"],
+
   names: {
     "database-url": "DATABASE_URL",
   },
 });
 ```
 
+**What `penv init` writes here, and what it refuses to.** `init` reads your `package.json`, recognises your framework, and *proposes* — a schema next to your source, your framework's public prefix. You confirm, and what lands in this file is the decision, not the detection: there is no `framework` key, because a config that stored an identity would let penv reinterpret your project later. It records what you chose, so nothing shifts under you.
+
+It will not invent `environments`. penv cannot observe your deployment topology — no `package.json` says whether you have a staging tier — so `init` asks, and an unanswered `init` writes an empty list and tells you so. An environment penv guessed is one that accepts writes for a tier that does not exist.
+
 | Field | Meaning |
 |---|---|
-| `environments` | Whitelist of valid environment names. The only source of truth for what counts as an environment; segments are matched against this list, never inferred. |
+| `environments` | Whitelist of valid environment names. The only source of truth for what counts as an environment; segments are matched against this list, never inferred — including by `penv init`, which asks rather than inventing them. |
 | `providers` | Per-environment backend. |
 | `providers.*.path` | The provider-side base path penv maps records onto. This explicit mapping is the translation penv owns on your behalf. |
+| `schemaFile` | Where the module exporting the schema lives, relative to this config. Defaults to `.penv/env.ts`; `src/env.ts` is where most framework projects put it. The file is yours either way — penv scaffolds it once and never regenerates it. |
+| `publicPrefixes` | The variable prefixes your framework inlines into its client bundle — `["NEXT_PUBLIC_"]`, `["VITE_"]`. penv does not enforce them; the framework already does. Declaring them is what lets `doctor` catch a secret whose name makes the framework publish it. |
 | `keys` | Per-environment encryption key source. An environment with no entry has no key source, which is not the same as having no key: penv reports that it was never told where to look, rather than that the key is missing. |
 | `keys.*.source` | `env` (read from `PENV_KEY_<ID>`, which is where a deploy exports the unwrapped KMS-derived key) or `keychain` (the OS keychain). A source penv does not recognise is an error, never a fallback to one it does. |
 | `keys.*.id` | Names the key. It is written into every value file sealed under it, so it outlives any one machine — and cannot contain `:`. |
@@ -447,10 +474,13 @@ $ penv doctor
 ⚠ Unscoped fallback in use  api-url             production resolving to default
 ⚠ Plaintext secret          db-password.staging value file is not encrypted
 ⚠ Undecryptable value       redis/password.production.enc PENV_KEY_PROD is not set
+⚠ Secret exposed to browser NEXT_PUBLIC_STRIPE_KEY meta declares this a secret, and the prefix makes it public
 ✓ Provider                  vault
   penv set redis/password --env production
   penv set app/api-key --env production
 ```
+
+**The browser check is the one nothing else can make.** To your framework, `NEXT_PUBLIC_` *is* the intent — it inlines the value into every page and cannot know you consider it a secret. Your app's own env module cannot know either. penv holds the policy and the name at once, which is the only vantage point from which the contradiction is visible. It needs `publicPrefixes` declared; without it penv says it could not check, rather than reporting a clean run it never made.
 
 Every warning names the parameter and the concrete problem. The full `.penv/` tree is the payoff for teams who want to act on what doctor finds — not a precondition for reading the report.
 

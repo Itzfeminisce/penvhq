@@ -12,6 +12,14 @@ import { defineConfig } from "tsup";
  * `jiti` stays external because it is CommonJS: bundling it into the ESM output
  * leaves esbuild's `__require` shim to service its `require("os")`, and that shim
  * throws. Node resolves it as CJS natively when it is a real dependency.
+ *
+ * `readline/promises` is a node builtin and is named anyway, because the upstream
+ * build strips the `node:` prefix from every builtin it emits and esbuild's
+ * builtin list does not carry the subpath ones — so the bare specifier arrives
+ * here looking like a package nobody installed, and the bundle fails to build.
+ * The tests do not catch it: vitest resolves the source, where the prefix is
+ * still there. Any other builtin subpath — `fs/promises`, `stream/promises` —
+ * will need the same line.
  */
 export default defineConfig({
   entry: {
@@ -28,6 +36,6 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   target: "node20",
-  external: ["zod", "jiti"],
+  external: ["zod", "jiti", "readline/promises", "node:readline/promises"],
   noExternal: [/^@penv\//],
 });

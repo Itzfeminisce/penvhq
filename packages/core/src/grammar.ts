@@ -13,6 +13,7 @@ import {
   ReservedTokenError,
   UnknownEnvironmentError,
 } from "./errors.js";
+import { schemaInsideTree } from "./schema-file.js";
 import type {
   MetaFileRef,
   MetaFormat,
@@ -32,9 +33,6 @@ const LOCAL = "local";
 
 /** The only meta format penv parses. `.toml`/`.yml` are reserved, not implemented. */
 const SUPPORTED_META_FORMAT: MetaFormat = "json";
-
-/** Files that live in the tree but are not parameters, so the grammar never sees them. */
-const SCHEMA_FILE = "env.ts";
 
 /**
  * Every token that cannot be a parameter name: the static tokens plus every
@@ -199,19 +197,27 @@ function parseScope(
  * True when `relativePath` is a file penv should hand to {@link parseFilename}.
  *
  * The tree holds files penv never wrote — `.DS_Store`, `.gitignore`, editor
- * swap files — plus `env.ts`, which is the schema and not a parameter. Those are
- * ignored rather than rejected: a stray dotfile is not a user error, and
- * `list`/`load` must not fail on one. Anything this returns true for is held to
- * the grammar in full.
+ * swap files — and, when the project leaves it there, the schema, which is a
+ * TypeScript module and not a parameter. Those are ignored rather than rejected:
+ * a stray dotfile is not a user error, and `list`/`load` must not fail on one.
+ * Anything this returns true for is held to the grammar in full.
+ *
+ * The schema is excluded by where the config says it lives, not by its name. A
+ * project whose schema sits in `src/` has nothing here to skip — which is the
+ * quiet argument for moving it out: the exclusion stops being needed rather than
+ * being configured.
  */
-export function isParameterFile(relativePath: string): boolean {
+export function isParameterFile(relativePath: string, config: PenvConfig): boolean {
   const posix = relativePath.replace(/\\/g, "/");
   const segments = posix.split("/").filter((s) => s.length > 0 && s !== ".");
   const basename = segments[segments.length - 1];
   if (basename === undefined) {
     return false;
   }
-  return !basename.startsWith(".") && basename !== SCHEMA_FILE;
+  if (basename.startsWith(".")) {
+    return false;
+  }
+  return segments.join("/") !== schemaInsideTree(config);
 }
 
 export function parseFilename(relativePath: string, config: PenvConfig): ParsedFile {

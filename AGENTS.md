@@ -68,6 +68,10 @@ Run `pnpm typecheck && pnpm test && pnpm lint` before proposing a change as done
 
 17. **Value files are gitignored; only structure/`env.ts`/meta/config are committed.** Never weaken this. A change that could commit a plaintext secret is a security regression regardless of tests.
 
+18. **`init` may default what it can observe; it must ask for what it cannot.** A fact about the codebase (the framework in `package.json`, whether `src/` exists) may be detected and proposed. A fact about the deployment — `environments` above all — may not: no file says whether a staging tier exists, and an invented environment accepts writes for infrastructure that does not. Unanswered means empty, and `CONFIG_ENVIRONMENTS_EMPTY` is written to be reached.
+
+19. **Config records decisions, not identities.** There is no `framework` key and must not be one. Detection is an input to `init`; what gets written is the concrete facts it implied (`schemaFile`, `publicPrefixes`). A stored identity is one penv reinterprets on every run, so the meaning of a committed config could shift under the user when penv or the framework changes. Guess once, declare forever.
+
 ## Provider-contract rule (roadmap-critical)
 
 **Do not modify the provider contract to accommodate a specific provider.** If Vault/SSM/Kubernetes seems to need a contract change, that is a finding to surface — it may mean the abstraction is wrong — not an edit to push through. Every provider satisfies one contract, with the filesystem provider as ground truth, or the portability claim is false.

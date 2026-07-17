@@ -20,12 +20,21 @@
  *   value file carries no `.enc` marker. Invariant 14: encryption is
  *   policy-driven, so the filename is checked *against* the policy and is never
  *   the authority on what is secret.
+ * - **public-secret** — meta declares the parameter a secret and its generated
+ *   variable carries a prefix the framework inlines into the client bundle.
  *
  * Warnings are reported; failures are reported and exit non-zero.
  */
 
-import type { Meta, Resolution } from "@penv/core";
-import { accessPath, isRequired, isSecret, resolveAll } from "@penv/core";
+import type { Meta, PenvConfig, Resolution } from "@penv/core";
+import {
+  accessPath,
+  isPublicVariable,
+  isRequired,
+  isSecret,
+  resolveAll,
+  variableName,
+} from "@penv/core";
 import { defineCommand } from "citty";
 import type { z } from "zod";
 import { keySourceFor, openProject, targetEnvironment } from "../project.js";
@@ -44,6 +53,7 @@ export type DoctorCheck =
   | "unused"
   | "unscoped-fallback"
   | "plaintext-secret"
+  | "public-secret"
   | "encryption"
   | "provider";
 
@@ -140,6 +150,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   }
   findings.push(...fallbackFindings(subjects, environment));
   findings.push(...plaintextSecretFindings(subjects, environment));
+  findings.push(...publicSecretFindings(subjects, environment, project.config));
   findings.push(...encryptionFindings(subjects, environment));
 
   findings.push({
@@ -362,6 +373,84 @@ function plaintextSecretFindings(
         secrets.length === 0
           ? `no parameter is declared secret for ${environment}`
           : `every secret resolving for ${environment} is encrypted`,
+    },
+  ];
+}
+
+/**
+ * The third face of the same policy: is it sealed, can it be opened, and is it
+ * public. A secret whose generated variable starts with a framework's public
+ * prefix is inlined into the client bundle — `NEXT_PUBLIC_STRIPE_SECRET` reaches
+ * every browser that loads the page, permanently, in a bundle nobody can recall.
+ *
+ * Nothing else in the stack can see this. To the framework the prefix *is* the
+ * intent: Next inlines `NEXT_PUBLIC_*` by definition and has no notion that the
+ * value is secret. The application's own env module knows the name and not the
+ * policy. penv holds both — meta says secret, the name transform says public —
+ * so this contradiction is only visible from here.
+ *
+ * Read of the *generated* variable rather than the parameter name, because a
+ * `names` override is what decides the string the framework sees, and it is the
+ * one place the prefix can appear with nothing in the tree hinting at it.
+ * Absence of a value is deliberately not a reprieve: the name is already wrong,
+ * and the next `penv set` is what ships it.
+ */
+function publicSecretFindings(
+  subjects: readonly Subject[],
+  environment: string,
+  config: PenvConfig,
+): DoctorFinding[] {
+  const prefixes = config.publicPrefixes ?? [];
+  // Nothing declared, nothing checkable: a prefix penv was never told about is
+  // one it cannot recognise. This is the "I cannot tell" answer, and it is not
+  // the same as a clean report — saying "no secret is exposed" here would be a
+  // promise made by a check that never looked at anything.
+  if (prefixes.length === 0) {
+    return [
+      {
+        check: "public-secret",
+        severity: "pass",
+        label: "Browser exposure",
+        subject: "not checked — penv.config.ts declares no `publicPrefixes`",
+        detail: "penv cannot tell which variables a framework inlines into the browser",
+      },
+    ];
+  }
+
+  const secrets = subjects.filter(({ meta }) => isSecret(meta, environment));
+  const findings: DoctorFinding[] = [];
+
+  for (const { resolution } of secrets) {
+    const variable = variableName(resolution.ref, config);
+    if (!isPublicVariable(variable, config)) {
+      continue;
+    }
+    // Which prefix matched is for the message alone; core stays the authority on
+    // whether the variable is public at all.
+    const prefix = prefixes.find((candidate) => variable.startsWith(candidate));
+    findings.push({
+      check: "public-secret",
+      severity: "failure",
+      label: "Secret exposed to the browser",
+      subject: variable,
+      detail:
+        prefix === undefined
+          ? "meta declares this a secret, and its public prefix makes it public"
+          : `meta declares this a secret, and the \`${prefix}\` prefix makes it public`,
+      remedy:
+        "rename the parameter so it carries no public prefix, or drop `secret` from its meta if it is not one",
+    });
+  }
+
+  if (findings.length > 0) {
+    return findings;
+  }
+  return [
+    {
+      check: "public-secret",
+      severity: "pass",
+      label: "Browser exposure",
+      subject: `no secret is exposed to the browser for ${environment}`,
     },
   ];
 }

@@ -48,7 +48,7 @@ import { defineCommand } from "citty";
 import { openProject } from "../project.js";
 import { CHECK, formatSteps, guard, type Step, WARN, write } from "../ui.js";
 import type { InitStep, SchemaField } from "./init.js";
-import { scaffold, writeConfigFile } from "./init.js";
+import { planInit, scaffold, writeConfigFile } from "./init.js";
 import type { ValidateResult } from "./validate.js";
 import { renderValidate, runValidate } from "./validate.js";
 
@@ -396,12 +396,60 @@ function assertEnvironmentAgrees(
  * it is the file the reserved-token and `names` remedies both tell the user to
  * go and edit.
  */
-function configInEffect(cwd: string): PenvConfig {
+/**
+ * The environment this run names, read lexically — before any config exists to
+ * check it against.
+ *
+ * `scopeFromFilename` cannot answer this: it validates against the whitelist, and
+ * on a greenfield project the whitelist is the thing being written. So the
+ * segment is read here without being believed, handed to the scaffold as a
+ * declaration, and then checked by the ordinary path like any other.
+ *
+ * Reading it is not inference. Invariant 10 forbids penv deciding that a file in
+ * a tree belongs to an environment nobody declared; this is the user typing
+ * `penv import .env.production` and thereby saying which environment the file is
+ * for. The command line is a declaration — the only one available on a project
+ * that has no config yet.
+ */
+function environmentNamed(file: string, explicit: string | undefined): string | undefined {
+  if (explicit !== undefined && explicit.trim().length > 0) {
+    return explicit.trim();
+  }
+  const segments = basename(file).split(".");
+  const start = segments.indexOf(DOTENV_SEGMENT);
+  if (start === -1) {
+    return undefined;
+  }
+  const first = segments.slice(start + 1).filter((segment) => segment.length > 0)[0];
+  return first === undefined || first === LOCAL ? undefined : first;
+}
+
+/**
+ * The config to check every name against, scaffolding one when the project has none.
+ *
+ * Writing it *first* is what lets every name check run before a single value
+ * file exists. It is safe to leave behind if a check then fails: it holds
+ * nothing read out of the `.env`, and it is the file the reserved-token and
+ * `names` remedies both tell the user to go and edit.
+ *
+ * The scaffold declares the environment this import names, and nothing else.
+ * `penv init` refuses to invent environments because it cannot observe a
+ * deployment — but here the user has named one, and a config that omitted it
+ * would be penv writing a file that makes penv's own next step fail.
+ */
+function configInEffect(cwd: string, environment: string | undefined): PenvConfig {
   const existing = findConfigFile(cwd);
   if (existing !== undefined) {
     return loadConfigFrom(existing);
   }
-  writeConfigFile(cwd);
+  // The same plan `penv init` would make without being asked anything — import
+  // is a scaffold too, and two scaffolds that disagreed about where the schema
+  // goes would make the answer depend on which command the user reached for.
+  const planned = planInit(cwd).decisions;
+  writeConfigFile(cwd, {
+    ...planned,
+    environments: environment === undefined ? planned.environments : [environment],
+  });
   return openProject(cwd).config;
 }
 
@@ -441,7 +489,7 @@ export function importDotenv(options: ImportOptions): ImportReport {
   }
 
   const parsed = parseDotenv(readFileSync(file, "utf8"));
-  const config = configInEffect(cwd);
+  const config = configInEffect(cwd, environmentNamed(file, options.environment));
   const source = displayPath(cwd, file);
 
   const named = scopeFromFilename(file, config);

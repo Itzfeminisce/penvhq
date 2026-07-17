@@ -36,6 +36,8 @@ interface Fixture {
   readonly tree?: Readonly<Record<string, string>>;
   /** The body of `z.object({ ... })` in `.penv/env.ts`. */
   readonly schema?: string;
+  /** Keys merged over {@link CONFIG} — `publicPrefixes`, `names`. */
+  readonly config?: Readonly<Record<string, unknown>>;
 }
 
 function makeProject(fixture: Fixture): string {
@@ -45,7 +47,7 @@ function makeProject(fixture: Fixture): string {
 
   writeFileSync(
     join(root, "penv.config.ts"),
-    `export default ${JSON.stringify(CONFIG)};\n`,
+    `export default ${JSON.stringify({ ...CONFIG, ...fixture.config })};\n`,
     "utf8",
   );
   mkdirSync(join(root, ".penv"), { recursive: true });
@@ -516,6 +518,154 @@ describe("plaintext-secret", () => {
   });
 });
 
+/**
+ * The contradiction only penv can see: meta says secret, the generated name says
+ * the framework will inline it into the client bundle. The framework reads the
+ * prefix as the intent and the app's env module never sees the meta, so a false
+ * negative here ships a secret to every browser — and a false positive fires on
+ * `NEXT_PUBLIC_*`, which is the overwhelmingly common and correct case, and makes
+ * the whole report something people learn to skip.
+ */
+describe("public-secret", () => {
+  it("fires when meta declares a secret whose variable carries a public prefix", async () => {
+    const root = makeProject({
+      config: { publicPrefixes: ["NEXT_PUBLIC_"] },
+      schema: "nextPublicStripeKey: z.string()",
+      tree: {
+        "next-public-stripe-key.production": "sk_live_1234",
+        "next-public-stripe-key.json": JSON.stringify({ secret: true }),
+      },
+    });
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+    const fired = firedFor(report.findings, "public-secret");
+
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.label).toBe("Secret exposed to the browser");
+    expect(fired[0]?.subject).toBe("NEXT_PUBLIC_STRIPE_KEY");
+    expect(fired[0]?.detail).toBe(
+      "meta declares this a secret, and the `NEXT_PUBLIC_` prefix makes it public",
+    );
+    expect(fired[0]?.remedy).toContain("rename the parameter");
+    expect(report.ok).toBe(false);
+  });
+
+  /**
+   * The negative that decides whether the check is usable at all. A public-
+   * prefixed parameter that is not secret is the prefix working as designed;
+   * firing here would flag every correct `NEXT_PUBLIC_*` in the project.
+   */
+  it("stays quiet on a public-prefixed parameter that meta does not declare secret", async () => {
+    const root = makeProject({
+      config: { publicPrefixes: ["NEXT_PUBLIC_"] },
+      schema: "nextPublicLandingOrigin: z.string()",
+      tree: { "next-public-landing-origin.production": "https://example.com" },
+    });
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+
+    expect(firedFor(report.findings, "public-secret")).toEqual([]);
+    expect(severityOf(report.findings, "public-secret")).toBe("pass");
+    expect(findingsOf(report.findings, "public-secret")[0]?.subject).toBe(
+      "no secret is exposed to the browser for production",
+    );
+    expect(report.ok).toBe(true);
+  });
+
+  it("stays quiet on a secret whose variable carries no public prefix", async () => {
+    const root = makeProject({
+      config: { publicPrefixes: ["NEXT_PUBLIC_"] },
+      schema: "stripeKey: z.string()",
+      tree: {
+        "stripe-key.production.enc": "AAAA-ciphertext",
+        "stripe-key.json": JSON.stringify({ secret: true }),
+      },
+    });
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+
+    expect(firedFor(report.findings, "public-secret")).toEqual([]);
+    expect(severityOf(report.findings, "public-secret")).toBe("pass");
+  });
+
+  /**
+   * A prefix penv was never told about is one it cannot recognise, so the line
+   * must say it did not look. Reporting this as a clean check would be the worst
+   * possible lie: silence read as "no secret reaches the browser" by a reader
+   * whose config never named a prefix to find.
+   */
+  it("says it could not check when no publicPrefixes are declared", async () => {
+    const root = makeProject({
+      schema: "nextPublicStripeKey: z.string()",
+      tree: {
+        "next-public-stripe-key.production": "sk_live_1234",
+        "next-public-stripe-key.json": JSON.stringify({ secret: true }),
+      },
+    });
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+    const line = findingsOf(report.findings, "public-secret")[0];
+
+    expect(line?.subject).toContain("not checked");
+    expect(line?.subject).not.toContain("no secret is exposed");
+    expect(line?.detail).toContain("cannot tell");
+  });
+
+  /** Meta merges base→env (invariant 5): the policy applies where it is declared. */
+  it("fires for the environment whose meta block declares it secret", async () => {
+    const fixture = {
+      config: { publicPrefixes: ["NEXT_PUBLIC_"] },
+      schema: "nextPublicStripeKey: z.string()",
+      tree: {
+        "next-public-stripe-key.development": "pk_test_1234",
+        "next-public-stripe-key.production": "sk_live_1234",
+        "next-public-stripe-key.json": JSON.stringify({
+          environments: { production: { secret: true } },
+        }),
+      },
+    } as const;
+
+    expect(
+      firedFor(
+        (await runDoctor({ cwd: makeProject(fixture), environment: "production" })).findings,
+        "public-secret",
+      ),
+    ).toHaveLength(1);
+    expect(
+      firedFor(
+        (await runDoctor({ cwd: makeProject(fixture), environment: "development" })).findings,
+        "public-secret",
+      ),
+    ).toEqual([]);
+  });
+
+  /**
+   * The variable the framework inlines is the generated one, and a `names`
+   * override is the one place a public prefix can appear with nothing in the
+   * tree hinting at it: the file is `stripe-key`, and it still ships.
+   */
+  it("reads the generated variable, not the parameter name", async () => {
+    const root = makeProject({
+      config: {
+        publicPrefixes: ["NEXT_PUBLIC_"],
+        names: { "stripe-key": "NEXT_PUBLIC_STRIPE_KEY" },
+      },
+      schema: "stripeKey: z.string()",
+      tree: {
+        "stripe-key.production": "sk_live_1234",
+        "stripe-key.json": JSON.stringify({ secret: true }),
+      },
+    });
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+    const fired = firedFor(report.findings, "public-secret");
+
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.subject).toBe("NEXT_PUBLIC_STRIPE_KEY");
+    expect(report.ok).toBe(false);
+  });
+});
+
 describe("a schema that does not load", () => {
   /**
    * The checks that need the schema cannot run, and the report says so. Printing
@@ -557,6 +707,7 @@ describe("the report", () => {
       "unused",
       "unscoped-fallback",
       "plaintext-secret",
+      "public-secret",
       "encryption",
       "provider",
     ]);

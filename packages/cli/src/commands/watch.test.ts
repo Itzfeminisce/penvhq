@@ -32,9 +32,25 @@ const DEBOUNCE_MS = 20;
 const created: string[] = [];
 const handles: WatchHandle[] = [];
 
+/** Where the schema lives when a fixture does not move it. */
+const DEFAULT_SCHEMA_FILE = ".penv/env.ts";
+
 interface Fixture {
   readonly tree?: Readonly<Record<string, string>>;
   readonly schema?: string;
+  /** Declared as `schemaFile` and written there. Defaults to `.penv/env.ts`. */
+  readonly schemaFile?: string;
+}
+
+/** The schema module, written wherever the project says it lives. */
+function writeSchema(root: string, schemaFile: string, body: string): void {
+  const file = join(root, schemaFile);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(
+    file,
+    `import { z } from "zod";\nexport const schema = z.object({${body}});\n`,
+    "utf8",
+  );
 }
 
 function makeProject(fixture: Fixture): string {
@@ -42,17 +58,17 @@ function makeProject(fixture: Fixture): string {
   const root = mkdtempSync(join(FIXTURE_PARENT, "watch-"));
   created.push(root);
 
+  const config =
+    fixture.schemaFile === undefined ? CONFIG : { ...CONFIG, schemaFile: fixture.schemaFile };
   writeFileSync(
     join(root, "penv.config.ts"),
-    `export default ${JSON.stringify(CONFIG)};\n`,
+    `export default ${JSON.stringify(config)};\n`,
     "utf8",
   );
   mkdirSync(join(root, ".penv"), { recursive: true });
-  writeFileSync(
-    join(root, ".penv", "env.ts"),
-    `import { z } from "zod";\nexport const schema = z.object({${fixture.schema ?? ""}});\n`,
-    "utf8",
-  );
+  // Only at its declared path: a stray `.penv/env.ts` beside a schema that has
+  // moved is a file the grammar would read as a parameter.
+  writeSchema(root, fixture.schemaFile ?? DEFAULT_SCHEMA_FILE, fixture.schema ?? "");
   for (const [name, contents] of Object.entries(fixture.tree ?? {})) {
     const file = join(root, ".penv", name);
     mkdirSync(dirname(file), { recursive: true });
@@ -163,6 +179,53 @@ describe("watch mode", () => {
     );
 
     await until(() => results.length >= 2);
+  });
+
+  /**
+   * The schema decides the answer as much as the tree does. At the default it
+   * sits inside `.penv/`, so the tree's watcher covers it — and the run it
+   * produces is one run, not the two a second watcher on the same file would
+   * schedule.
+   */
+  it("re-validates once when the in-tree schema changes", async () => {
+    const root = makeProject({
+      schema: "databaseUrl: z.url()",
+      tree: { "database-url": "postgres://localhost/app" },
+    });
+
+    const { results } = watching(root);
+    await until(() => results.length >= 1);
+    expect(results[0]?.ok).toBe(true);
+    const initial = results.length;
+
+    writeSchema(root, DEFAULT_SCHEMA_FILE, "databaseUrl: z.url(), apiKey: z.string()");
+
+    await until(() => results.length > initial);
+    await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS * 10));
+    expect(results.length - initial).toBe(1);
+    expect(results[results.length - 1]?.ok).toBe(false);
+  });
+
+  /**
+   * `schemaFile` can put the schema outside `.penv/`, where the tree's watcher
+   * never sees it. Watch would then keep printing a verdict from a schema the
+   * user has just edited — the silence the command exists to prevent.
+   */
+  it("re-validates when a schema outside .penv/ changes", async () => {
+    const root = makeProject({
+      schemaFile: "src/env.ts",
+      schema: "databaseUrl: z.url()",
+      tree: { "database-url": "postgres://localhost/app" },
+    });
+
+    const { results } = watching(root);
+    await until(() => results.length >= 1);
+    expect(results[0]?.ok).toBe(true);
+
+    writeSchema(root, "src/env.ts", "databaseUrl: z.url(), apiKey: z.string()");
+
+    await until(() => results.length >= 2);
+    expect(results[results.length - 1]?.ok).toBe(false);
   });
 
   /**

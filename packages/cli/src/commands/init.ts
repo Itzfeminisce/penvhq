@@ -1,17 +1,36 @@
 /**
  * `penv init` — scaffold a project.
  *
- * Every step is idempotent, and two of them are write-once on purpose:
- * `.penv/env.ts` is yours the moment it exists (invariant 2 — penv scaffolds it,
+ * Every step is idempotent, and two of them are write-once on purpose: the
+ * schema module is yours the moment it exists (invariant 2 — penv scaffolds it,
  * never regenerates it), and `penv.config.ts` is the environment whitelist you
  * declared. Re-running init reports what it kept rather than overwriting it.
+ *
+ * What init writes is a set of decisions, and the two kinds are kept apart. penv
+ * may default what it can *observe* — the framework in `package.json`, whether
+ * `src/` exists — because a wrong guess about the codebase is visible in the
+ * codebase. It must ask for what it cannot observe: which environments exist is
+ * deployment topology, it is nowhere on disk, and a project that carries a
+ * `staging` penv invented is a project whose config is fiction (invariant 10).
+ * So `environments` starts empty, and `--yes` cannot fill it: `--yes` means "I
+ * trust your defaults for what you can see", never "invent my infrastructure".
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { PenvError } from "@penv/core";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
+import {
+  DEFAULT_SCHEMA_FILE,
+  isLegalEnvironmentName,
+  type PenvConfig,
+  PenvError,
+  RESERVED_TOKENS,
+  schemaInsideTree,
+  validateSchemaFile,
+} from "@penv/core";
 import { defineCommand } from "citty";
-import { CHECK, formatSteps, guard, type Step, write } from "../ui.js";
+import { type Detected, detectFramework } from "../detect.js";
+import { CHECK, columns, formatSteps, guard, type Step, write } from "../ui.js";
 
 export const SCHEMA_FILE = "env.ts";
 export const CONFIG_FILE = "penv.config.ts";
@@ -20,7 +39,6 @@ export const GITIGNORE_FILE = ".gitignore";
 export const PENV_DIR = ".penv";
 
 const ALIAS = "@env";
-const ALIAS_TARGET = ".penv/env.ts";
 
 /** What init touched, so a caller can report it and a test can assert it. */
 export type InitTarget = "penv-dir" | "schema" | "config" | "tsconfig" | "gitignore";
@@ -34,13 +52,302 @@ export interface InitStep {
   readonly note?: string;
 }
 
+/**
+ * The answers init writes down. Every one of these is a decision a human either
+ * made or consented to — never an identity penv recorded to reinterpret later.
+ * There is deliberately no `framework` here: `schemaFile` and `publicPrefixes`
+ * still mean exactly what they say after the project is rewritten in something
+ * else, and `framework: "next"` would not.
+ */
+export interface InitDecisions {
+  /** The whitelist. Empty unless a human named them — penv never infers one. */
+  readonly environments: readonly string[];
+  /** The schema module, relative to the project root, POSIX. */
+  readonly schemaFile: string;
+  /** The prefixes the framework inlines into its client bundle. */
+  readonly publicPrefixes: readonly string[];
+}
+
+/** What init would write with no further input: the defaults, and nothing invented. */
+export const DEFAULT_DECISIONS: InitDecisions = {
+  environments: [],
+  schemaFile: DEFAULT_SCHEMA_FILE,
+  publicPrefixes: [],
+};
+
 export interface InitResult {
   readonly root: string;
+  readonly decisions: InitDecisions;
   readonly steps: readonly InitStep[];
 }
 
 export interface InitOptions {
   readonly cwd: string;
+  /** What to write. Omitted means the plan's defaults, as `--yes` takes them. */
+  readonly decisions?: InitDecisions;
+}
+
+/*
+ * The plan: what penv observed, what it would write, and why.
+ */
+
+/** Flags that decide without asking, so a script never meets a prompt. */
+export interface InitFlags {
+  /** `--schema <path>`. */
+  readonly schema?: string;
+  /** `--env`, already split. Absent means no answer; present means the answer. */
+  readonly environments?: readonly string[];
+}
+
+export interface InitPlan {
+  readonly detected: Detected | undefined;
+  /** What init writes unless a human edits it. */
+  readonly decisions: InitDecisions;
+  /** Environments the `.env*` files on disk are evidence for. Offered, never taken. */
+  readonly suggestedEnvironments: readonly string[];
+  /** Why each decision is what it is. Printed — a fallback penv takes silently is a guess. */
+  readonly notes: readonly string[];
+}
+
+/**
+ * Names that look like an environment in a `.env` filename but are not one:
+ * `.env.example` is documentation, and the grammar's reserved tokens are
+ * scope markers. Suggesting either would put a name into the whitelist that no
+ * value file can ever be scoped to.
+ */
+const NOT_ENVIRONMENTS: readonly string[] = [...RESERVED_TOKENS, "example", "sample", "template"];
+
+/**
+ * The environments the project's own `.env*` files are evidence for.
+ *
+ * This is not inference: nothing here reaches `penv.config.ts` unless a human
+ * reads the suggestion and presses Enter. Invariant 10 is about what penv
+ * *declares*, and showing someone the filenames they wrote is not a declaration
+ * — it is the difference between "you seem to have a production" and penv
+ * quietly deciding that you do.
+ */
+export function suggestEnvironments(root: string): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return [];
+  }
+
+  const found = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.startsWith(".env.")) {
+      continue;
+    }
+    const segments = entry.slice(".env.".length).split(".");
+    // `.env.production.local` is production's file; `.env.local` names no
+    // environment at all, and neither does anything with more segments left
+    // over, which is a filename penv has no reading of.
+    const withoutLocal = segments.at(-1) === "local" ? segments.slice(0, -1) : segments;
+    const name = withoutLocal.length === 1 ? withoutLocal[0] : undefined;
+    if (name === undefined || !isLegalEnvironmentName(name) || NOT_ENVIRONMENTS.includes(name)) {
+      continue;
+    }
+    found.add(name);
+  }
+  // Sorted so the same project shows the same line on every machine: directory
+  // order is the filesystem's answer, not the project's.
+  return [...found].sort();
+}
+
+/** A flag that is present but says nothing is refused, never read as absent. */
+function emptyFlag(flag: "schema" | "env"): PenvError {
+  return new PenvError(
+    "INIT_FLAG_EMPTY",
+    `\`--${flag}\` was given without a value`,
+    flag === "schema"
+      ? "Name the module that exports the schema, e.g. `--schema src/env.ts`, or drop the flag " +
+          `to use ${DEFAULT_SCHEMA_FILE}.`
+      : "Name the environment, e.g. `--env production`, or drop the flag to leave the whitelist " +
+          "empty and declare it in penv.config.ts.",
+  );
+}
+
+/** One list of environment names, however it was written. */
+function splitEnvironments(value: string): string[] {
+  return value
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+}
+
+/**
+ * `--env` as the whitelist it declares, or `undefined` when it was not given —
+ * which is no answer, not an empty one. Repeatable and comma-separated both
+ * work: `--env development --env production` and `--env development,production`
+ * are the same answer, and a shell that made one of them awkward is not a reason
+ * to have declared a different set of environments.
+ */
+export function environmentsFromFlag(flag: unknown): readonly string[] | undefined {
+  if (flag === undefined) {
+    return undefined;
+  }
+  const given = Array.isArray(flag) ? (flag as readonly unknown[]) : [flag];
+  const names = given.flatMap((value) => splitEnvironments(String(value)));
+  if (names.length === 0) {
+    throw emptyFlag("env");
+  }
+  return [...new Set(names)];
+}
+
+/** The config the decisions describe, so core answers questions about it, not init. */
+function configOf(decisions: InitDecisions): PenvConfig {
+  return { environments: decisions.environments, providers: {}, schemaFile: decisions.schemaFile };
+}
+
+/**
+ * What penv observed and what it proposes to write. The notes are the point as
+ * much as the decisions are: a project that ends up with `.penv/env.ts` because
+ * detection failed must be told that detection failed, or the fallback is
+ * indistinguishable from a choice penv made on their behalf.
+ */
+export function planInit(root: string, flags: InitFlags = {}): InitPlan {
+  const detected = detectFramework(root);
+  const notes: string[] = [];
+
+  if (detected === undefined) {
+    notes.push(
+      `No framework detected in package.json — the schema goes to ${DEFAULT_SCHEMA_FILE}.`,
+    );
+  } else {
+    notes.push(`Detected ${detected.name}.`);
+  }
+
+  const schemaFile =
+    flags.schema === undefined
+      ? (detected?.schemaFile ?? DEFAULT_SCHEMA_FILE)
+      : flags.schema.trim();
+  if (flags.schema !== undefined) {
+    if (schemaFile.length === 0) {
+      throw emptyFlag("schema");
+    }
+    // Every rule a committed path has to satisfy lives in core, so `--schema`
+    // is judged by the same validator `penv validate` will judge the config by.
+    // Refusing here is refusing before a file is written; refusing there is
+    // refusing after the project already has one in the wrong place.
+    const error = validateSchemaFile({ environments: [], providers: {}, schemaFile })[0];
+    if (error !== undefined) {
+      throw error;
+    }
+  }
+
+  const suggestedEnvironments = suggestEnvironments(root);
+  const environments = flags.environments ?? [];
+  if (flags.environments === undefined) {
+    notes.push(
+      "No environments declared: penv does not infer them, and a `--yes` run cannot invent them.",
+    );
+    if (suggestedEnvironments.length > 0) {
+      notes.push(
+        `Your \`.env\` files mention ${suggestedEnvironments.join(", ")} — declare the ones you ` +
+          `really deploy in ${CONFIG_FILE}, with a provider for each.`,
+      );
+    }
+  }
+
+  return {
+    detected,
+    decisions: {
+      environments,
+      schemaFile,
+      publicPrefixes: detected?.publicPrefixes ?? [],
+    },
+    suggestedEnvironments,
+    notes,
+  };
+}
+
+/*
+ * The prompt.
+ *
+ * A plan the human confirms, not an interrogation they answer: penv already
+ * knows everything but the one fact it must not guess, so it shows the whole
+ * page and asks once. The io is a parameter so the decision logic is a plain
+ * function — the tests call it, they do not spawn a terminal.
+ */
+
+export interface PromptIo {
+  readonly ask: (question: string) => Promise<string>;
+  readonly write: (line: string) => void;
+}
+
+/** The plan as one screen. */
+export function renderPlan(plan: InitPlan): string[] {
+  const rows: string[][] = [];
+  rows.push([
+    "  environments",
+    plan.suggestedEnvironments.length === 0 ? "" : `[${plan.suggestedEnvironments.join(", ")}]`,
+    plan.suggestedEnvironments.length === 0
+      ? "<- name them, or Enter to leave the whitelist empty"
+      : "<- from your .env files; edit, or Enter to accept",
+  ]);
+  rows.push([
+    "  schemaFile",
+    plan.decisions.schemaFile,
+    plan.decisions.schemaFile === DEFAULT_SCHEMA_FILE ? "" : `(default: ${DEFAULT_SCHEMA_FILE})`,
+  ]);
+  for (const prefix of plan.decisions.publicPrefixes) {
+    rows.push(["  publicPrefix", prefix, ""]);
+  }
+
+  const headline =
+    plan.detected === undefined
+      ? "No framework detected in package.json."
+      : `Detected ${plan.detected.name}.`;
+  return [headline, "", ...columns(rows), ""];
+}
+
+function environmentsHint(plan: InitPlan): string {
+  return plan.suggestedEnvironments.length === 0
+    ? "environments (comma-separated, Enter for none) > "
+    : 'environments (Enter to accept, "none" for an empty whitelist) > ';
+}
+
+/**
+ * The plan, confirmed. `undefined` is the human declining, which is an outcome
+ * and not a failure: nothing is written and the run says so.
+ *
+ * An answer that is neither yes nor no declines, because the two mistakes are
+ * not symmetrical — a decline costs a re-run, while reading "no thanks" as
+ * consent scaffolds a project someone said no to.
+ */
+export async function promptForDecisions(
+  plan: InitPlan,
+  io: PromptIo,
+): Promise<InitDecisions | undefined> {
+  for (const line of renderPlan(plan)) {
+    io.write(line);
+  }
+
+  const answer = (await io.ask(environmentsHint(plan))).trim();
+  const environments =
+    answer.length === 0
+      ? plan.suggestedEnvironments
+      : answer.toLowerCase() === "none"
+        ? []
+        : splitEnvironments(answer);
+  // The confirmation has to be about what is actually written, so an edited
+  // line is echoed before `Proceed?` rather than confirmed in the abstract.
+  if (answer.length > 0) {
+    io.write("");
+    io.write(
+      environments.length === 0
+        ? "  environments  [] (declare them later in penv.config.ts)"
+        : `  environments  [${environments.join(", ")}]`,
+    );
+    io.write("");
+  }
+
+  const proceed = (await io.ask("Proceed? [Y/n] ")).trim().toLowerCase();
+  if (proceed.length > 0 && proceed !== "y" && proceed !== "yes") {
+    return undefined;
+  }
+  return { ...plan.decisions, environments };
 }
 
 /*
@@ -85,34 +392,86 @@ export function renderSchemaModule(fields: readonly SchemaField[], draft: boolea
   );
 }
 
-const CONFIG_TEMPLATE = `import { defineConfig } from "penv";
+/**
+ * The whitelist block. Empty is the honest answer to a question nothing on disk
+ * can settle, so the comment carries what an empty file cannot: that penv left
+ * it empty on purpose, and the exact shape of the two lines that fill it in.
+ */
+function renderEnvironments(decisions: InitDecisions): string {
+  const shared =
+    "  // Environments are a whitelist. A filename segment is an environment only if\n" +
+    "  // it is declared here — penv never infers one from a folder or a filename.\n";
+  if (decisions.environments.length === 0) {
+    return (
+      `${shared}` +
+      "  // It starts empty because which environments you deploy is not something penv\n" +
+      "  // can read off your codebase, and an environment you do not have is worse\n" +
+      "  // than one you have not declared yet. Name yours, and give each a provider:\n" +
+      '  //   environments: ["development", "production"],\n' +
+      '  //   providers: { development: { type: "filesystem" }, production: { type: "filesystem" } },\n' +
+      "  environments: [],\n" +
+      "\n" +
+      "  providers: {},\n"
+    );
+  }
+  const names = decisions.environments.map((name) => JSON.stringify(name)).join(", ");
+  const providers = decisions.environments
+    .map((name) => `    ${JSON.stringify(name)}: { type: "filesystem" },\n`)
+    .join("");
+  return (
+    `${shared}  environments: [${names}],\n` +
+    "\n" +
+    "  // One entry per environment: where that environment's values are read from.\n" +
+    `  providers: {\n${providers}  },\n`
+  );
+}
 
-export default defineConfig({
-  // Environments are a whitelist. A filename segment is an environment only if
-  // it is declared here — penv never infers one from a folder or a filename.
-  environments: ["development", "staging", "production"],
+/** The config, carrying only the decisions that were actually made. */
+export function renderConfigModule(decisions: InitDecisions): string {
+  let body = renderEnvironments(decisions);
 
-  providers: {
-    development: { type: "filesystem" },
-    staging: { type: "filesystem" },
-    production: { type: "filesystem" },
-  },
-});
-`;
+  // The default is written by not writing it: a key that restates the default is
+  // noise the next reader has to check against the docs before they can ignore it.
+  if (decisions.schemaFile !== DEFAULT_SCHEMA_FILE) {
+    body +=
+      "\n  // The module that exports the schema. It is yours — penv scaffolds it once\n" +
+      "  // and never regenerates it — so this says where you keep it.\n" +
+      `  schemaFile: ${JSON.stringify(decisions.schemaFile)},\n`;
+  }
+  if (decisions.publicPrefixes.length > 0) {
+    const prefixes = decisions.publicPrefixes.map((prefix) => JSON.stringify(prefix)).join(", ");
+    body +=
+      "\n  // The prefixes your framework inlines into the browser bundle. `penv doctor`\n" +
+      "  // reports a parameter your meta declares `secret: true` whose variable name\n" +
+      "  // starts with one of these — penv is the only thing holding both facts.\n" +
+      `  publicPrefixes: [${prefixes}],\n`;
+  }
+
+  return `import { defineConfig } from "penv";\n\nexport default defineConfig({\n${body}});\n`;
+}
 
 /**
- * Invariant 17: value files are never committed; structure, `env.ts`, meta, and
- * config are. The negated directory pattern keeps git descending into namespace
- * folders, which an excluded directory would otherwise hide entirely.
+ * Invariant 17: value files are never committed; structure, the schema, meta,
+ * and config are. The negated directory pattern keeps git descending into
+ * namespace folders, which an excluded directory would otherwise hide entirely.
+ *
+ * The schema is un-ignored by name only when it lives in the tree. Outside it,
+ * this file has no opinion on it at all, and a `!env.ts` naming nothing is a
+ * line the next reader has to work out is dead.
  */
-const GITIGNORE_TEMPLATE = `# Written by penv. Value files hold configuration values and are never
-# committed; only the structure, env.ts, meta, and config are.
-*
-!*/
-!.gitignore
-!${SCHEMA_FILE}
-!*.json
-`;
+export function renderGitignore(decisions: InitDecisions): string {
+  const inside = schemaInsideTree(configOf(decisions));
+  const listed = inside === undefined ? "" : `${inside}, `;
+  return (
+    `# Written by penv. Value files hold configuration values and are never\n` +
+    `# committed; only the structure, ${listed}meta, and config are.\n` +
+    `*\n` +
+    `!*/\n` +
+    `!.gitignore\n` +
+    `${inside === undefined ? "" : `!${inside}\n`}` +
+    `!*.json\n`
+  );
+}
 
 /*
  * The tsconfig.json edit.
@@ -269,11 +628,11 @@ function insertMember(source: string, open: number, member: string, unit: string
   return `${source.slice(0, open + 1)}\n${entryIndent}${member},${source.slice(open + 1)}`;
 }
 
-function shapeError(what: string): PenvError {
+function shapeError(what: string, target: string): PenvError {
   return new PenvError(
     "TSCONFIG_SHAPE",
     `penv cannot add the \`${ALIAS}\` path alias to tsconfig.json: ${what}`,
-    `Add it by hand: \`{ "compilerOptions": { "paths": { "${ALIAS}": ["${ALIAS_TARGET}"] } } }\`.`,
+    `Add it by hand: \`{ "compilerOptions": { "paths": { "${ALIAS}": ["${target}"] } } }\`.`,
   );
 }
 
@@ -285,12 +644,15 @@ export interface AliasEdit {
 /**
  * `tsconfig.json` with the `@env` alias present, everything else untouched.
  * Already-aliased input comes back unchanged rather than gaining a duplicate.
+ *
+ * The alias is why the schema can live anywhere: application code imports
+ * `@env`, and this line is the only thing that has to know where that is.
  */
-export function insertEnvAlias(source: string): AliasEdit {
-  const alias = `"${ALIAS}": ["${ALIAS_TARGET}"]`;
+export function insertEnvAlias(source: string, target: string = DEFAULT_SCHEMA_FILE): AliasEdit {
+  const alias = `"${ALIAS}": ["${target}"]`;
   const root = skipTrivia(source, 0);
   if (source.charAt(root) !== "{") {
-    throw shapeError("its contents are not a JSON object");
+    throw shapeError("its contents are not a JSON object", target);
   }
 
   const unit = indentUnit(source);
@@ -302,7 +664,7 @@ export function insertEnvAlias(source: string): AliasEdit {
     };
   }
   if (source.charAt(compilerOptions.valueStart) !== "{") {
-    throw shapeError("`compilerOptions` is not an object");
+    throw shapeError("`compilerOptions` is not an object", target);
   }
 
   const paths = findMember(source, compilerOptions.valueStart, "paths");
@@ -313,7 +675,7 @@ export function insertEnvAlias(source: string): AliasEdit {
     };
   }
   if (source.charAt(paths.valueStart) !== "{") {
-    throw shapeError("`compilerOptions.paths` is not an object");
+    throw shapeError("`compilerOptions.paths` is not an object", target);
   }
 
   if (findMember(source, paths.valueStart, ALIAS) !== undefined) {
@@ -322,12 +684,9 @@ export function insertEnvAlias(source: string): AliasEdit {
   return { source: insertMember(source, paths.valueStart, alias, unit), changed: true };
 }
 
-const TSCONFIG_TEMPLATE = `{
-  "compilerOptions": {
-    "paths": { "${ALIAS}": ["${ALIAS_TARGET}"] }
-  }
+function renderTsconfig(target: string): string {
+  return `{\n  "compilerOptions": {\n    "paths": { "${ALIAS}": ["${target}"] }\n  }\n}\n`;
 }
-`;
 
 /*
  * The steps themselves. Each returns what it did so the caller reports it.
@@ -343,53 +702,62 @@ export function ensurePenvDir(root: string): InitStep {
 }
 
 /**
- * Invariant 2: `.penv/env.ts` is scaffolded once and never regenerated. An
- * existing file is the user's, whatever penv would have written instead.
+ * Invariant 2: the schema module is scaffolded once and never regenerated. An
+ * existing file is the user's, whatever penv would have written instead — and
+ * that holds wherever they keep it, so the check is against the chosen path and
+ * not the default one.
  */
 export function writeSchemaFile(
   root: string,
   fields: readonly SchemaField[],
   draft: boolean,
+  decisions: InitDecisions = DEFAULT_DECISIONS,
 ): InitStep {
-  const file = join(root, PENV_DIR, SCHEMA_FILE);
+  const file = join(root, ...decisions.schemaFile.split("/"));
   if (existsSync(file)) {
     return {
       target: "schema",
       action: "kept",
-      text: `Kept ${ALIAS_TARGET}`,
+      text: `Kept ${decisions.schemaFile}`,
       note: "(yours — penv never regenerates it)",
     };
   }
-  mkdirSync(join(root, PENV_DIR), { recursive: true });
+  mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, renderSchemaModule(fields, draft), "utf8");
   return {
     target: "schema",
     action: "created",
-    text: `Generated ${ALIAS_TARGET}`,
+    text: `Generated ${decisions.schemaFile}`,
     note: draft ? "(draft schema — review it, it's yours)" : "(schema + loader — yours to edit)",
   };
 }
 
-export function writeConfigFile(root: string): InitStep {
+export function writeConfigFile(
+  root: string,
+  decisions: InitDecisions = DEFAULT_DECISIONS,
+): InitStep {
   const file = join(root, CONFIG_FILE);
   if (existsSync(file)) {
     return { target: "config", action: "kept", text: `Kept ${CONFIG_FILE}` };
   }
-  writeFileSync(file, CONFIG_TEMPLATE, "utf8");
+  writeFileSync(file, renderConfigModule(decisions), "utf8");
   return { target: "config", action: "created", text: `Generated ${CONFIG_FILE}` };
 }
 
-export function writeTsconfigAlias(root: string): InitStep {
+export function writeTsconfigAlias(
+  root: string,
+  decisions: InitDecisions = DEFAULT_DECISIONS,
+): InitStep {
   const file = join(root, TSCONFIG_FILE);
   if (!existsSync(file)) {
-    writeFileSync(file, TSCONFIG_TEMPLATE, "utf8");
+    writeFileSync(file, renderTsconfig(decisions.schemaFile), "utf8");
     return {
       target: "tsconfig",
       action: "created",
       text: `Created ${TSCONFIG_FILE} with the ${ALIAS} path alias`,
     };
   }
-  const edit = insertEnvAlias(readFileSync(file, "utf8"));
+  const edit = insertEnvAlias(readFileSync(file, "utf8"), decisions.schemaFile);
   if (!edit.changed) {
     return {
       target: "tsconfig",
@@ -410,15 +778,19 @@ export function writeTsconfigAlias(root: string): InitStep {
  * outright, so it is rewritten when it drifts. A weakened ignore file is how a
  * plaintext secret gets committed, which invariant 17 exists to prevent.
  */
-export function writeGitignore(root: string): InitStep {
+export function writeGitignore(
+  root: string,
+  decisions: InitDecisions = DEFAULT_DECISIONS,
+): InitStep {
   const file = join(root, PENV_DIR, GITIGNORE_FILE);
   const relative = `${PENV_DIR}/${GITIGNORE_FILE}`;
+  const wanted = renderGitignore(decisions);
   const existing = existsSync(file) ? readFileSync(file, "utf8") : undefined;
-  if (existing === GITIGNORE_TEMPLATE) {
+  if (existing === wanted) {
     return { target: "gitignore", action: "kept", text: `Kept ${relative}` };
   }
   mkdirSync(join(root, PENV_DIR), { recursive: true });
-  writeFileSync(file, GITIGNORE_TEMPLATE, "utf8");
+  writeFileSync(file, wanted, "utf8");
   return {
     target: "gitignore",
     action: existing === undefined ? "created" : "updated",
@@ -427,19 +799,25 @@ export function writeGitignore(root: string): InitStep {
 }
 
 /** Everything `init` scaffolds, in the order it is reported. */
-export function scaffold(root: string, fields: readonly SchemaField[], draft: boolean): InitStep[] {
+export function scaffold(
+  root: string,
+  fields: readonly SchemaField[],
+  draft: boolean,
+  decisions: InitDecisions = DEFAULT_DECISIONS,
+): InitStep[] {
   return [
     ensurePenvDir(root),
-    writeSchemaFile(root, fields, draft),
-    writeConfigFile(root),
-    writeTsconfigAlias(root),
-    writeGitignore(root),
+    writeSchemaFile(root, fields, draft, decisions),
+    writeConfigFile(root, decisions),
+    writeTsconfigAlias(root, decisions),
+    writeGitignore(root, decisions),
   ];
 }
 
 export function runInit(options: InitOptions): InitResult {
   const root = resolve(options.cwd);
-  return { root, steps: scaffold(root, [], false) };
+  const decisions = options.decisions ?? planInit(root).decisions;
+  return { root, decisions, steps: scaffold(root, [], false, decisions) };
 }
 
 export function renderInit(result: InitResult): string[] {
@@ -451,15 +829,69 @@ export function renderInit(result: InitResult): string[] {
   return [
     ...formatSteps(steps),
     "",
-    "Done. Declare your parameters in .penv/env.ts, then `penv set <key>`.",
+    `Done. Declare your parameters in ${result.decisions.schemaFile}, then \`penv set <key>\`.`,
+    ...(result.decisions.environments.length === 0
+      ? [
+          `Then declare your environments in ${CONFIG_FILE}: penv leaves the whitelist empty ` +
+            `rather than inventing one, and every command needs it.`,
+        ]
+      : []),
   ];
+}
+
+/** The prompt runs only against a real terminal; anything else has nobody to ask. */
+async function askOnTty(plan: InitPlan): Promise<InitDecisions | undefined> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await promptForDecisions(plan, {
+      ask: (question) => rl.question(question),
+      write: (line) => process.stdout.write(`${line}\n`),
+    });
+  } finally {
+    rl.close();
+  }
 }
 
 export const initCommand = defineCommand({
   meta: { name: "init", description: "Initialize a project (.penv/, env.ts, config, @env alias)" },
-  run() {
+  args: {
+    yes: {
+      type: "boolean",
+      description:
+        "Take the detected defaults without asking. Environments still start empty — penv " +
+        "cannot see your infrastructure",
+    },
+    schema: {
+      type: "string",
+      description: `Where the schema module goes, e.g. src/env.ts (default: ${DEFAULT_SCHEMA_FILE})`,
+    },
+    env: {
+      type: "string",
+      description:
+        "Declare an environment. Repeatable, or comma-separated: --env development,production",
+    },
+  },
+  run({ args }) {
     return guard(async () => {
-      write(renderInit(runInit({ cwd: process.cwd() })));
+      const root = resolve(process.cwd());
+      const environments = environmentsFromFlag(args.env);
+      const plan = planInit(root, {
+        ...(args.schema === undefined ? {} : { schema: args.schema }),
+        ...(environments === undefined ? {} : { environments }),
+      });
+
+      // No terminal is not a reason to guess: it is a reason to take the
+      // defaults and say what they were, so a CI log carries the decisions.
+      const asked = process.stdin.isTTY === true && args.yes !== true && environments === undefined;
+      const decisions = asked ? await askOnTty(plan) : plan.decisions;
+      if (decisions === undefined) {
+        write(["Nothing written. Re-run `penv init` when you want to scaffold."]);
+        return;
+      }
+      if (!asked) {
+        write([...plan.notes, ""]);
+      }
+      write(renderInit(runInit({ cwd: root, decisions })));
     });
   },
 });

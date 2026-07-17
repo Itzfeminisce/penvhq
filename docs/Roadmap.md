@@ -14,6 +14,8 @@ Everything below describes the *finished* design (see docs). This table says whe
 |---|---|---|
 | Filesystem provider, CLI, import/generate, value cascade | Yes | v0.1 |
 | `@env` / `.penv/env.ts`, one-schema typing, `penv validate` | Yes | v0.2 |
+| `penv mv` — rename a parameter, re-sealing encrypted values | Yes | v0.3 |
+| Configurable `schemaFile`, framework detection at `init`, `publicPrefixes` | Yes | v0.3 |
 | `.enc` encryption grammar | Yes | grammar reserved v0.1; encrypt/decrypt v0.3 |
 | KMS-derived keys, exported to the environment | Yes | v0.3 |
 | OS keychain key source | Yes | post-v0.3 |

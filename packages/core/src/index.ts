@@ -71,6 +71,14 @@ export {
   variableName,
 } from "./names.js";
 export { candidatesFor, requireValue, resolveAll, resolveParameter } from "./resolve.js";
+export {
+  DEFAULT_SCHEMA_FILE,
+  isPublicVariable,
+  schemaFileOf,
+  schemaInsideTree,
+  validatePublicPrefixes,
+  validateSchemaFile,
+} from "./schema-file.js";
 export type {
   DecryptFailure,
   DecryptReason,

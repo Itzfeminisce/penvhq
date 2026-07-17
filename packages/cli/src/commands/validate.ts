@@ -10,6 +10,7 @@
  * an inferred import.
  */
 
+import { resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ParameterRef, ValueFile } from "@penv/core";
 import {
@@ -19,6 +20,7 @@ import {
   PenvError,
   ReservedTokenError,
   resolveAll,
+  schemaFileOf,
   validateConfig,
 } from "@penv/core";
 import { defineCommand } from "citty";
@@ -29,7 +31,6 @@ import { keySourceFor, openProject, refsFrom, targetEnvironment } from "../proje
 import type { DriftReport } from "../schema.js";
 import { computeDrift, EMPTY_DRIFT } from "../schema.js";
 import { CHECK, formatRows, guard, type Row, WARN, write } from "../ui.js";
-import { SCHEMA_FILE } from "./init.js";
 
 export type ValidateIssueKind = "config" | "reserved" | "collision" | "schema" | "undecryptable";
 
@@ -47,7 +48,7 @@ export interface ValidateResult {
   readonly parameters: number;
   readonly issues: readonly ValidateIssue[];
   /**
-   * The distance between `.penv/env.ts` and the tree, carried for the callers
+   * The distance between the schema and the tree, carried for the callers
    * that report it (`watch`). Never folded into `ok` and never rendered by
    * `renderValidate`: drift is a report, and CI's verdict must not move because
    * a parameter the schema tolerates is absent. Empty when the schema did not
@@ -62,7 +63,6 @@ export interface ValidateOptions {
 }
 
 const SCHEMA_EXPORT = "schema";
-const SCHEMA_PATH = `.penv/${SCHEMA_FILE}`;
 
 const LABELS: Readonly<Record<ValidateIssueKind, string>> = {
   config: "Config",
@@ -130,14 +130,17 @@ export interface SchemaLoad {
 }
 
 /**
- * A penv error raised inside the user's own `.penv/env.ts`, identified by its
+ * A penv error raised inside the user's own schema module, identified by its
  * `code` rather than by `instanceof`.
  *
  * The error is thrown by *their* copy of penv, which is a different module realm
  * from this one, so `instanceof` is false across the boundary. `code` is the
  * stable, machine-readable discriminator, and this is exactly what it is for.
  */
-function validationIssuesOf(cause: unknown): readonly ValidateIssue[] | undefined {
+function validationIssuesOf(
+  cause: unknown,
+  schemaPath: string,
+): readonly ValidateIssue[] | undefined {
   if (typeof cause !== "object" || cause === null) {
     return undefined;
   }
@@ -149,9 +152,9 @@ function validationIssuesOf(cause: unknown): readonly ValidateIssue[] | undefine
     const { parameter, message } = issue as { parameter?: unknown; message?: unknown };
     return {
       kind: "schema" as const,
-      subject: typeof parameter === "string" && parameter !== "" ? parameter : SCHEMA_PATH,
+      subject: typeof parameter === "string" && parameter !== "" ? parameter : schemaPath,
       message: typeof message === "string" ? message : String(issue),
-      remedy: `Fix the value, or adjust the schema in ${SCHEMA_PATH} if the shape is wrong.`,
+      remedy: `Fix the value, or adjust the schema in ${schemaPath} if the shape is wrong.`,
     };
   });
 }
@@ -184,7 +187,7 @@ function exclusively<T>(work: () => Promise<T>): Promise<T> {
 }
 
 /**
- * The one schema, read from `.penv/env.ts`.
+ * The one schema, read from wherever `schemaFile` puts it.
  *
  * Only the `schema` export is read, never `env` — a command whose job is to
  * *report* on configuration must not be stopped by it. That is the whole reason
@@ -204,12 +207,19 @@ function exclusively<T>(work: () => Promise<T>): Promise<T> {
  * {@link exclusively}. Loads queue rather than overlap.
  */
 export function loadSchema(project: Project, environment: string): Promise<SchemaLoad> {
-  const file = pathToFileURL(`${project.penvDir}/${SCHEMA_FILE}`).href;
-  return exclusively(() => loadSchemaExclusively(file, environment));
+  // Resolved against the project root, not `.penv/`: `schemaFile` is relative to
+  // penv.config.ts, so a schema at `src/env.ts` is looked for where it is.
+  const schemaPath = schemaFileOf(project.config);
+  const file = pathToFileURL(resolvePath(project.root, schemaPath)).href;
+  return exclusively(() => loadSchemaExclusively(file, schemaPath, environment));
 }
 
 /** {@link loadSchema}'s body, run only while it holds the `PENV_ENV` pin. */
-async function loadSchemaExclusively(file: string, environment: string): Promise<SchemaLoad> {
+async function loadSchemaExclusively(
+  file: string,
+  schemaPath: string,
+  environment: string,
+): Promise<SchemaLoad> {
   // Resolved from the user's own file: `zod` and `penv` are their dependencies,
   // not the CLI's. `moduleCache` is off so an edited schema is the schema penv reads.
   const jiti = createJiti(file, { interopDefault: false, moduleCache: false });
@@ -220,7 +230,7 @@ async function loadSchemaExclusively(file: string, environment: string): Promise
   try {
     loaded = await jiti.import(file);
   } catch (cause) {
-    const issues = validationIssuesOf(cause);
+    const issues = validationIssuesOf(cause, schemaPath);
     if (issues !== undefined) {
       return { issues };
     }
@@ -229,9 +239,9 @@ async function loadSchemaExclusively(file: string, environment: string): Promise
       issues: [
         {
           kind: "config",
-          subject: SCHEMA_PATH,
-          message: `${SCHEMA_PATH} could not be loaded: ${detail}`,
-          remedy: `Fix the error above. penv reads the \`${SCHEMA_EXPORT}\` export of ${SCHEMA_PATH}, which is yours to edit.`,
+          subject: schemaPath,
+          message: `${schemaPath} could not be loaded: ${detail}`,
+          remedy: `Fix the error above. penv reads the \`${SCHEMA_EXPORT}\` export of ${schemaPath}, which is yours to edit.`,
         },
       ],
     };
@@ -253,8 +263,8 @@ async function loadSchemaExclusively(file: string, environment: string): Promise
       issues: [
         {
           kind: "config",
-          subject: SCHEMA_PATH,
-          message: `${SCHEMA_PATH} exports no \`${SCHEMA_EXPORT}\``,
+          subject: schemaPath,
+          message: `${schemaPath} exports no \`${SCHEMA_EXPORT}\``,
           remedy: `Export the shape as \`export const ${SCHEMA_EXPORT} = z.object({ ... })\`. One schema drives both validation and types.`,
         },
       ],
@@ -266,6 +276,7 @@ async function loadSchemaExclusively(file: string, environment: string): Promise
 export async function runValidate(options: ValidateOptions): Promise<ValidateResult> {
   const project = openProject(options.cwd);
   const environment = targetEnvironment(project, options.environment);
+  const schemaPath = schemaFileOf(project.config);
   const issues: ValidateIssue[] = [];
 
   // Invariant 11: a reserved token in a filename is an error, never a silent
@@ -281,7 +292,7 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
       ok: false,
       environment,
       parameters: 0,
-      issues: [issueFrom(error, SCHEMA_PATH)],
+      issues: [issueFrom(error, schemaPath)],
       drift: EMPTY_DRIFT,
     };
   }
@@ -354,9 +365,9 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
         }
         issues.push({
           kind: "schema",
-          subject: path || SCHEMA_PATH,
+          subject: path || schemaPath,
           message: problem.message,
-          remedy: `Fix the value, or adjust the schema in ${SCHEMA_PATH} if the shape is wrong.`,
+          remedy: `Fix the value, or adjust the schema in ${schemaPath} if the shape is wrong.`,
         });
       }
     }

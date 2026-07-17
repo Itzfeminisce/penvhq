@@ -481,31 +481,66 @@ describe("isParameterFile", () => {
   it.each([".DS_Store", ".gitignore", ".penvignore", "redis/.DS_Store", "env.ts"])(
     "ignores `%s`",
     (path) => {
-      expect(isParameterFile(path)).toBe(false);
+      expect(isParameterFile(path, config)).toBe(false);
     },
   );
 
   it.each(["password", "redis/password.production", "redis/password.json", "app/jwt-secret.local"])(
     "accepts `%s`",
     (path) => {
-      expect(isParameterFile(path)).toBe(true);
+      expect(isParameterFile(path, config)).toBe(true);
     },
   );
 
   it("normalises Windows separators before taking the basename", () => {
-    expect(isParameterFile(".\\redis\\.DS_Store")).toBe(false);
-    expect(isParameterFile(".\\redis\\password.production")).toBe(true);
+    expect(isParameterFile(".\\redis\\.DS_Store", config)).toBe(false);
+    expect(isParameterFile(".\\redis\\password.production", config)).toBe(true);
   });
 
   it("ignores a path that names no file", () => {
-    expect(isParameterFile("")).toBe(false);
+    expect(isParameterFile("", config)).toBe(false);
   });
 
   // The defect this predicate exists to prevent: a stray dotfile the user never
   // created must not make `list`/`load` fail hard.
   it("filters the files that would otherwise throw on an empty leading segment", () => {
     expect(() => parseFilename(".DS_Store", config)).toThrow(FilenameGrammarError);
-    expect(isParameterFile(".DS_Store")).toBe(false);
+    expect(isParameterFile(".DS_Store", config)).toBe(false);
+  });
+
+  /**
+   * The schema is skipped for living where the config says, not for being called
+   * `env.ts`. A project that moved it out has nothing here to skip — so `env.ts`
+   * in the tree becomes an ordinary parameter named `env`, because that is what
+   * it would be.
+   */
+  describe("when the project moved its schema out of the tree", () => {
+    const moved: PenvConfig = { ...config, schemaFile: "src/env.ts" };
+
+    it("stops skipping `env.ts` in the tree", () => {
+      expect(isParameterFile("env.ts", moved)).toBe(true);
+    });
+
+    it("still ignores the files penv never wrote", () => {
+      expect(isParameterFile(".DS_Store", moved)).toBe(false);
+      expect(isParameterFile(".gitignore", moved)).toBe(false);
+    });
+  });
+
+  it("skips the schema wherever inside the tree the config puts it", () => {
+    const renamed: PenvConfig = { ...config, schemaFile: ".penv/schema.ts" };
+
+    expect(isParameterFile("schema.ts", renamed)).toBe(false);
+    // And `env.ts` is no longer special, because nothing declares it.
+    expect(isParameterFile("env.ts", renamed)).toBe(true);
+  });
+
+  /** A nested schema is one path, not one basename: only that path is skipped. */
+  it("skips a namespaced schema by its whole path", () => {
+    const nested: PenvConfig = { ...config, schemaFile: ".penv/config/env.ts" };
+
+    expect(isParameterFile("config/env.ts", nested)).toBe(false);
+    expect(isParameterFile("other/env.ts", nested)).toBe(true);
   });
 });
 

@@ -118,6 +118,28 @@ export interface PenvConfig {
    */
   readonly environments: readonly string[];
   readonly providers: Readonly<Record<string, ProviderConfig>>;
+  /**
+   * Where the module holding the schema lives, relative to this config.
+   * Defaults to `.penv/env.ts`.
+   *
+   * A path rather than a convention because the file is the user's (invariant 2)
+   * — a file penv insists on owning the location of is not fully theirs, and
+   * `src/env.ts` is where most projects would put it. Nothing downstream moves
+   * when it does: consumers import `@env`, and the alias is what penv writes.
+   */
+  readonly schemaFile?: string;
+  /**
+   * The variable-name prefixes a framework inlines into its client bundle —
+   * `NEXT_PUBLIC_`, `VITE_`.
+   *
+   * penv does not enforce these; the framework already does. Declaring them is
+   * what lets `doctor` catch the one mistake neither penv nor the framework can
+   * catch alone: a parameter meta declares `secret` whose name makes the
+   * framework ship it to a browser. To the framework the prefix *is* the intent,
+   * so only penv — holding both the policy and the name — can see the
+   * contradiction.
+   */
+  readonly publicPrefixes?: readonly string[];
   /** Overrides the default name transform for generated `.env` output. */
   readonly names?: Readonly<Record<string, string>>;
   /**

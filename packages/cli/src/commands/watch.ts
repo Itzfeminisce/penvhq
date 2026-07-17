@@ -14,10 +14,11 @@
  * are watching *for*. Same facts, same measurement, one of them worth printing
  * only where someone is looking.
  *
- * Two things are watched, because two things decide the answer: the `.penv/`
- * tree (the values and their meta) and `penv.config.ts` (the environment
- * whitelist, and the `names` block). The schema in `.penv/env.ts` is inside the
- * tree, so it is covered by the first.
+ * Three things decide the answer, so three things are watched: the `.penv/` tree
+ * (the values and their meta), `penv.config.ts` (the environment whitelist, and
+ * the `names` block), and the schema. The schema is watched on its own only when
+ * `schemaFile` puts it outside `.penv/` — at the default it is inside the tree,
+ * and a second watcher on it would report every edit twice.
  *
  * `node:fs` does the watching. A dependency-free watcher is worth the handful of
  * lines here: the events this needs are the ones the platform already reports,
@@ -26,7 +27,8 @@
 
 import type { FSWatcher } from "node:fs";
 import { existsSync, watch } from "node:fs";
-import { basename, dirname } from "node:path";
+import { basename, dirname, resolve } from "node:path";
+import { schemaFileOf, schemaInsideTree } from "@penv/core";
 import { defineCommand } from "citty";
 import { openProject } from "../project.js";
 import type { DriftReport } from "../schema.js";
@@ -249,6 +251,15 @@ export function runWatch(options: WatchOptions): WatchHandle {
 
   addWatcher(project.penvDir, true);
   addWatcher(dirname(project.configFile), false, configFile);
+
+  // The schema declares what must exist, so an edit to it changes the answer. A
+  // schema inside the tree already has a watcher; one outside would have none,
+  // and a watch that keeps reporting a verdict it can no longer see the reason
+  // for is the silence this command exists to prevent.
+  if (schemaInsideTree(project.config) === undefined) {
+    const schemaFile = resolve(project.root, schemaFileOf(project.config));
+    addWatcher(dirname(schemaFile), false, basename(schemaFile));
+  }
 
   // The current answer, before anything changes: a watch that says nothing until
   // the next keystroke leaves the user guessing at the state they already have.

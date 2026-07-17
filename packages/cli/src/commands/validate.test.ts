@@ -33,9 +33,14 @@ const CONFIG = {
 const created: string[] = [];
 const originalCwd = process.cwd();
 
+/** Where the schema lives when a fixture does not move it. */
+const DEFAULT_SCHEMA_FILE = ".penv/env.ts";
+
 interface Fixture {
   readonly tree?: Readonly<Record<string, string>>;
   readonly schema?: string;
+  /** Declared as `schemaFile` and written there. Defaults to `.penv/env.ts`. */
+  readonly schemaFile?: string;
   /** Replaces the default config entirely. */
   readonly config?: unknown;
 }
@@ -45,14 +50,21 @@ function makeProject(fixture: Fixture): string {
   const root = mkdtempSync(join(FIXTURE_PARENT, "validate-"));
   created.push(root);
 
+  const config =
+    fixture.config ??
+    (fixture.schemaFile === undefined ? CONFIG : { ...CONFIG, schemaFile: fixture.schemaFile });
   writeFileSync(
     join(root, "penv.config.ts"),
-    `export default ${JSON.stringify(fixture.config ?? CONFIG)};\n`,
+    `export default ${JSON.stringify(config)};\n`,
     "utf8",
   );
   mkdirSync(join(root, ".penv"), { recursive: true });
+  // Only at its declared path: a stray `.penv/env.ts` beside a schema that has
+  // moved is a file the grammar would read as a parameter.
+  const schemaFile = join(root, fixture.schemaFile ?? DEFAULT_SCHEMA_FILE);
+  mkdirSync(dirname(schemaFile), { recursive: true });
   writeFileSync(
-    join(root, ".penv", "env.ts"),
+    schemaFile,
     `import { z } from "zod";\nexport const schema = z.object({${fixture.schema ?? ""}});\n`,
     "utf8",
   );
@@ -244,6 +256,69 @@ describe("a reserved token", () => {
 
     expect(result.ok).toBe(false);
     expect(result.issues[0]?.subject).toBe("enc");
+  });
+});
+
+/**
+ * `schemaFile` moves the schema, and the whole command has to move with it. A
+ * validate that read `.penv/env.ts` regardless would report a missing file for a
+ * project whose schema is exactly where its config says.
+ */
+describe("a schema the config has moved", () => {
+  it("validates against the file `schemaFile` names", async () => {
+    const root = makeProject({
+      schemaFile: "src/env.ts",
+      schema: "databaseUrl: z.url()",
+      tree: { "database-url": "not-a-url-at-all" },
+    });
+
+    const result = await runValidate({ cwd: root, environment: "production" });
+
+    // The verdict could only come from `src/env.ts`: nothing else declares it.
+    expect(result.ok).toBe(false);
+    expect(kinds(result)).toEqual(["schema"]);
+    expect(result.issues[0]?.subject).toBe("databaseUrl");
+  });
+
+  it("passes when the moved schema is satisfied", async () => {
+    const root = makeProject({
+      schemaFile: "src/env.ts",
+      schema: "databaseUrl: z.url()",
+      tree: { "database-url": "postgres://localhost/app" },
+    });
+
+    const result = await runValidate({ cwd: root, environment: "production" });
+
+    expect(result.issues).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  /**
+   * A remedy naming `.penv/env.ts` sends the reader to a file that does not
+   * exist — the one thing worse than no remedy at all.
+   */
+  it("names the moved schema in the remedy, not .penv/env.ts", async () => {
+    const root = makeProject({
+      schemaFile: "src/env.ts",
+      schema: "databaseUrl: z.url()",
+      tree: { "database-url": "not-a-url-at-all" },
+    });
+
+    const remedy = (await runValidate({ cwd: root, environment: "production" })).issues[0]?.remedy;
+
+    expect(remedy).toContain("src/env.ts");
+    expect(remedy).not.toContain(".penv/env.ts");
+  });
+
+  it("names the moved schema when it exports no schema", async () => {
+    const root = makeProject({ schemaFile: "src/env.ts", schema: "" });
+    writeFileSync(join(root, "src", "env.ts"), "export const nope = 1;\n", "utf8");
+
+    const result = await runValidate({ cwd: root, environment: "production" });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues[0]?.subject).toBe("src/env.ts");
+    expect(result.issues[0]?.message).toContain("src/env.ts exports no `schema`");
   });
 });
 
