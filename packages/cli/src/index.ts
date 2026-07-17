@@ -17,6 +17,7 @@ import { initCommand } from "./commands/init.js";
 import { keyCommand } from "./commands/key.js";
 import { listCommand } from "./commands/list.js";
 import { mvCommand } from "./commands/mv.js";
+import { pushCommand } from "./commands/push.js";
 import { removeCommand } from "./commands/remove.js";
 import { setCommand } from "./commands/set.js";
 import { validateCommand } from "./commands/validate.js";
@@ -34,6 +35,7 @@ export const main = defineCommand({
     get: getCommand,
     set: setCommand,
     mv: mvCommand,
+    push: pushCommand,
     remove: removeCommand,
     list: listCommand,
     encrypt: encryptCommand,
@@ -49,7 +51,12 @@ export function runMain(): Promise<void> {
   return cittyRunMain(main);
 }
 
-export type { DoctorFinding, DoctorReport, DoctorSeverity } from "./commands/doctor.js";
+export type {
+  DoctorCheck,
+  DoctorFinding,
+  DoctorReport,
+  DoctorSeverity,
+} from "./commands/doctor.js";
 export { renderDoctor, runDoctor } from "./commands/doctor.js";
 export type { ResealResult } from "./commands/encrypt.js";
 export { runDecrypt, runEncrypt } from "./commands/encrypt.js";
@@ -65,6 +72,8 @@ export type { ListResult } from "./commands/list.js";
 export { runList } from "./commands/list.js";
 export type { MoveResult } from "./commands/mv.js";
 export { renderMove, runMove } from "./commands/mv.js";
+export type { PushOptions, PushResult } from "./commands/push.js";
+export { LAST_PUSHED_KEY, renderPush, runPush } from "./commands/push.js";
 export type { RemoveResult } from "./commands/remove.js";
 export { runRemove } from "./commands/remove.js";
 export type { SetResult } from "./commands/set.js";

@@ -136,8 +136,9 @@ export function resolveSync(
   ref: ParameterRef,
   environment: string,
   keys: KeySource,
+  skipPersonal?: boolean,
 ): SyncResolution {
-  for (const file of candidatesFor(ref, environment)) {
+  for (const file of candidatesFor(ref, environment, skipPersonal)) {
     const read = provider.readSync(file);
     if (read === undefined) {
       continue;
@@ -161,8 +162,11 @@ export function resolveAllSync(
   provider: FilesystemProvider,
   environment: string,
   keys: KeySource,
+  skipPersonal?: boolean,
 ): SyncResolution[] {
-  return refsFrom(provider.listSync()).map((ref) => resolveSync(provider, ref, environment, keys));
+  return refsFrom(provider.listSync()).map((ref) =>
+    resolveSync(provider, ref, environment, keys, skipPersonal),
+  );
 }
 
 /**

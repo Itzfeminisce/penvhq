@@ -97,6 +97,22 @@ export interface ProviderConfig {
 }
 
 /**
+ * A destination penv pushes values *to* and cannot read back. Declared under
+ * `sinks`, never `providers`: a sink is not the system of record, so it is not a
+ * provider, and collapsing the two in the config collapses them everywhere. An
+ * environment may have both — a provider holding the truth and a sink receiving
+ * it — which one key cannot express and two keys express exactly.
+ */
+export interface SinkConfig {
+  readonly type: string;
+  /**
+   * The destination-side target, when it needs one — a GitHub `owner/repo`. Left
+   * unset, the destination's own CLI resolves it from the working directory.
+   */
+  readonly repo?: string;
+}
+
+/**
  * Where one environment's encryption key comes from. Declared, never guessed: a
  * key source penv picked for you is a key you did not choose.
  */
@@ -147,6 +163,13 @@ export interface PenvConfig {
    * has no key source, which is not the same as having no key — see `keys.ts`.
    */
   readonly keys?: Readonly<Record<string, KeyConfig>>;
+  /**
+   * Where each environment's resolved values are pushed. A sink is a destination,
+   * never the system of record — declared here, beside `providers` and never
+   * inside it, so the two concepts cannot be mistaken for one at the first place
+   * a user reads.
+   */
+  readonly sinks?: Readonly<Record<string, SinkConfig>>;
 }
 
 /**
@@ -181,6 +204,58 @@ export interface Provider {
 }
 
 /**
+ * Which destination store a value lands in. The two members are penv's own
+ * precedence axis wearing the destination's names: the unscoped default is the
+ * value every context falls back to (`repository`), an environment-scoped value
+ * belongs to exactly one (`environment`). GitHub resolves the two in penv's own
+ * order — environment over repository — so the cascade is reproduced by the
+ * destination's native mechanism rather than flattened at the boundary.
+ */
+export type SecretScope =
+  | { readonly kind: "repository" }
+  | { readonly kind: "environment"; readonly environment: string };
+
+/** One secret as a write-only destination reports it: a name and when it last changed, never a value. */
+export interface SinkSecret {
+  readonly name: string;
+  /** The destination's last-modified time, ISO 8601. Compared against penv's last-push time to catch a hand-edit. */
+  readonly updatedAt: string;
+}
+
+/**
+ * A write-only destination. Unlike a {@link Provider} it cannot `read`, so no
+ * adapter for it ever passes the provider contract, it never appears as an
+ * environment's `provider`, and it does not participate in `penv pull`. penv
+ * resolves the tree; the sink receives it.
+ */
+export interface Sink {
+  readonly type: string;
+  /**
+   * Confirms the destination is reachable before the first push. Every name is
+   * already judged up front, so a push never places half its secrets and then
+   * hits a reserved name; this closes the other pre-push gap — the destination
+   * being unreachable. GitHub through `gh` checks it is installed, authenticated,
+   * and can reach this repository's secrets, and refuses loudly rather than
+   * falling back. It cannot prove per-environment write permission without
+   * writing, so that narrower failure surfaces at push time as the same loud
+   * refusal. Resolves when it is safe to push.
+   */
+  verify(): Promise<void>;
+  /**
+   * Sends one value to the destination, which seals it under its own key. The
+   * value crosses in plaintext because a CI runner holds no penv key — penv's
+   * encryption stops at the sink and the destination's custody takes over.
+   */
+  push(name: string, value: string, scope: SecretScope): Promise<void>;
+  /**
+   * The names the destination holds at a scope, each with its last-modified
+   * time. Listing names is the one read a write-only destination allows; values
+   * never come back.
+   */
+  list(scope: SecretScope): Promise<SinkSecret[]>;
+}
+
+/**
  * Why a value did not open. Four reasons, each one penv is certain of; there is
  * deliberately no "unknown".
  *
@@ -212,7 +287,7 @@ export interface ResolutionCandidate {
   /** Whether this candidate exists in the provider. */
   readonly present: boolean;
   /** Set when a present candidate was passed over for a higher-precedence one. */
-  readonly skippedReason?: "lower-precedence" | "local-skipped-in-test";
+  readonly skippedReason?: "lower-precedence" | "local-skipped-in-test" | "local-skipped-in-push";
 }
 
 /** The outcome of resolving one parameter for one environment. */

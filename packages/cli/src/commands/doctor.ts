@@ -26,24 +26,42 @@
  * Warnings are reported; failures are reported and exit non-zero.
  */
 
-import type { Meta, PenvConfig, Resolution } from "@penv/core";
+import type {
+  Meta,
+  PenvConfig,
+  Resolution,
+  SecretScope,
+  Sink,
+  SinkConfig,
+  SinkSecret,
+} from "@penv/core";
 import {
   accessPath,
+  effectiveMeta,
   isPublicVariable,
   isRequired,
   isSecret,
   resolveAll,
   variableName,
 } from "@penv/core";
+import { createGithubSink } from "@penv/sink-github";
 import { defineCommand } from "citty";
 import type { z } from "zod";
+import type { Project } from "../project.js";
 import { keySourceFor, openProject, targetEnvironment } from "../project.js";
 import type { DriftReport } from "../schema.js";
 import { computeDrift, lookup, minLengthOf } from "../schema.js";
-import { CHECK, formatRows, guard, type Row, WARN, write } from "../ui.js";
+import { CHECK, formatRows, guard, type Row, UNKNOWN, WARN, write } from "../ui.js";
+import { LAST_PUSHED_KEY } from "./push.js";
 import { loadSchema } from "./validate.js";
 
-export type DoctorSeverity = "pass" | "warning" | "failure";
+/**
+ * A check reports one of four verdicts. `unknown` — a check that ran but could
+ * not reach a verdict — is never rendered as a pass: "I looked and found nothing
+ * wrong" and "I could not look" are opposite situations with opposite remedies,
+ * and a write-only sink makes most of what doctor can say the second kind.
+ */
+export type DoctorSeverity = "pass" | "warning" | "failure" | "unknown";
 
 export type DoctorCheck =
   | "schema"
@@ -55,7 +73,11 @@ export type DoctorCheck =
   | "plaintext-secret"
   | "public-secret"
   | "encryption"
-  | "provider";
+  | "provider"
+  | "sink-unreachable"
+  | "sink-name-drift"
+  | "sink-manual-edit"
+  | "sink-value-drift";
 
 export interface DoctorFinding {
   readonly check: DoctorCheck;
@@ -70,13 +92,15 @@ export interface DoctorFinding {
 export interface DoctorReport {
   readonly environment: string;
   readonly findings: readonly DoctorFinding[];
-  /** False when any finding is a failure. Warnings do not fail the run. */
+  /** False when any finding is a failure. Warnings and unknowns do not fail the run. */
   readonly ok: boolean;
 }
 
 export interface DoctorOptions {
   readonly cwd: string;
   readonly environment?: string;
+  /** Injected in tests: the sink to check against. Defaults to the one the config declares. */
+  readonly sink?: Sink;
 }
 
 interface Subject {
@@ -84,11 +108,15 @@ interface Subject {
   readonly meta: Meta | undefined;
 }
 
-/** A check the schema failure above made impossible. Reported, never omitted. */
+/**
+ * A check the schema failure above made impossible: `unknown`, not `warning`.
+ * penv did not look, so it cannot claim there is nothing to find — and it cannot
+ * claim a problem either. The verdict is "I could not tell".
+ */
 function skipped(check: DoctorCheck, label: string): DoctorFinding {
   return {
     check,
-    severity: "warning",
+    severity: "unknown",
     label,
     subject: "not checked",
     detail: "the schema did not load, so this check could not run",
@@ -152,6 +180,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   findings.push(...plaintextSecretFindings(subjects, environment));
   findings.push(...publicSecretFindings(subjects, environment, project.config));
   findings.push(...encryptionFindings(subjects, environment));
+  findings.push(...(await sinkFindings(project, environment, options.sink)));
 
   findings.push({
     check: "provider",
@@ -409,7 +438,7 @@ function publicSecretFindings(
     return [
       {
         check: "public-secret",
-        severity: "pass",
+        severity: "unknown",
         label: "Browser exposure",
         subject: "not checked — penv.config.ts declares no `publicPrefixes`",
         detail: "penv cannot tell which variables a framework inlines into the browser",
@@ -501,9 +530,256 @@ function encryptionFindings(subjects: readonly Subject[], environment: string): 
   ];
 }
 
+/**
+ * A sink report is mostly `unknown` by construction, and honest about it. Three
+ * tiers, rendered differently (RFC "A sink is a destination, not a provider"):
+ *
+ * - **names** are exact, because listing them is the one read the destination
+ *   allows: declared-but-never-pushed, and present-in-the-destination-but-
+ *   undeclared — the `declared`/`unused` pair pointed at a sink.
+ * - **manual edits** are detectable indirectly: GitHub's `updated_at` newer than
+ *   penv's own last-push time (kept per environment in committed meta) means the
+ *   secret was touched outside penv. A warning, never a failure — it detects that
+ *   something was touched, not that the copies differ.
+ * - **values** are `unknown`, permanently, because they cannot be read back.
+ *
+ * The whole report is `unknown` when the destination cannot be reached — the
+ * fourth verdict earning its keep against a write-only store.
+ */
+/** Slack between penv's local push time and the destination's server `updated_at` before a difference reads as a hand-edit. */
+const EDIT_SKEW_MS = 120_000;
+
+function buildSink(declared: SinkConfig, override: Sink | undefined): Sink | undefined {
+  if (override !== undefined) {
+    return override;
+  }
+  if (declared.type === "github") {
+    return createGithubSink(declared.repo === undefined ? {} : { repo: declared.repo });
+  }
+  return undefined;
+}
+
+function errorDetail(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message.split("\n")[0] ?? error.message;
+  }
+  return String(error);
+}
+
+function scopeLabel(scope: SecretScope): string {
+  return scope.kind === "repository"
+    ? "repository secrets"
+    : `environment secrets for ${scope.environment}`;
+}
+
+interface Expected {
+  readonly ref: Resolution["ref"];
+  readonly variable: string;
+  readonly scope: SecretScope;
+}
+
+async function sinkFindings(
+  project: Project,
+  environment: string,
+  override: Sink | undefined,
+): Promise<DoctorFinding[]> {
+  const declared = project.config.sinks?.[environment];
+  if (declared === undefined) {
+    return [];
+  }
+
+  const sink = buildSink(declared, override);
+  if (sink === undefined) {
+    return [
+      {
+        check: "sink-unreachable",
+        severity: "unknown",
+        label: "Sink",
+        subject: `sink type \`${declared.type}\` is not one penv knows`,
+        detail: "penv cannot check a sink it cannot build",
+      },
+    ];
+  }
+
+  try {
+    await sink.verify();
+  } catch (error) {
+    return [
+      {
+        check: "sink-unreachable",
+        severity: "unknown",
+        label: "Sink",
+        subject: `could not reach the ${declared.type} sink for ${environment}`,
+        detail: errorDetail(error),
+      },
+    ];
+  }
+
+  let repoSecrets: SinkSecret[];
+  let envSecrets: SinkSecret[];
+  try {
+    repoSecrets = await sink.list({ kind: "repository" });
+    envSecrets = await sink.list({ kind: "environment", environment });
+  } catch (error) {
+    return [
+      {
+        check: "sink-unreachable",
+        severity: "unknown",
+        label: "Sink",
+        subject: `could not list secrets in the ${declared.type} sink for ${environment}`,
+        detail: errorDetail(error),
+      },
+    ];
+  }
+
+  // The push view: what a push would place, `.local` dropped, so doctor compares
+  // the same set a push would send.
+  const resolutions = await resolveAll(
+    environment,
+    project.provider,
+    keySourceFor(project, environment),
+    true,
+  );
+  const expected: Expected[] = [];
+  for (const resolution of resolutions) {
+    const winner = resolution.winner;
+    if (winner === undefined) {
+      continue;
+    }
+    expected.push({
+      ref: resolution.ref,
+      variable: variableName(resolution.ref, project.config),
+      scope:
+        winner.file.scope.kind === "unscoped"
+          ? { kind: "repository" }
+          : { kind: "environment", environment },
+    });
+  }
+
+  // GitHub secret names are case-insensitive, and the pre-flight already refused
+  // any case collision, so comparing by uppercase is exact and safe.
+  const upper = (name: string): string => name.toUpperCase();
+  const repoByName = new Map(repoSecrets.map((secret) => [upper(secret.name), secret]));
+  const envByName = new Map(envSecrets.map((secret) => [upper(secret.name), secret]));
+  const destOf = (scope: SecretScope): Map<string, SinkSecret> =>
+    scope.kind === "repository" ? repoByName : envByName;
+
+  const nameDrift: DoctorFinding[] = [];
+  const expectedEnv = new Set<string>();
+  // Every variable this environment maps, at any scope. A repository secret is
+  // shared across all environments, so it is "declared" as long as *some*
+  // parameter produces its name — even one this environment resolves to an
+  // environment-scoped override. Judging a repository secret against only this
+  // environment's unscoped winners would flag another environment's default.
+  const allVariables = new Set<string>();
+  for (const item of expected) {
+    const key = upper(item.variable);
+    allVariables.add(key);
+    if (item.scope.kind === "environment") {
+      expectedEnv.add(key);
+    }
+    if (!destOf(item.scope).has(key)) {
+      nameDrift.push({
+        check: "sink-name-drift",
+        severity: "warning",
+        label: "Declared, not pushed",
+        subject: item.variable,
+        detail: `resolves for ${environment} but is absent from the ${scopeLabel(item.scope)}`,
+        remedy: `penv push --env ${environment}`,
+      });
+    }
+  }
+  for (const secret of repoSecrets) {
+    if (!allVariables.has(upper(secret.name))) {
+      nameDrift.push({
+        check: "sink-name-drift",
+        severity: "warning",
+        label: "In destination, not declared",
+        subject: secret.name,
+        detail: `a repository secret with no parameter penv pushes for ${environment}`,
+      });
+    }
+  }
+  for (const secret of envSecrets) {
+    if (!expectedEnv.has(upper(secret.name))) {
+      nameDrift.push({
+        check: "sink-name-drift",
+        severity: "warning",
+        label: "In destination, not declared",
+        subject: secret.name,
+        detail: `an environment secret with no parameter resolving for ${environment}`,
+      });
+    }
+  }
+
+  const manualEdits: DoctorFinding[] = [];
+  for (const item of expected) {
+    const secret = destOf(item.scope).get(upper(item.variable));
+    if (secret === undefined) {
+      continue;
+    }
+    const pushed = effectiveMeta(await project.provider.readMeta(item.ref), environment)[
+      LAST_PUSHED_KEY
+    ];
+    if (typeof pushed !== "string") {
+      continue;
+    }
+    const destTime = Date.parse(secret.updatedAt);
+    const pushTime = Date.parse(pushed);
+    // The tolerance absorbs the skew between penv's local clock and GitHub's
+    // server clock (and GitHub's whole-second truncation of `updated_at`), so a
+    // clean push does not read as an edit. A genuine UI edit lands minutes to
+    // days later, well outside it — this is a sensitive detector, not a proof.
+    if (Number.isNaN(destTime) || Number.isNaN(pushTime) || destTime <= pushTime + EDIT_SKEW_MS) {
+      continue;
+    }
+    manualEdits.push({
+      check: "sink-manual-edit",
+      severity: "warning",
+      label: "Edited outside penv",
+      subject: item.variable,
+      detail: `changed in the destination at ${secret.updatedAt}, after penv last pushed it`,
+    });
+  }
+
+  const findings: DoctorFinding[] = [];
+  findings.push(
+    ...(nameDrift.length > 0
+      ? nameDrift
+      : [
+          {
+            check: "sink-name-drift" as const,
+            severity: "pass" as const,
+            label: "Sink names",
+            subject: `every parameter resolving for ${environment} is present, and nothing undeclared is`,
+          },
+        ]),
+  );
+  findings.push(
+    ...(manualEdits.length > 0
+      ? manualEdits
+      : [
+          {
+            check: "sink-manual-edit" as const,
+            severity: "pass" as const,
+            label: "Sink hand-edits",
+            subject: `no secret has changed outside penv since its last push for ${environment}`,
+          },
+        ]),
+  );
+  findings.push({
+    check: "sink-value-drift",
+    severity: "unknown",
+    label: "Sink values",
+    subject: "cannot be read back from a write-only destination",
+    detail: "value drift between the tree and the destination is unknowable by design",
+  });
+  return findings;
+}
+
 export function renderDoctor(report: DoctorReport): string[] {
   const rows: Row[] = report.findings.map((finding) => ({
-    glyph: finding.severity === "pass" ? CHECK : WARN,
+    glyph: finding.severity === "pass" ? CHECK : finding.severity === "unknown" ? UNKNOWN : WARN,
     label: finding.label,
     ...(finding.subject === undefined ? {} : { subject: finding.subject }),
     ...(finding.detail === undefined ? {} : { detail: finding.detail }),
@@ -530,7 +806,7 @@ export function renderDoctor(report: DoctorReport): string[] {
 export const doctorCommand = defineCommand({
   meta: {
     name: "doctor",
-    description: "Report missing, weak, unused, fallback, and plaintext-secret issues",
+    description: "Report missing, weak, unused, fallback, plaintext-secret, and sink-drift issues",
   },
   args: {
     env: { type: "string", description: "The environment to report on" },

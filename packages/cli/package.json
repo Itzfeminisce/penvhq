@@ -23,6 +23,7 @@
   "dependencies": {
     "@penv/core": "workspace:*",
     "@penv/provider-filesystem": "workspace:*",
+    "@penv/sink-github": "workspace:*",
     "@penv/runtime": "workspace:*",
     "citty": "0.2.2",
     "jiti": "2.7.0"

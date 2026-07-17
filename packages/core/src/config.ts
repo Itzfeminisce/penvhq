@@ -21,6 +21,7 @@ import {
 import { isLegalEnvironmentName, validateEnvironmentNames } from "./grammar.js";
 import { validateKeys } from "./keys.js";
 import { validatePublicPrefixes, validateSchemaFile } from "./schema-file.js";
+import { validateSinks } from "./sinks.js";
 import type { PenvConfig } from "./types.js";
 
 const CONFIG_FILENAMES = ["penv.config.ts", "penv.config.js", "penv.config.mjs"] as const;
@@ -243,6 +244,7 @@ export function validateConfig(config: PenvConfig): PenvError[] {
   }
 
   errors.push(...validateKeys(config, declared));
+  errors.push(...validateSinks(config, declared));
   errors.push(...validateSchemaFile(config));
   errors.push(...validatePublicPrefixes(config));
 

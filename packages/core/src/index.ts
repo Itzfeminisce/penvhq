@@ -79,6 +79,7 @@ export {
   validatePublicPrefixes,
   validateSchemaFile,
 } from "./schema-file.js";
+export { validateSinks } from "./sinks.js";
 export type {
   DecryptFailure,
   DecryptReason,
@@ -96,6 +97,10 @@ export type {
   Resolution,
   ResolutionCandidate,
   Scope,
+  SecretScope,
+  Sink,
+  SinkConfig,
+  SinkSecret,
   ValueFile,
 } from "./types.js";
 export { assertNever, META_FORMATS, RESERVED_TOKENS } from "./types.js";

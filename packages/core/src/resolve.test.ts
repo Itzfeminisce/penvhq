@@ -647,3 +647,78 @@ describe("resolveAll", () => {
     expect(await resolveAll("production", fakeProvider({}), keys)).toEqual([]);
   });
 });
+
+/**
+ * A push resolves a real environment as CI would read it, dropping both `.local`
+ * scopes the way `test` does — but for `production`, not by pretending to be
+ * `test`. The skip is an explicit argument, not a fact derived from the name.
+ */
+describe("skipPersonal on a real environment", () => {
+  it("drops both local scopes from candidatesFor when asked", () => {
+    expect(candidatesFor(password, "production", true).map(formatValueFile)).toEqual([
+      "redis/password.production",
+      "redis/password.production.enc",
+      "redis/password",
+      "redis/password.enc",
+    ]);
+  });
+
+  it("keeps the local scopes by default for a real environment", () => {
+    expect(candidatesFor(password, "production").map(formatValueFile)).toContain(
+      "redis/password.production.local",
+    );
+  });
+
+  it("resolves past a .<env>.local winner when skipPersonal is set", async () => {
+    const provider = fakeProvider({
+      "redis/password.production.local": "prod-personal",
+      "redis/password.production": "prod-shared",
+      "redis/password": "from-default",
+    });
+
+    const resolution = await resolveParameter(password, "production", provider, keys, true);
+
+    expect(resolution.value).toBe("prod-shared");
+    expect(resolution.winner?.file.scope).toEqual({
+      kind: "environment",
+      environment: "production",
+    });
+  });
+
+  it("records the skipped personal candidates with the push reason", async () => {
+    const provider = fakeProvider({ "redis/password.production": "prod-shared" });
+
+    const resolution = await resolveParameter(password, "production", provider, keys, true);
+
+    const skipped = resolution.candidates.filter(
+      (candidate) => candidate.skippedReason === "local-skipped-in-push",
+    );
+    expect(skipped.map((candidate) => candidate.location)).toContain(
+      "redis/password.production.local",
+    );
+  });
+
+  it("still labels a test skip as local-skipped-in-test", async () => {
+    const provider = fakeProvider({ "redis/password.test": "for-test" });
+
+    const resolution = await resolveParameter(password, "test", provider, keys);
+
+    expect(
+      resolution.candidates.some(
+        (candidate) => candidate.skippedReason === "local-skipped-in-test",
+      ),
+    ).toBe(true);
+  });
+
+  it("drops the personal override for every parameter through resolveAll", async () => {
+    const provider = fakeProvider({
+      "redis/password.production.local": "prod-personal",
+      "redis/password.production": "prod-shared",
+      "api-url": "https://example.test",
+    });
+
+    const resolutions = await resolveAll("production", provider, keys, true);
+
+    expect(resolutions.map((r) => r.value)).toEqual(["https://example.test", "prod-shared"]);
+  });
+});

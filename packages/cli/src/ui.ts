@@ -11,6 +11,8 @@ import { PenvError } from "@penv/core";
 
 export const CHECK = "✓";
 export const WARN = "⚠";
+/** "I could not look" — a check that ran but could not reach a verdict. Never a pass. */
+export const UNKNOWN = "?";
 
 /** One reported line. `detail` is the last column and is never padded. */
 export interface Row {

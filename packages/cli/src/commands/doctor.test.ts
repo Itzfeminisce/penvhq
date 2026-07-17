@@ -694,6 +694,9 @@ describe("the report", () => {
     const root = makeProject({
       schema: "apiUrl: z.string()",
       tree: { "api-url.production": "https://api.example.com" },
+      // Declared so the browser-exposure check reaches a real `pass` rather than
+      // the `unknown` it now returns when it has no prefixes to check against.
+      config: { publicPrefixes: ["NEXT_PUBLIC_"] },
     });
 
     const report = await runDoctor({ cwd: root, environment: "production" });

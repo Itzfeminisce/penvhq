@@ -8,6 +8,7 @@
       "@penv/core": ["./packages/core/src/index.ts"],
       "@penv/runtime": ["./packages/runtime/src/index.ts"],
       "@penv/provider-filesystem": ["./packages/providers/filesystem/src/index.ts"],
+      "@penv/sink-github": ["./packages/sinks/github/src/index.ts"],
       "@penv/cli": ["./packages/cli/src/index.ts"]
     }
   },

@@ -163,7 +163,13 @@ describe("a secret with a key", () => {
     expect(stored).not.toContain("hunter2");
 
     const report = await runDoctor({ cwd: root, environment: "production" });
-    expect(report.findings.filter((finding) => finding.severity !== "pass")).toEqual([]);
+    // Nothing actionable: `unknown` ("could not look", e.g. no `publicPrefixes`
+    // declared) is not a problem, so it is excluded alongside `pass`.
+    expect(
+      report.findings.filter(
+        (finding) => finding.severity === "warning" || finding.severity === "failure",
+      ),
+    ).toEqual([]);
     expect(report.ok).toBe(true);
   });
 

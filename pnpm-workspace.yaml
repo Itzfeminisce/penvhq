@@ -1,6 +1,7 @@
 packages:
   - "packages/*"
   - "packages/providers/*"
+  - "packages/sinks/*"
 allowBuilds:
   # tsup's bundler. Needed to build every package.
   esbuild: true

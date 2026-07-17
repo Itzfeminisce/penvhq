@@ -68,18 +68,41 @@ function scopedPair(ref: ParameterRef, scope: Scope): ValueFile[] {
 }
 
 /**
- * Every value file that could supply this parameter, highest precedence first.
- * Both `.local` scopes are omitted entirely in `test`.
+ * Whether both `.local` scopes should be dropped for this environment.
+ *
+ * The default is `test`, which skips personal overrides so its runs reproduce.
+ * A push overrides it to `true` for a *real* environment: CI receives what CI
+ * would read, and a developer's personal override is not CI's business — the
+ * same scope-widening refusal `import` already makes. The skip is a decision the
+ * caller states, not a fact derived from the environment name, so a real
+ * environment can ask for it without pretending to be `test`.
  */
-export function candidatesFor(ref: ParameterRef, environment: string): ValueFile[] {
-  const skipPersonal = environment === TEST_ENVIRONMENT;
+function defaultSkipPersonal(environment: string): boolean {
+  return environment === TEST_ENVIRONMENT;
+}
+
+/** Why a `.local` scope was skipped, for the `--explain` breadcrumb. */
+function skipReason(environment: string): "local-skipped-in-test" | "local-skipped-in-push" {
+  return environment === TEST_ENVIRONMENT ? "local-skipped-in-test" : "local-skipped-in-push";
+}
+
+/**
+ * Every value file that could supply this parameter, highest precedence first.
+ * Both `.local` scopes are omitted entirely when `skipPersonal` — in `test` by
+ * default, or when a push asks for it on a real environment.
+ */
+export function candidatesFor(
+  ref: ParameterRef,
+  environment: string,
+  skipPersonal: boolean = defaultSkipPersonal(environment),
+): ValueFile[] {
   return cascadeScopes(environment)
     .filter((scope) => !(skipPersonal && isPersonalOverride(scope)))
     .flatMap((scope) => scopedPair(ref, scope));
 }
 
 /**
- * The `.local` scopes `test` skips, reported as present:false rather than
+ * The `.local` scopes a skip drops, reported as present:false rather than
  * omitted: fallback and skipping are never silent, so `--explain` must say a
  * personal override was passed over instead of leaving no trace of it.
  */
@@ -91,7 +114,7 @@ function skippedPersonalCandidates(ref: ParameterRef, environment: string): Reso
       file,
       location: formatValueFile(file),
       present: false,
-      skippedReason: "local-skipped-in-test",
+      skippedReason: skipReason(environment),
     }));
 }
 
@@ -113,12 +136,14 @@ export async function resolveParameter(
   environment: string,
   provider: Provider,
   keys: KeySource,
+  skipPersonal: boolean = defaultSkipPersonal(environment),
 ): Promise<Resolution> {
-  const files = candidatesFor(ref, environment);
+  const files = candidatesFor(ref, environment, skipPersonal);
   const values = await Promise.all(files.map((file) => provider.read(file)));
 
-  const candidates: ResolutionCandidate[] =
-    environment === TEST_ENVIRONMENT ? skippedPersonalCandidates(ref, environment) : [];
+  const candidates: ResolutionCandidate[] = skipPersonal
+    ? skippedPersonalCandidates(ref, environment)
+    : [];
 
   let winner: ResolutionCandidate | undefined;
   let value: string | undefined;
@@ -199,6 +224,7 @@ export async function resolveAll(
   environment: string,
   provider: Provider,
   keys: KeySource,
+  skipPersonal: boolean = defaultSkipPersonal(environment),
 ): Promise<Resolution[]> {
   const files = await provider.list();
 
@@ -212,7 +238,9 @@ export async function resolveAll(
   }
 
   const resolutions = await Promise.all(
-    [...refs.values()].map((ref) => resolveParameter(ref, environment, provider, keys)),
+    [...refs.values()].map((ref) =>
+      resolveParameter(ref, environment, provider, keys, skipPersonal),
+    ),
   );
   // Code-unit order, not locale order: generated output must be identical on every machine.
   return resolutions.sort((a, b) =>

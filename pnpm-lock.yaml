@@ -38,6 +38,9 @@ importers:
       '@penv/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@penv/sink-github':
+        specifier: workspace:*
+        version: link:../sinks/github
       citty:
         specifier: 0.2.2
         version: 0.2.2
@@ -103,6 +106,12 @@ importers:
       zod:
         specifier: 4.4.3
         version: 4.4.3
+
+  packages/sinks/github:
+    dependencies:
+      '@penv/core':
+        specifier: workspace:*
+        version: link:../../core
 
 packages:
 
