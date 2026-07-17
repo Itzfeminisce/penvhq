@@ -20,7 +20,15 @@
  * resolving the other environment afterwards.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PenvError } from "@penv/core";
@@ -660,3 +668,57 @@ describe("an env.ts the import kept", () => {
  * limit of the fixtures rather than of the checks — every check above runs on
  * the config in effect, whether it was found or just written.
  */
+
+/**
+ * The two halves of one scaffold must answer the same question the same way.
+ *
+ * `scaffold` takes its decisions with a default, so import compiled while
+ * quietly passing none — and wrote a config saying `schemaFile: "src/env.ts"`
+ * beside a schema it had just put in `.penv/env.ts`. The project then had a
+ * config pointing at a file that did not exist, and `penv validate` looked for
+ * it there forever. The optional parameter is what hid it from the compiler:
+ * nothing was missing, so nothing was reported.
+ */
+describe("the schema goes where the config says", () => {
+  it("scaffolds the schema at the path it wrote into the config", () => {
+    const root = makeProject({ dotenv: "API_KEY=abc\n", filename: ".env.production" });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "app", dependencies: { next: "16.0.0" } }),
+      "utf8",
+    );
+
+    importDotenv({ cwd: root, file: ".env.production" });
+
+    const config = readFileSync(join(root, "penv.config.ts"), "utf8");
+    expect(config).toContain('schemaFile: "src/env.ts"');
+    // The file the config names is the file that exists.
+    expect(existsSync(join(root, "src", "env.ts"))).toBe(true);
+    expect(existsSync(join(root, ".penv", "env.ts"))).toBe(false);
+  });
+
+  /** With no framework there is nothing to detect, so both halves say the default. */
+  it("keeps both halves on the default when nothing is detected", () => {
+    const root = makeProject({ dotenv: "API_KEY=abc\n", filename: ".env.production" });
+
+    importDotenv({ cwd: root, file: ".env.production" });
+
+    expect(readFileSync(join(root, "penv.config.ts"), "utf8")).not.toContain("schemaFile:");
+    expect(existsSync(join(root, ".penv", "env.ts"))).toBe(true);
+  });
+
+  /** An existing config is the declaration; import scaffolds to what it already says. */
+  it("scaffolds to the path an existing config declares", () => {
+    const root = makeProject({
+      dotenv: "API_KEY=abc\n",
+      filename: ".env.production",
+      config: { ...CONFIG, schemaFile: "src/lib/env.ts" },
+    });
+
+    importDotenv({ cwd: root, file: ".env.production" });
+
+    expect(existsSync(join(root, "src", "lib", "env.ts"))).toBe(true);
+    expect(existsSync(join(root, ".penv", "env.ts"))).toBe(false);
+  });
+});

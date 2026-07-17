@@ -41,13 +41,15 @@ import {
   ReservedTokenError,
   refFromVariable,
   roundTripsCleanly,
+  schemaFileOf,
   UnknownEnvironmentError,
   variableName,
 } from "@penv/core";
 import { defineCommand } from "citty";
+import { detectAlias } from "../detect.js";
 import { openProject } from "../project.js";
 import { CHECK, formatSteps, guard, type Step, WARN, write } from "../ui.js";
-import type { InitStep, SchemaField } from "./init.js";
+import type { InitDecisions, InitStep, SchemaField } from "./init.js";
 import { planInit, scaffold, writeConfigFile } from "./init.js";
 import type { ValidateResult } from "./validate.js";
 import { renderValidate, runValidate } from "./validate.js";
@@ -437,20 +439,49 @@ function environmentNamed(file: string, explicit: string | undefined): string | 
  * deployment — but here the user has named one, and a config that omitted it
  * would be penv writing a file that makes penv's own next step fail.
  */
-function configInEffect(cwd: string, environment: string | undefined): PenvConfig {
+interface Adoption {
+  readonly config: PenvConfig;
+  /**
+   * What the rest of the scaffold must write, and the reason this is returned
+   * rather than recomputed.
+   *
+   * `scaffold` takes `decisions` with a default, so a caller that forgot them
+   * compiled and quietly wrote `DEFAULT_DECISIONS` instead. Import forgot them:
+   * the config it wrote said `schemaFile: "src/env.ts"` while the schema it
+   * scaffolded a moment later went to `.penv/env.ts`, and the two disagreed for
+   * exactly as long as the project lived. The optional parameter is what hid it
+   * from the compiler; carrying the decisions is what stops the two halves of one
+   * scaffold answering the same question differently.
+   */
+  readonly decisions: InitDecisions;
+}
+
+/** The decisions a config already records. The alias is read from the files that resolve it. */
+function decisionsOf(config: PenvConfig, cwd: string): InitDecisions {
+  return {
+    environments: config.environments,
+    schemaFile: schemaFileOf(config),
+    publicPrefixes: config.publicPrefixes ?? [],
+    alias: detectAlias(cwd),
+  };
+}
+
+function configInEffect(cwd: string, environment: string | undefined): Adoption {
   const existing = findConfigFile(cwd);
   if (existing !== undefined) {
-    return loadConfigFrom(existing);
+    const config = loadConfigFrom(existing);
+    return { config, decisions: decisionsOf(config, cwd) };
   }
   // The same plan `penv init` would make without being asked anything — import
   // is a scaffold too, and two scaffolds that disagreed about where the schema
   // goes would make the answer depend on which command the user reached for.
   const planned = planInit(cwd).decisions;
-  writeConfigFile(cwd, {
+  const decisions: InitDecisions = {
     ...planned,
     environments: environment === undefined ? planned.environments : [environment],
-  });
-  return openProject(cwd).config;
+  };
+  writeConfigFile(cwd, decisions);
+  return { config: openProject(cwd).config, decisions };
 }
 
 /**
@@ -489,7 +520,7 @@ export function importDotenv(options: ImportOptions): ImportReport {
   }
 
   const parsed = parseDotenv(readFileSync(file, "utf8"));
-  const config = configInEffect(cwd, environmentNamed(file, options.environment));
+  const { config, decisions } = configInEffect(cwd, environmentNamed(file, options.environment));
   const source = displayPath(cwd, file);
 
   const named = scopeFromFilename(file, config);
@@ -521,7 +552,9 @@ export function importDotenv(options: ImportOptions): ImportReport {
   collisionsIn(refs, config);
 
   // Every check has passed, so from here the import runs to completion.
-  const steps = scaffold(cwd, draftFields(parsed.entries), true);
+  // The decisions the config was written from, not the defaults: the two halves
+  // of one scaffold must not disagree about where the schema lives.
+  const steps = scaffold(cwd, draftFields(parsed.entries), true, decisions);
   const project = openProject(cwd);
 
   for (const [index, entry] of parsed.entries.entries()) {
