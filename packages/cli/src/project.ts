@@ -84,6 +84,30 @@ export function localTree(project: Project): FilesystemProvider {
   return project.provider;
 }
 
+/**
+ * The environment's DECLARED source-of-truth provider — the backend that holds
+ * the truth, as opposed to `Project.provider`, which is always the local
+ * filesystem tree every command edits.
+ *
+ * `pull` and cross-provider `doctor` read here: they compare or copy against what
+ * the config says the environment's values live in. An environment with no
+ * `providers` entry has no separate source of truth, so this falls back to the
+ * local tree — the two coincide, and there is nothing to pull from elsewhere.
+ * `openProject` is untouched: the working copy stays filesystem regardless.
+ */
+export function sourceProviderFor(project: Project, environment: string): Provider {
+  const providerConfig = project.config.providers[environment];
+  if (providerConfig === undefined) {
+    return createProvider(LOCAL_TREE_TYPE, { root: project.penvDir, config: project.config });
+  }
+  return createProvider(providerConfig.type, {
+    root: project.penvDir,
+    config: project.config,
+    providerConfig,
+    environment,
+  });
+}
+
 /** The environment to act on: `--env`, then `PENV_ENV`, then `NODE_ENV`. */
 export function targetEnvironment(project: Project, explicit?: string): string {
   return resolveEnvironment(project.config, explicit);

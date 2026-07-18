@@ -4,11 +4,11 @@
  * refuses a type this build does not carry.
  *
  * The refusal must land at `openProject` — config-open time — not at whichever
- * command first reaches the provider. A config naming `vault` before any vault
- * build is installed should fail loudly and immediately, naming the environment,
- * rather than crash halfway through a write. And with only `filesystem`
- * registered, every existing project still opens, so the seam is invisible until
- * a second provider exists.
+ * command first reaches the provider. A config naming a provider no build carries
+ * — `consul` here, a type this build has never registered — should fail loudly
+ * and immediately, naming the environment, rather than crash halfway through a
+ * write. The registered set (`filesystem`, `vault`, `mock`) opens; anything
+ * outside it is refused at the seam.
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -49,9 +49,11 @@ afterEach(() => {
 });
 
 describe("the provider registry", () => {
-  it("registers filesystem and nothing that does not exist", () => {
+  it("registers the built-in providers and nothing that does not exist", () => {
     expect(isProviderRegistered("filesystem")).toBe(true);
-    expect(isProviderRegistered("vault")).toBe(false);
+    expect(isProviderRegistered("vault")).toBe(true);
+    expect(isProviderRegistered("mock")).toBe(true);
+    expect(isProviderRegistered("consul")).toBe(false);
   });
 
   it("builds the filesystem provider through the registry", () => {
@@ -66,7 +68,7 @@ describe("the provider registry", () => {
   it("refuses an unregistered type, naming what this build carries", () => {
     let thrown: unknown;
     try {
-      createProvider("vault", {
+      createProvider("consul", {
         root: FIXTURE_PARENT,
         config: { environments: [], providers: {} },
       });
@@ -76,8 +78,20 @@ describe("the provider registry", () => {
     expect(thrown).toBeInstanceOf(PenvError);
     const error = thrown as PenvError;
     expect(error.code).toBe("UNKNOWN_PROVIDER");
-    expect(error.message).toContain("vault");
+    expect(error.message).toContain("consul");
     expect(error.message).toContain("filesystem");
+  });
+
+  it("accepts a config naming the registered providers", () => {
+    expect(() =>
+      assertProvidersRegistered({
+        environments: ["development", "production"],
+        providers: {
+          development: { type: "mock" },
+          production: { type: "vault", path: "secret/app" },
+        },
+      }),
+    ).not.toThrow();
   });
 
   it("refuses a config whose provider type is unregistered, naming the environment", () => {
@@ -85,7 +99,7 @@ describe("the provider registry", () => {
     try {
       assertProvidersRegistered({
         environments: ["production"],
-        providers: { production: { type: "vault", path: "secret/app" } },
+        providers: { production: { type: "consul", path: "secret/app" } },
       });
     } catch (error) {
       thrown = error;
@@ -94,7 +108,7 @@ describe("the provider registry", () => {
     const error = thrown as PenvError;
     expect(error.code).toBe("UNKNOWN_PROVIDER");
     expect(error.message).toContain("production");
-    expect(error.message).toContain("vault");
+    expect(error.message).toContain("consul");
   });
 });
 
@@ -121,7 +135,7 @@ describe("openProject and the registry", () => {
       environments: ["development", "production"],
       providers: {
         development: { type: "filesystem" },
-        production: { type: "vault", path: "secret/app" },
+        production: { type: "consul", path: "secret/app" },
       },
     });
     expect(() => openProject(root)).toThrow(PenvError);

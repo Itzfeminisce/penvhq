@@ -74,6 +74,21 @@ export {
   variableName,
 } from "./names.js";
 export { candidatesFor, requireValue, resolveAll, resolveParameter } from "./resolve.js";
+export type { Rotation, RotationMechanism, RotationState } from "./rotation.js";
+export {
+  beginRotation,
+  completeRotation,
+  isOverdue,
+  isStuck,
+  LAST_ROTATED_KEY,
+  parseDuration,
+  ROTATING_SINCE_KEY,
+  ROTATION_MECHANISM_KEY,
+  ROTATION_POLICY_KEY,
+  ROTATION_STATE_KEY,
+  rotationOf,
+  tryParseDuration,
+} from "./rotation.js";
 export {
   DEFAULT_SCHEMA_FILE,
   isPublicVariable,

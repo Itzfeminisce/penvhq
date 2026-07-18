@@ -8,7 +8,7 @@
  * when you meant the default is a different file, so penv never picks for you.
  */
 
-import type { Scope, ValueFile } from "@penvhq/core";
+import type { ParameterRef, Provider, Scope, ValueFile } from "@penvhq/core";
 import { formatValueFile, isSecret, PenvError, parameterId, sealValue } from "@penvhq/core";
 import { defineCommand } from "citty";
 import type { Project } from "../project.js";
@@ -136,24 +136,51 @@ function sealFor(
   return sealValue(file, value, keySourceFor(project, environment), parameter, environment);
 }
 
+/** What {@link sealAwareWrite} was told to write, and to which store. */
+export interface SealAwareWriteOptions {
+  readonly project: Project;
+  /**
+   * The store the value lands in, and the meta whose policy governs it is read
+   * *from*. `set` passes the local tree; `rotate` passes it only when the
+   * environment's source of truth IS the local tree, so the seal-and-twin rule
+   * applies exactly where penv's envelope is penv's concern.
+   */
+  readonly provider: Provider;
+  readonly ref: ParameterRef;
+  readonly scope: Scope;
+  readonly value: string;
+  /** The environment whose meta block decides the policy, or `undefined` for the base block. */
+  readonly environment: string | undefined;
+}
+
+/** What {@link sealAwareWrite} did: the marker meta chose, and the file it wrote. */
+export interface SealAwareWriteResult {
+  /** Whether meta's policy sealed it. */
+  readonly encrypted: boolean;
+  /** The value file written, relative to `.penv/`. */
+  readonly location: string;
+}
+
 /**
- * Writes one value file, sealing it when meta says the parameter is a secret.
+ * Writes one value file into the local tree, sealing it when meta says the
+ * parameter is a secret, and removing the twin at that scope — the one correct
+ * physics for a store whose envelope penv owns.
  *
  * There is no `--encrypt` flag, deliberately. A flag would make the command line
  * the authority on what is secret, and meta is (invariant 14) — the `.enc` marker
  * is validated *against* the policy, so a marker chosen at the keyboard would
- * invert the direction the check runs in. The policy decides; `set` obeys.
+ * invert the direction the check runs in. The policy decides; the writer obeys.
+ *
+ * Both `set` and the local-tree branch of `rotate` go through here, so a rotated
+ * secret is sealed exactly as a `set` one is: the defect was `rotate` writing the
+ * live credential as cleartext into `.penv/` — where plaintext outranks `.enc` at
+ * the same scope, so it also shadowed any sealed copy already there.
  */
-export async function runSet(options: SetOptions): Promise<SetResult> {
-  const project = openProject(options.cwd);
-  const ref = refFromKey(options.key, project.config);
-
-  // An environment is a whitelist entry or nothing, so a scope naming one is
-  // checked before it becomes a filename — including under `--local`, where
-  // the environment is a filename segment too.
-  const scope = targetScope(project, options, options.key);
-  const environment = policyEnvironment(project, options);
-  const secret = isSecret(await project.provider.readMeta(ref), environment);
+export async function sealAwareWrite(
+  options: SealAwareWriteOptions,
+): Promise<SealAwareWriteResult> {
+  const { project, provider, ref, scope, value, environment } = options;
+  const secret = isSecret(await provider.readMeta(ref), environment);
 
   const file: ValueFile = {
     namespace: ref.namespace,
@@ -165,11 +192,9 @@ export async function runSet(options: SetOptions): Promise<SetResult> {
   // Sealed before anything is written, so a secret penv has no key for leaves
   // nothing behind. Writing the plaintext first and letting `doctor` report it
   // afterwards would put the secret on disk in order to complain about it.
-  const stored = secret
-    ? sealFor(project, file, options.value, parameterId(ref), environment)
-    : options.value;
+  const stored = secret ? sealFor(project, file, value, parameterId(ref), environment) : value;
 
-  await project.provider.write(file, stored);
+  await provider.write(file, stored);
 
   // The twin at this scope is removed, because one scope holds one value.
   //
@@ -181,9 +206,37 @@ export async function runSet(options: SetOptions): Promise<SetResult> {
   // plaintext underneath it: the value you set was not the value you got, and the
   // new secret was inert on disk. Written before the removal, so the value is
   // never in neither file.
-  await project.provider.remove({ ...file, encrypted: !secret });
+  await provider.remove({ ...file, encrypted: !secret });
 
-  return { parameter: options.key, location: formatValueFile(file), encrypted: secret };
+  return { encrypted: secret, location: formatValueFile(file) };
+}
+
+/**
+ * Writes one value file, sealing it when meta says the parameter is a secret.
+ *
+ * The scope is chosen from the flags, then the seal-and-twin write is the shared
+ * {@link sealAwareWrite}, against the local tree — the store `set` always edits.
+ */
+export async function runSet(options: SetOptions): Promise<SetResult> {
+  const project = openProject(options.cwd);
+  const ref = refFromKey(options.key, project.config);
+
+  // An environment is a whitelist entry or nothing, so a scope naming one is
+  // checked before it becomes a filename — including under `--local`, where
+  // the environment is a filename segment too.
+  const scope = targetScope(project, options, options.key);
+  const environment = policyEnvironment(project, options);
+
+  const { encrypted, location } = await sealAwareWrite({
+    project,
+    provider: project.provider,
+    ref,
+    scope,
+    value: options.value,
+    environment,
+  });
+
+  return { parameter: options.key, location, encrypted };
 }
 
 export function renderSet(result: SetResult): string[] {

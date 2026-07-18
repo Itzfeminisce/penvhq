@@ -13,9 +13,12 @@
  * here; nothing else in the CLI names an implementation.
  */
 
-import type { PenvConfig, Provider } from "@penvhq/core";
+import { resolve } from "node:path";
+import type { PenvConfig, Provider, ProviderConfig } from "@penvhq/core";
 import { PenvError } from "@penvhq/core";
 import { createFilesystemProvider } from "@penvhq/provider-filesystem";
+import { createMockProvider } from "@penvhq/provider-mock";
+import { createVaultProvider } from "@penvhq/provider-vault";
 
 /** What a factory needs to build a provider rooted at one project's `.penv`. */
 export interface ProviderContext {
@@ -26,6 +29,19 @@ export interface ProviderContext {
    * environment only if the config declares it — never inferred from the store.
    */
   readonly config: PenvConfig;
+  /**
+   * The one environment's own `providers.*` entry, when building its declared
+   * source of truth. Carries provider-side settings — a Vault base `path`, say —
+   * that the config authored, never inferred. The local-tree factory ignores it:
+   * the filesystem tree is `.penv/` whatever an environment declares.
+   */
+  readonly providerConfig?: ProviderConfig;
+  /**
+   * The environment this provider is the source of truth *for*, when that is what
+   * is being built. Unused by the filesystem tree, which is one store across
+   * every environment.
+   */
+  readonly environment?: string;
 }
 
 /** Turns a project's `.penv` context into a provider of one `type`. */
@@ -41,6 +57,8 @@ export const LOCAL_TREE_TYPE = "filesystem";
 
 const REGISTRY = new Map<string, ProviderFactory>([
   [LOCAL_TREE_TYPE, ({ root, config }) => createFilesystemProvider({ root, config })],
+  ["vault", ({ providerConfig }) => createVaultProvider({ path: providerConfig?.path ?? "penv" })],
+  ["mock", ({ root }) => createMockProvider({ storePath: resolve(root, ".penv-mock.json") })],
 ]);
 
 /** Whether a `providers.*.type` names a provider this build can construct. */
