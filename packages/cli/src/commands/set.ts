@@ -12,7 +12,14 @@ import type { ParameterRef, Provider, Scope, ValueFile } from "@penvhq/core";
 import { formatValueFile, isSecret, PenvError, parameterId, sealValue } from "@penvhq/core";
 import { defineCommand } from "citty";
 import type { Project } from "../project.js";
-import { keySourceFor, openProject, PENV_DIR, refFromKey, targetEnvironment } from "../project.js";
+import {
+  assertWritableKey,
+  keySourceFor,
+  openProject,
+  PENV_DIR,
+  refFromKey,
+  targetEnvironment,
+} from "../project.js";
 import { CHECK, formatRows, guard, write } from "../ui.js";
 
 export interface ScopeOptions {
@@ -219,6 +226,7 @@ export async function sealAwareWrite(
  */
 export async function runSet(options: SetOptions): Promise<SetResult> {
   const project = openProject(options.cwd);
+  assertWritableKey(options.key);
   const ref = refFromKey(options.key, project.config);
 
   // An environment is a whitelist entry or nothing, so a scope naming one is

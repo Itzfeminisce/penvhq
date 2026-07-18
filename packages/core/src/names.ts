@@ -74,6 +74,19 @@ function kebabSegment(segment: string): string {
 }
 
 /**
+ * Whether a segment is canonical — whether the transform reads it as-is. A
+ * segment is canonical exactly when {@link kebabSegment} leaves it unchanged, so
+ * `redis`, `database-url` and `database_url` all qualify (the transform touches
+ * none of them), while `databaseUrl`, `apiURL` and `API_KEY` do not, because
+ * kebabSegment would fold their capitals into a different name. Answered by the
+ * real transform rather than a parallel regex, so it cannot drift from what
+ * resolution does.
+ */
+export function isCanonicalSegment(segment: string): boolean {
+  return kebabSegment(segment) === segment;
+}
+
+/**
  * The parameter a schema key names — `["redis", "password"]` → `redis/password`.
  *
  * Unlike {@link refFromVariable} this may read a namespace, because a schema key
