@@ -1,6 +1,6 @@
 {
   "name": "@penvhq/provider-ssm",
-  "version": "0.0.0",
+  "version": "0.3.0",
   "description": "The AWS SSM Parameter Store penv provider — portability, generalized.",
   "license": "MIT",
   "type": "module",

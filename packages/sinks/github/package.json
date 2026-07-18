@@ -1,6 +1,6 @@
 {
   "name": "@penvhq/sink-github",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "The GitHub Actions Secrets sink — a write-only destination penv pushes to through the gh CLI.",
   "license": "MIT",
   "type": "module",
