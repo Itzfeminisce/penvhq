@@ -1,9 +1,9 @@
 # The provider contract
 
 This is the interface every penv provider satisfies, extracted and stated on its
-own so that the adapters still to come — AWS SSM and Kubernetes at
+own so that the adapters that followed — AWS SSM and Kubernetes at
 [v0.6](./Roadmap.md#v06--second-and-third-providers), a public SDK at
-[v1.0](./Roadmap.md#v10--stable-sdk) — build against a written contract rather than
+[v1.0](./Roadmap.md#v10--stable-sdk) — built against a written contract rather than
 against the filesystem provider's habits. The [RFC](./RFC.md) owns *why* these
 shapes are what they are; the [v0.5 plan](./v0.5-plan.md) owns *how* the Vault
 adapter was built to fit them; this file owns *what the contract is*, in one place,
@@ -11,8 +11,8 @@ as the thing those milestones are measured against.
 
 The contract is not prose. It is `runProviderContractSuite` in
 [`@penvhq/provider-contract`](../packages/providers/contract/src/contract.ts), a
-single behavioural suite that the filesystem provider, an in-memory fixture, and now
-Vault all pass **unchanged**. This document explains that suite; the suite is the
+single behavioural suite that the filesystem provider, an in-memory fixture, and the
+Vault, SSM, Kubernetes, and mock adapters all pass **unchanged**. This document explains that suite; the suite is the
 authority. Where the two ever disagree, the suite is right and this document has a
 bug.
 
@@ -428,7 +428,7 @@ export function runProviderContractSuite(
 A provider package points `makeProvider` at a fresh, empty instance that accepts the
 environments `development` and `production`, and the suite does the rest. The
 filesystem provider, the in-memory fixture that ships alongside the suite, and the
-Vault adapter all pass **the same suite, unchanged**. That identity is the portability
+Vault, SSM, Kubernetes, and mock adapters all pass **the same suite, unchanged**. That identity is the portability
 claim made concrete: "portable" means precisely "passes this suite without the suite
 knowing which provider it is running," and the suite is deliberately filesystem-free —
 no paths, no `node:fs`, no on-disk assumptions, no `list()` ordering — so that it can
@@ -442,8 +442,8 @@ one bend already found (retention is not portable) was taken this way, up front 
 purpose, before any adapter was written. The [v0.5 plan §3](./v0.5-plan.md#step-3--relocate-the-contract-suite-so-a-sibling-provider-can-consume-it)
 states the constraint in the same terms: "If Vault forces a change to the suite, that
 is a finding about the contract, surfaced and decided, not a quiet accommodation." The
-[v0.6 gate](./Roadmap.md#v06--second-and-third-providers) holds SSM and Kubernetes to
-the same line — they satisfy the existing contract unchanged, or a bend reopens v0.5.
+[v0.6 gate](./Roadmap.md#v06--second-and-third-providers) held SSM and Kubernetes to
+the same line — both satisfy the existing contract unchanged, and no bend was needed.
 
 The retention section runs only against providers that declare the capability, via
 `retainsPrevious`. A non-retaining provider is not failed for omitting `readPrevious`;
@@ -453,8 +453,8 @@ it is a provider of the general kind, and the suite treats it as one.
 
 ## For a future adapter
 
-If you are writing the SSM adapter, the Kubernetes adapter, or a provider against the
-v1.0 SDK, the whole job is:
+If you are writing a new provider — against the v1.0 SDK, or a backend beyond the
+shipped five — the whole job is:
 
 1. Implement the seven required methods as a translation between `@penvhq/core`'s
    types and your store, changing the types for nobody.
@@ -476,4 +476,9 @@ provider
 ([`packages/providers/filesystem/src/filesystem.ts`](../packages/providers/filesystem/src/filesystem.ts)),
 which is the ground truth, and the Vault provider
 ([`packages/providers/vault/src/vault.ts`](../packages/providers/vault/src/vault.ts)),
-which is the first network-backed adapter and the first `RetainingProvider`.
+which is the first network-backed adapter and the first `RetainingProvider`. The
+shipped SSM and Kubernetes providers
+([`packages/providers/ssm/src/ssm.ts`](../packages/providers/ssm/src/ssm.ts),
+[`packages/providers/kubernetes/src/kubernetes.ts`](../packages/providers/kubernetes/src/kubernetes.ts)) —
+a count-capped retaining backend and one that declares retention absent — and the
+mock provider read as further references alongside them.

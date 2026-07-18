@@ -45,7 +45,7 @@ That's the whole pitch. It's narrow on purpose.
 Already have a `.env`? Adoption is one command:
 
 ```bash
-npm install penv
+npm install @penvhq/penv
 npx penv import .env
 ```
 
@@ -74,7 +74,7 @@ env.redis.password;      // string | undefined (optional in your schema)
 ```ts
 // .penv/env.ts
 import { z } from "zod";
-import { load } from "penv";
+import { load } from "@penvhq/penv";
 
 export const schema = z.object({ /* your config shape */ });
 export const env = load(schema);   // typed z.infer<typeof schema>, validated at import
@@ -125,7 +125,7 @@ For what's *available when* — encryption, providers, rotation — see the [roa
 
 The highest-leverage contribution right now isn't code — it's signal. If you run a real secret manager and maintain the local↔production translation by hand, open an issue describing that pain. That's the demand question the roadmap can't answer from the inside.
 
-For code: the provider contract (roadmap v0.4) is the highest-risk, highest-value surface. Start there, or with a `doctor` check.
+For code: the provider contract (roadmap v0.5) is the highest-risk, highest-value surface. Start there, or with a `doctor` check.
 
 ## License
 
