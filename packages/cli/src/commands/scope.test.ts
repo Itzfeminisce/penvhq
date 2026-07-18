@@ -15,6 +15,7 @@ import { PenvError } from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { runGet } from "./get.js";
 import { runList } from "./list.js";
+import { runMove } from "./mv.js";
 import { runRemove } from "./remove.js";
 import { runSet, scopeFrom } from "./set.js";
 
@@ -288,6 +289,35 @@ describe("penv set with a padded --env", () => {
     ).rejects.toBeInstanceOf(PenvError);
     const listed = await runList({ cwd: root, environment: "production" });
     expect(listed.parameters).toEqual([]);
+  });
+});
+
+/**
+ * The lockout the write-path guard used to cause. A `dbHost.<env>` file is one
+ * the filename grammar admits but the transform never produces — a hand-written
+ * value, or one from before penv guarded creation. When the guard sat on the
+ * shared `refFromKey`, `get` and `mv` refused it too, so the only way out was to
+ * delete the file by hand. `get` must still read it, and `mv` must still rename
+ * it away, so these drive both against a file placed directly on disk.
+ */
+describe("an existing non-canonical value file stays gettable and renamable", () => {
+  it("reads it with penv get and renames it with penv mv", async () => {
+    const root = makeProject({ "dbHost.production": "existing" });
+
+    // Gettable: the read path addresses the file by its literal name.
+    await expect(runGet({ cwd: root, key: "dbHost", environment: "production" })).resolves.toBe(
+      "existing",
+    );
+
+    // Renamable: the move guards only the destination, so renaming AWAY from the
+    // non-canonical name succeeds and the file lands at the canonical address.
+    const result = await runMove({ cwd: root, from: "dbHost", to: "db-host" });
+
+    expect(result.files.map((file) => ({ from: file.from, to: file.to }))).toEqual([
+      { from: "dbHost.production", to: "db-host.production" },
+    ]);
+    expect(valueFile(root, "dbHost.production")).toBeUndefined();
+    expect(valueFile(root, "db-host.production")).toBe("existing");
   });
 });
 

@@ -281,6 +281,10 @@ redis/password   (file path)
 
 Override individual names in `penv.config.ts` when a deploy target expects something else. Overrides are collision-checked — two parameters mapping to the same generated variable fail `penv validate`, so the round-trip never silently loses a value.
 
+### Canonical parameter names
+
+Value files are lower-case and hyphenated. A camelCase schema key like `databaseUrl` maps to the file `database-url` and the generated variable `DATABASE_URL` — the file name is the canonical form, and the schema key and env var are the two ends of the transform above. `penv set` and the `penv mv` destination refuse a non-canonical key rather than write a file no other command would find, pointing you at the canonical lower-case hyphenated name. `penv fill` and `penv validate` derive these names from the schema for you, so the round-trip from a camelCase key never asks you to spell its kebab file yourself.
+
 ## Runtime API
 
 ```ts
@@ -561,6 +565,7 @@ Reporting is all it does. penv will not materialise a value file from a declarat
 | `penv push` | Send an environment's values to its sink, so CI can run. Resolves as CI would see it — both `.local` scopes are skipped. Needs `--env`. |
 | `penv get <key>` | Read a parameter. Supports `--env` and `--explain`. |
 | `penv set <key>` | Update a parameter and push to the active provider. |
+| `penv fill` | Prompt for each declared parameter the tree has no value for, deriving the value-file name from the schema so you never translate a camelCase key to its kebab file by hand. Supports `--env`. |
 | `penv mv <from> <to>` | Rename a parameter, every scope and its meta at once. |
 | `penv rotate <key>` | Rotate a parameter's value by the mechanism its meta declares; `--begin`/`--complete` open and close a dual-valid grace window. Supports `--env`. |
 | `penv remove <key>` | Delete a parameter. |

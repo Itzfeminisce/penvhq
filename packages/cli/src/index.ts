@@ -11,6 +11,7 @@ import { setKeychain } from "@penvhq/core";
 import { runMain as cittyRunMain, defineCommand } from "citty";
 import { doctorCommand } from "./commands/doctor.js";
 import { decryptCommand, encryptCommand } from "./commands/encrypt.js";
+import { fillCommand } from "./commands/fill.js";
 import { generateCommand } from "./commands/generate.js";
 import { getCommand } from "./commands/get.js";
 import { importCommand } from "./commands/import.js";
@@ -38,6 +39,7 @@ export const main = defineCommand({
     generate: generateCommand,
     get: getCommand,
     set: setCommand,
+    fill: fillCommand,
     mv: mvCommand,
     pull: pullCommand,
     push: pushCommand,
@@ -70,6 +72,8 @@ export type {
 export { renderDoctor, runDoctor } from "./commands/doctor.js";
 export type { ResealResult } from "./commands/encrypt.js";
 export { runDecrypt, runEncrypt } from "./commands/encrypt.js";
+export type { FillOptions, FillPrompt, FillResult } from "./commands/fill.js";
+export { renderFill, runFill } from "./commands/fill.js";
 export type { GenerateResult } from "./commands/generate.js";
 export { generateDotenv, runGenerate } from "./commands/generate.js";
 export type { GetExplanation } from "./commands/get.js";

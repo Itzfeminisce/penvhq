@@ -3,6 +3,7 @@ import {
   accessPath,
   checkNameCollisions,
   defaultVariableName,
+  isCanonicalSegment,
   refFromAccessPath,
   refFromVariable,
   roundTripsCleanly,
@@ -121,6 +122,22 @@ describe("refFromAccessPath", () => {
   it("refuses a path that names nothing", () => {
     expect(refFromAccessPath([])).toBeUndefined();
     expect(refFromAccessPath([""])).toBeUndefined();
+  });
+});
+
+describe("isCanonicalSegment", () => {
+  it("accepts a segment the transform reads as-is", () => {
+    expect(isCanonicalSegment("database-url")).toBe(true);
+    expect(isCanonicalSegment("redis")).toBe(true);
+    // snake_case carries no capital for kebabSegment to fold, so it is left
+    // unchanged — canonical, and exactly what refFromAccessPath accepts.
+    expect(isCanonicalSegment("database_url")).toBe(true);
+  });
+
+  it("rejects a segment whose capitals kebabSegment would fold", () => {
+    expect(isCanonicalSegment("databaseUrl")).toBe(false);
+    expect(isCanonicalSegment("API_KEY")).toBe(false);
+    expect(isCanonicalSegment("apiURL")).toBe(false);
   });
 });
 

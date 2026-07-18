@@ -34,7 +34,7 @@ import {
 } from "@penvhq/core";
 import { defineCommand } from "citty";
 import type { Project } from "../project.js";
-import { keySourceFor, openProject, PENV_DIR, refFromKey } from "../project.js";
+import { assertWritableKey, keySourceFor, openProject, PENV_DIR, refFromKey } from "../project.js";
 import { CHECK, formatRows, guard, type Row, write } from "../ui.js";
 
 export interface MoveOptions {
@@ -139,6 +139,7 @@ function filesOf(all: readonly ValueFile[], ref: ParameterRef): ValueFile[] {
 export async function runMove(options: MoveOptions): Promise<MoveResult> {
   const project = openProject(options.cwd);
   const from = refFromKey(options.from, project.config);
+  assertWritableKey(options.to);
   const to = refFromKey(options.to, project.config);
 
   if (parameterId(from) === parameterId(to)) {
