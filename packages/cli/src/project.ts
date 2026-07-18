@@ -26,7 +26,12 @@ import {
   resolveKeySource,
 } from "@penvhq/core";
 import { FilesystemProvider } from "@penvhq/provider-filesystem";
-import { assertProvidersRegistered, createProvider, LOCAL_TREE_TYPE } from "./registry.js";
+import {
+  assertProvidersRegistered,
+  createProvider,
+  createSourceProvider,
+  LOCAL_TREE_TYPE,
+} from "./registry.js";
 
 export const PENV_DIR = ".penv";
 
@@ -50,8 +55,9 @@ export function openProject(cwd: string): Project {
   const root = dirname(file);
   const penvDir = resolve(root, PENV_DIR);
   // Refuse a config naming a provider this build cannot construct here, at open
-  // time, rather than as a crash from whichever command first reached it.
-  assertProvidersRegistered(config);
+  // time, rather than as a crash from whichever command first reached it. Plugin
+  // types are resolved against the project (`root`), where the user installed them.
+  assertProvidersRegistered(config, root);
   return {
     root,
     configFile: file,
@@ -82,6 +88,33 @@ export function localTree(project: Project): FilesystemProvider {
     );
   }
   return project.provider;
+}
+
+/**
+ * The environment's DECLARED source-of-truth provider — the backend that holds
+ * the truth, as opposed to `Project.provider`, which is always the local
+ * filesystem tree every command edits.
+ *
+ * `pull` and cross-provider `doctor` read here: they compare or copy against what
+ * the config says the environment's values live in. An environment with no
+ * `providers` entry has no separate source of truth, so this falls back to the
+ * local tree — the two coincide, and there is nothing to pull from elsewhere.
+ * `openProject` is untouched: the working copy stays filesystem regardless.
+ */
+export async function sourceProviderFor(project: Project, environment: string): Promise<Provider> {
+  const providerConfig = project.config.providers[environment];
+  if (providerConfig === undefined) {
+    return createProvider(LOCAL_TREE_TYPE, { root: project.penvDir, config: project.config });
+  }
+  // A declared backend may be a plugin (`penv-cloud`, a third-party provider), so
+  // this goes through the async, plugin-aware path rather than the built-in-only
+  // `createProvider`. The local tree above is always a built-in and stays sync.
+  return createSourceProvider(providerConfig.type, {
+    root: project.penvDir,
+    config: project.config,
+    providerConfig,
+    environment,
+  });
 }
 
 /** The environment to act on: `--env`, then `PENV_ENV`, then `NODE_ENV`. */

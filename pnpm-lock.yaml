@@ -38,6 +38,12 @@ importers:
       '@penvhq/provider-filesystem':
         specifier: workspace:*
         version: link:../providers/filesystem
+      '@penvhq/provider-mock':
+        specifier: workspace:*
+        version: link:../providers/mock
+      '@penvhq/provider-vault':
+        specifier: workspace:*
+        version: link:../providers/vault
       '@penvhq/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -108,6 +114,26 @@ importers:
       zod:
         specifier: 4.4.3
         version: 4.4.3
+
+  packages/providers/mock:
+    dependencies:
+      '@penvhq/core':
+        specifier: workspace:*
+        version: link:../../core
+    devDependencies:
+      '@penvhq/provider-contract':
+        specifier: workspace:*
+        version: link:../contract
+
+  packages/providers/vault:
+    dependencies:
+      '@penvhq/core':
+        specifier: workspace:*
+        version: link:../../core
+    devDependencies:
+      '@penvhq/provider-contract':
+        specifier: workspace:*
+        version: link:../contract
 
   packages/runtime:
     dependencies:

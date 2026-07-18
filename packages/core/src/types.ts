@@ -94,6 +94,14 @@ export interface ProviderConfig {
   readonly type: string;
   /** The provider-side base path penv maps records onto. */
   readonly path?: string;
+  /**
+   * The package supplying a provider whose `type` is not one penv builds in. penv
+   * resolves an unregistered `type` by convention to `@penvhq/provider-<type>`;
+   * this overrides that when the implementation ships under a different name. It
+   * names a package the project has installed — penv imports it, never fetches it —
+   * and is ignored for a built-in `type`.
+   */
+  readonly module?: string;
 }
 
 /**

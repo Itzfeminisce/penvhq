@@ -18,8 +18,10 @@ import { initCommand } from "./commands/init.js";
 import { keyCommand } from "./commands/key.js";
 import { listCommand } from "./commands/list.js";
 import { mvCommand } from "./commands/mv.js";
+import { pullCommand } from "./commands/pull.js";
 import { pushCommand } from "./commands/push.js";
 import { removeCommand } from "./commands/remove.js";
+import { rotateCommand } from "./commands/rotate.js";
 import { setCommand } from "./commands/set.js";
 import { validateCommand } from "./commands/validate.js";
 import { watchCommand } from "./commands/watch.js";
@@ -37,7 +39,9 @@ export const main = defineCommand({
     get: getCommand,
     set: setCommand,
     mv: mvCommand,
+    pull: pullCommand,
     push: pushCommand,
+    rotate: rotateCommand,
     remove: removeCommand,
     list: listCommand,
     encrypt: encryptCommand,
@@ -78,10 +82,14 @@ export type { ListResult } from "./commands/list.js";
 export { runList } from "./commands/list.js";
 export type { MoveResult } from "./commands/mv.js";
 export { renderMove, runMove } from "./commands/mv.js";
+export type { PullOptions, PullResult } from "./commands/pull.js";
+export { renderPull, runPull } from "./commands/pull.js";
 export type { PushOptions, PushResult } from "./commands/push.js";
 export { LAST_PUSHED_KEY, renderPush, runPush } from "./commands/push.js";
 export type { RemoveResult } from "./commands/remove.js";
 export { runRemove } from "./commands/remove.js";
+export type { RotateOptions, RotatePhase, RotateResult } from "./commands/rotate.js";
+export { renderRotate, runRotate } from "./commands/rotate.js";
 export type { SetResult } from "./commands/set.js";
 export { runSet } from "./commands/set.js";
 export type { ValidateIssue, ValidateResult } from "./commands/validate.js";

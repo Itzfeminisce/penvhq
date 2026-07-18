@@ -8,6 +8,8 @@
       "@penvhq/core": ["./packages/core/src/index.ts"],
       "@penvhq/runtime": ["./packages/runtime/src/index.ts"],
       "@penvhq/provider-filesystem": ["./packages/providers/filesystem/src/index.ts"],
+      "@penvhq/provider-mock": ["./packages/providers/mock/src/index.ts"],
+      "@penvhq/provider-vault": ["./packages/providers/vault/src/index.ts"],
       "@penvhq/provider-contract": ["./packages/providers/contract/src/index.ts"],
       "@penvhq/sink-github": ["./packages/sinks/github/src/index.ts"],
       "@penvhq/cli": ["./packages/cli/src/index.ts"]

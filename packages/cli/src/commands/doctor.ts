@@ -22,6 +22,16 @@
  *   the authority on what is secret.
  * - **public-secret** — meta declares the parameter a secret and its generated
  *   variable carries a prefix the framework inlines into the client bundle.
+ * - **rotation-overdue** — meta declares a rotation policy and more than its
+ *   interval has elapsed since the last completed rotation. A clock no other
+ *   check keeps: `missing` sees an absent value, never a stale present one.
+ * - **rotation-stuck** — a `dual-valid` grace window opened and never closed. The
+ *   overdue clock's opposite: not a rotation that never ran, but one that started
+ *   and stalled with two credentials live at once.
+ * - **provider-value-drift** — the local tree and the environment's readable
+ *   source-of-truth provider hold different opaque values for the same address.
+ *   The one drift the write-only sink can never report, because a provider can be
+ *   read back and a sink cannot.
  *
  * Warnings are reported; failures are reported and exit non-zero.
  */
@@ -29,26 +39,36 @@
 import type {
   Meta,
   PenvConfig,
+  Provider,
   Resolution,
+  Scope,
   SecretScope,
   Sink,
   SinkConfig,
   SinkSecret,
+  ValueFile,
 } from "@penvhq/core";
 import {
   accessPath,
+  assertNever,
   effectiveMeta,
+  formatValueFile,
   isPublicVariable,
   isRequired,
   isSecret,
+  isStuck,
+  openValue,
   resolveAll,
+  rotationOf,
+  tryParseDuration,
   variableName,
 } from "@penvhq/core";
 import { createGithubSink } from "@penvhq/sink-github";
 import { defineCommand } from "citty";
 import type { z } from "zod";
 import type { Project } from "../project.js";
-import { keySourceFor, openProject, targetEnvironment } from "../project.js";
+import { keySourceFor, openProject, sourceProviderFor, targetEnvironment } from "../project.js";
+import { LOCAL_TREE_TYPE } from "../registry.js";
 import type { DriftReport } from "../schema.js";
 import { computeDrift, lookup, minLengthOf } from "../schema.js";
 import { CHECK, formatRows, guard, type Row, UNKNOWN, WARN, write } from "../ui.js";
@@ -73,6 +93,9 @@ export type DoctorCheck =
   | "plaintext-secret"
   | "public-secret"
   | "encryption"
+  | "rotation-overdue"
+  | "rotation-stuck"
+  | "provider-value-drift"
   | "provider"
   | "sink-unreachable"
   | "sink-name-drift"
@@ -101,7 +124,26 @@ export interface DoctorOptions {
   readonly environment?: string;
   /** Injected in tests: the sink to check against. Defaults to the one the config declares. */
   readonly sink?: Sink;
+  /**
+   * Injected in tests: the source-of-truth provider to compare the local tree
+   * against. Defaults to the one the config declares (`sourceProviderFor`).
+   * Mirrors `sink`, for the same reason — the drift checks stay driveable without
+   * a live backend.
+   */
+  readonly source?: Provider;
+  /** Injected in tests: the wall-clock reading the rotation clocks are read against. Defaults to now. */
+  readonly now?: string;
+  /** Injected in tests: how long a `dual-valid` window may stay open before it reads as stuck. Defaults to 24h. */
+  readonly stuckThresholdMs?: number;
 }
+
+/**
+ * How long a `dual-valid` grace window may stay open before `rotation-stuck`
+ * flags it. A day is generous for the overlap most rotations need — long enough
+ * that a healthy rotation completing within a deploy or two never trips it, short
+ * enough that a window left open for a week is caught while it still matters.
+ */
+const STUCK_THRESHOLD_MS = 86_400_000;
 
 interface Subject {
   readonly resolution: Resolution;
@@ -127,6 +169,11 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   const project = openProject(options.cwd);
   const environment = targetEnvironment(project, options.environment);
   const findings: DoctorFinding[] = [];
+  // The wall clock, read once and passed down — never read inside a check — so the
+  // rotation boundaries the roadmap names are testable without mocking time, the
+  // same discipline `rotation.ts` and `push.ts` keep.
+  const now = new Date(options.now ?? new Date().toISOString());
+  const stuckThresholdMs = options.stuckThresholdMs ?? STUCK_THRESHOLD_MS;
 
   const { schema, issues } = await loadSchema(project, environment);
   if (schema !== undefined) {
@@ -180,6 +227,20 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   findings.push(...plaintextSecretFindings(subjects, environment));
   findings.push(...publicSecretFindings(subjects, environment, project.config));
   findings.push(...encryptionFindings(subjects, environment));
+  // The rotation clocks read the environment's SOURCE provider, not `subjects`,
+  // whose meta is the local tree's. `penv rotate` writes `rotatingSince` /
+  // `state` / `lastRotated` to the source of truth (a `dual-valid` rotation
+  // REQUIRES a retaining backend, so its rotating-state meta is never in the
+  // local tree at all) — reading `subjects` here saw stale local meta and never
+  // fired for a backend-backed environment.
+  const rotation = await rotationSubjects(project, environment, subjects, options.source);
+  if (rotation.kind === "unreachable") {
+    findings.push(rotation.finding);
+  } else {
+    findings.push(...overdueFindings(rotation.subjects, environment, now));
+    findings.push(...stuckFindings(rotation.subjects, environment, now, stuckThresholdMs));
+  }
+  findings.push(...(await providerDriftFindings(project, environment, options.source)));
   findings.push(...(await sinkFindings(project, environment, options.sink)));
 
   findings.push({
@@ -775,6 +836,423 @@ async function sinkFindings(
     detail: "value drift between the tree and the destination is unknowable by design",
   });
   return findings;
+}
+
+/** A rough, human-facing span — the largest whole unit that fits. Never precise, and never claims to be. */
+function humanizeMs(ms: number): string {
+  const abs = Math.max(0, ms);
+  const day = 86_400_000;
+  const hour = 3_600_000;
+  const minute = 60_000;
+  const round = (value: number, unit: string): string => {
+    const n = Math.round(value);
+    return `${n} ${unit}${n === 1 ? "" : "s"}`;
+  };
+  if (abs >= day) return round(abs / day, "day");
+  if (abs >= hour) return round(abs / hour, "hour");
+  if (abs >= minute) return round(abs / minute, "minute");
+  return round(abs / 1000, "second");
+}
+
+/** The `<namespace>/<name>` path a `penv rotate` remedy pastes. */
+function refPathOf(ref: Resolution["ref"]): string {
+  return [...ref.namespace, ref.name].join("/");
+}
+
+/**
+ * The rotation clocks read the environment's source of truth, so this reads each
+ * parameter's meta from the SOURCE provider rather than the local tree.
+ *
+ * `penv rotate` writes rotation state (`rotatingSince` / `state` / `lastRotated`)
+ * to `sourceProviderFor(environment)` — a backend for a vault/mock env — and a
+ * `dual-valid` rotation cannot run without one, so a backend-backed env's
+ * rotating-state meta is NEVER in the local `.penv` tree. Reading `subjects`
+ * (whose meta is the local tree's) left the overdue/stuck checks reading stale
+ * local meta that never fired.
+ *
+ * When the source IS the local tree — the env declares no backend, or declares
+ * `filesystem` — the two coincide, so the metas already read for `subjects` are
+ * reused rather than round-tripping the identical files a second time. A backend
+ * is read once, wrapped in try/catch: an unreachable source yields a single
+ * `unknown` rotation finding, mirroring `sinkFindings`' tiering, because "the
+ * clock says overdue" and "penv could not read the clock" are opposite verdicts.
+ */
+type RotationSubjects =
+  | { readonly kind: "read"; readonly subjects: readonly Subject[] }
+  | { readonly kind: "unreachable"; readonly finding: DoctorFinding };
+
+async function rotationSubjects(
+  project: Project,
+  environment: string,
+  local: readonly Subject[],
+  override: Provider | undefined,
+): Promise<RotationSubjects> {
+  const providerConfig = project.config.providers[environment];
+  // No override and a local-tree source: the meta is the same meta `subjects`
+  // already hold, so reuse it and make no extra round-trips.
+  if (
+    override === undefined &&
+    (providerConfig === undefined || providerConfig.type === LOCAL_TREE_TYPE)
+  ) {
+    return { kind: "read", subjects: local };
+  }
+
+  const source = override ?? (await sourceProviderFor(project, environment));
+  try {
+    const subjects: Subject[] = await Promise.all(
+      local.map(async ({ resolution }) => ({
+        resolution,
+        meta: await source.readMeta(resolution.ref),
+      })),
+    );
+    return { kind: "read", subjects };
+  } catch (error) {
+    return {
+      kind: "unreachable",
+      finding: {
+        check: "rotation-overdue",
+        severity: "unknown",
+        label: "Rotation",
+        subject: `could not reach the ${providerConfig?.type ?? source.type} source of truth for ${environment}`,
+        detail: errorDetail(error),
+      },
+    };
+  }
+}
+
+/**
+ * A staleness clock no other check keeps: `missing` reports a value that is
+ * absent, and this reports one that is present and too old. The two are opposite
+ * failures — a value nobody set, and a value nobody has changed in longer than
+ * its own policy allows — and only meta's `rotationPolicy` plus `lastRotated`
+ * make the second visible at all.
+ *
+ * The policy is parsed ONCE, here, inside `tryParseDuration`. The old code called
+ * `isOverdue` (which parses via the throwing `parseDuration`) in this unguarded
+ * loop, then parsed a SECOND time for the `overdueBy` text — so a single policy
+ * `parseDuration` rejects (`1h30m`, `3 months`) threw straight out and aborted
+ * the entire doctor run through `guard()`, blinding every other check on one bad
+ * meta field. Now an unparseable policy is a warning on that one parameter and
+ * the sweep continues, and the single parsed interval feeds both the overdue
+ * decision and the message. A parameter with no policy, or one that has never
+ * rotated, is not on a clock and is silently not overdue.
+ */
+function overdueFindings(
+  subjects: readonly Subject[],
+  environment: string,
+  now: Date,
+): DoctorFinding[] {
+  const findings: DoctorFinding[] = [];
+  for (const { resolution, meta } of subjects) {
+    const { policy, lastRotated } = rotationOf(meta, environment);
+    // Not on a clock: no interval declared, or never rotated. Not late.
+    if (policy === undefined || lastRotated === null) {
+      continue;
+    }
+    // Parse once, non-throwing. A policy penv cannot read used to throw here and
+    // abort the whole run; now it is this parameter's own warning and nothing
+    // else is lost.
+    const interval = tryParseDuration(policy);
+    if (interval === undefined) {
+      findings.push({
+        check: "rotation-overdue",
+        severity: "warning",
+        label: "Rotation policy invalid",
+        subject: resolution.parameter,
+        detail: `rotationPolicy \`${policy}\` is not a duration penv can parse (e.g. \`90d\`, \`24h\`)`,
+      });
+      continue;
+    }
+    const last = Date.parse(lastRotated);
+    if (Number.isNaN(last)) {
+      continue;
+    }
+    // The same boundary `isOverdue` keeps: exactly at the interval is not yet
+    // overdue, strictly past it is. Reusing `interval` is what kills the second
+    // parse the old `overdueBy` line made.
+    const overdueBy = now.getTime() - last - interval;
+    if (overdueBy <= 0) {
+      continue;
+    }
+    findings.push({
+      check: "rotation-overdue",
+      severity: "warning",
+      label: "Rotation overdue",
+      subject: resolution.parameter,
+      detail: `overdue by ~${humanizeMs(overdueBy)}, policy ${policy}`,
+      remedy: `penv rotate ${refPathOf(resolution.ref)} --env ${environment}`,
+    });
+  }
+
+  if (findings.length > 0) {
+    return findings;
+  }
+  return [
+    {
+      check: "rotation-overdue",
+      severity: "pass",
+      label: "Rotation freshness",
+      subject: `no parameter is past its rotation policy for ${environment}`,
+    },
+  ];
+}
+
+/**
+ * The overdue clock's opposite: not a rotation that never ran, but one that
+ * started and stalled. A `dual-valid` window is meant to open, let readers move
+ * over, and close; a `rotatingSince` older than the threshold is a window that
+ * opened and never did.
+ *
+ * Gated to `dual-valid` entirely — `isStuck` refuses every other mechanism, and
+ * that refusal is the point. An `atomic-cutover` parameter overlaps only at the
+ * infra layer and holds no penv-layer grace window, so a long-lived
+ * `rotatingSince` on one is not stuck and must never be flagged; this check keeps
+ * that promise by asking `isStuck` and never re-deriving the mechanism itself.
+ */
+function stuckFindings(
+  subjects: readonly Subject[],
+  environment: string,
+  now: Date,
+  stuckThresholdMs: number,
+): DoctorFinding[] {
+  const findings: DoctorFinding[] = [];
+  for (const { resolution, meta } of subjects) {
+    if (!isStuck(meta, environment, now, stuckThresholdMs)) {
+      continue;
+    }
+    const { rotatingSince } = rotationOf(meta, environment);
+    // isStuck was true, so the window is open with a parseable clock; the guard is
+    // for the types, not a reachable path.
+    if (rotatingSince === null) {
+      continue;
+    }
+    const openFor = now.getTime() - Date.parse(rotatingSince);
+    findings.push({
+      check: "rotation-stuck",
+      severity: "warning",
+      label: "Rotation stuck",
+      subject: resolution.parameter,
+      detail: `dual-valid window open ~${humanizeMs(openFor)}, past the ${humanizeMs(stuckThresholdMs)} grace window`,
+      remedy: `penv rotate ${refPathOf(resolution.ref)} --complete --env ${environment}`,
+    });
+  }
+
+  if (findings.length > 0) {
+    return findings;
+  }
+  return [
+    {
+      check: "rotation-stuck",
+      severity: "pass",
+      label: "Rotation progress",
+      subject: `no dual-valid rotation has stayed open past its grace window for ${environment}`,
+    },
+  ];
+}
+
+/** One value file the drift check has read, kept with its raw stored string so a sealed local value can still be opened. */
+interface DriftEntry {
+  readonly file: ValueFile;
+  readonly stored: string;
+}
+
+/**
+ * The LOGICAL identity of a value file — namespace, name, and scope — with the
+ * `.enc` marker deliberately dropped.
+ *
+ * `formatValueFile` encodes `encrypted`, so keying by it split an encrypted-local
+ * value from its plaintext-source twin: the same logical parameter at the same
+ * scope read as two one-sided addresses, a perpetual false drift the byte compare
+ * never got to run. Encryption is a property of the local envelope, not of the
+ * address, so it must not be part of the key two stores are matched on. Mirrors
+ * the mock provider's `valueKey`, minus exactly that `encrypted` field.
+ */
+function driftKey(file: ValueFile): string {
+  return [file.namespace.join("/"), file.name, scopeKey(file.scope)].join(" ");
+}
+
+function scopeKey(scope: Scope): string {
+  switch (scope.kind) {
+    case "unscoped":
+      return "unscoped";
+    case "environment":
+      return `environment:${scope.environment}`;
+    case "local":
+      return "local";
+    case "environment-local":
+      return `environment-local:${scope.environment}`;
+    default:
+      return assertNever(scope, "scope");
+  }
+}
+
+/**
+ * The value files that have a source-of-truth twin to drift against: the pushable
+ * set for this environment — the unscoped default and this environment's own
+ * scope, and nothing else.
+ *
+ * The old check compared the ENTIRE local tree (`project.provider.list()` is
+ * every environment's files) against one env's source, so `doctor --env
+ * production` flooded "Only in the local tree" for every development/staging
+ * value. Both `.local` scopes are personal and never reach a backend; every other
+ * environment's scoped file is that environment's business, not this one's. The
+ * same filter is applied to both sides.
+ */
+function relevantToEnvironment(file: ValueFile, environment: string): boolean {
+  const scope = file.scope;
+  if (scope.kind === "unscoped") return true;
+  if (scope.kind === "environment") return scope.environment === environment;
+  // Both `.local` scopes, and every other environment's scope: not pushed here.
+  return false;
+}
+
+/**
+ * Reads a provider's value files relevant to this environment into a logical
+ * address → entry map, the raw stored strings kept unopened.
+ *
+ * Values are read in `list` order and mapped afterwards, so a same-address
+ * collision (a plaintext and a sealed file at one scope) resolves the same way on
+ * every machine rather than by Promise race. An address that `list` names but
+ * `read` returns absent — a concurrent prune — is dropped, nothing to compare.
+ */
+async function readRelevant(
+  provider: Provider,
+  environment: string,
+): Promise<Map<string, DriftEntry>> {
+  const files = (await provider.list()).filter((file) => relevantToEnvironment(file, environment));
+  const stored = await Promise.all(files.map((file) => provider.read(file)));
+  const entries = new Map<string, DriftEntry>();
+  for (const [index, file] of files.entries()) {
+    const value = stored[index];
+    if (value !== undefined) {
+      entries.set(driftKey(file), { file, stored: value });
+    }
+  }
+  return entries;
+}
+
+/**
+ * The one drift the sink can never report. `sink-value-drift` is permanently
+ * `unknown` because a write-only destination cannot be read back; a provider is
+ * the system of record precisely because it can, so here penv actually looks —
+ * comparing PLAINTEXT, value by value.
+ *
+ * Custody model: the source of truth holds verbatim plaintext (the way `pull` and
+ * `rotate` move it there), while the local tree may hold the value sealed. So a
+ * sealed local value is opened before the compare — an encrypted-local vs
+ * plaintext-source pair carrying the same secret is IN SYNC, not drift. A sealed
+ * value that cannot be opened (the key is gone) is `unknown` for that parameter,
+ * never a false disagreement: penv could not read one side, so it cannot say the
+ * two agree or differ.
+ *
+ * When the environment keeps its values in the local tree there is no second
+ * system of record, so this is a plain `pass` — "not applicable", never
+ * `unknown`: penv could look and there was one copy by design. An unreachable
+ * source *is* `unknown`, mirroring `sinkFindings`' try/catch tiering: a differing
+ * value and an unreachable store are opposite verdicts with opposite remedies.
+ */
+async function providerDriftFindings(
+  project: Project,
+  environment: string,
+  override: Provider | undefined,
+): Promise<DoctorFinding[]> {
+  const providerConfig = project.config.providers[environment];
+  if (providerConfig === undefined || providerConfig.type === LOCAL_TREE_TYPE) {
+    return [
+      {
+        check: "provider-value-drift",
+        severity: "pass",
+        label: "Provider values",
+        subject: `${environment} keeps its values in the local .penv tree, so there is no other source of truth to compare against`,
+      },
+    ];
+  }
+
+  const source = override ?? (await sourceProviderFor(project, environment));
+
+  let local: Map<string, DriftEntry>;
+  let remote: Map<string, DriftEntry>;
+  try {
+    local = await readRelevant(project.provider, environment);
+    remote = await readRelevant(source, environment);
+  } catch (error) {
+    return [
+      {
+        check: "provider-value-drift",
+        severity: "unknown",
+        label: "Provider values",
+        subject: `could not reach the ${providerConfig.type} provider for ${environment}`,
+        detail: errorDetail(error),
+      },
+    ];
+  }
+
+  const keys = keySourceFor(project, environment);
+  const findings: DoctorFinding[] = [];
+  // Sorted so the report is identical on every machine, the same rule `refsFrom` keeps.
+  const addresses = [...new Set([...local.keys(), ...remote.keys()])].sort();
+  for (const address of addresses) {
+    const here = local.get(address);
+    const there = remote.get(address);
+    if (here !== undefined && there !== undefined) {
+      // Open the local value if it is sealed; the source is verbatim plaintext.
+      // `openValue` returns a plaintext file unchanged, so this is unconditional.
+      const opened = openValue(here.file, here.stored, keys);
+      if (opened.kind !== "plaintext") {
+        // A sealed value penv cannot open: the key is gone. Not drift — penv
+        // could not read this side, so it cannot claim the two stores agree or
+        // differ. The opposite of a false failure.
+        findings.push({
+          check: "provider-value-drift",
+          severity: "unknown",
+          label: "Provider value unreadable",
+          subject: formatValueFile(here.file),
+          detail: `the local value is sealed and did not open, so it cannot be compared against the ${providerConfig.type} source of truth`,
+        });
+        continue;
+      }
+      // A plaintext comparison. Drift in the system of record is serious: the
+      // tree and the backend claim different truths for one address, and
+      // something deploys the wrong one.
+      if (opened.value !== there.stored) {
+        findings.push({
+          check: "provider-value-drift",
+          severity: "failure",
+          label: "Provider value drift",
+          subject: formatValueFile(here.file),
+          detail: `the local tree and the ${providerConfig.type} source of truth hold different values`,
+        });
+      }
+      continue;
+    }
+    const present = here ?? there;
+    // `present` is defined: the address is in the union, so at least one side has it.
+    if (present === undefined) {
+      continue;
+    }
+    findings.push({
+      check: "provider-value-drift",
+      severity: "warning",
+      label: here !== undefined ? "Only in the local tree" : "Only in the source",
+      subject: formatValueFile(present.file),
+      detail:
+        here !== undefined
+          ? `present locally, absent from the ${providerConfig.type} source of truth`
+          : `present in the ${providerConfig.type} source of truth, absent from the local tree`,
+    });
+  }
+
+  if (findings.length > 0) {
+    return findings;
+  }
+  return [
+    {
+      check: "provider-value-drift",
+      severity: "pass",
+      label: "Provider values",
+      subject: `every value matches the ${providerConfig.type} source of truth for ${environment}`,
+    },
+  ];
 }
 
 export function renderDoctor(report: DoctorReport): string[] {

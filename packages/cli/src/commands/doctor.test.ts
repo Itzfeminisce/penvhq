@@ -712,6 +712,9 @@ describe("the report", () => {
       "plaintext-secret",
       "public-secret",
       "encryption",
+      "rotation-overdue",
+      "rotation-stuck",
+      "provider-value-drift",
       "provider",
     ]);
     expect(report.findings.every((finding) => finding.severity === "pass")).toBe(true);
