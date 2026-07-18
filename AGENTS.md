@@ -18,9 +18,9 @@ penv stores each config parameter as its own file, in a tree that mirrors how Va
 
 ```bash
 pnpm install
-pnpm build          # tsc
+pnpm build          # recursive per-package build (tsup)
 pnpm test           # vitest
-pnpm typecheck      # tsc --noEmit
+pnpm typecheck      # tsc -p tsconfig.json
 pnpm lint           # biome
 ```
 
@@ -62,15 +62,15 @@ Run `pnpm typecheck && pnpm test && pnpm lint` before proposing a change as done
 
 17. **A ciphertext is bound to its address.** The AAD is the value file's full name, so a sealed value cannot be copied between scopes. Never widen the AAD to the parameter alone — that reopens the scope-widening leak at the one layer below the cascade.
 
-15. **`import` is one-directional.** After import, `.penv/` is source of truth; generated `.env` is an artifact. No silent reverse-sync of hand-edits.
+18. **`import` is one-directional.** After import, `.penv/` is source of truth; generated `.env` is an artifact. No silent reverse-sync of hand-edits.
 
-16. **penv does not reimplement provider ACLs.** Access control is proxied to Vault policies / IAM.
+19. **penv does not reimplement provider ACLs.** Access control is proxied to Vault policies / IAM.
 
-17. **Value files are gitignored; only structure/`env.ts`/meta/config are committed.** Never weaken this. A change that could commit a plaintext secret is a security regression regardless of tests.
+20. **Value files are gitignored; only structure/`env.ts`/meta/config are committed.** Never weaken this. A change that could commit a plaintext secret is a security regression regardless of tests.
 
-18. **`init` may default what it can observe; it must ask for what it cannot.** A fact about the codebase (the framework in `package.json`, whether `src/` exists) may be detected and proposed. A fact about the deployment — `environments` above all — may not: no file says whether a staging tier exists, and an invented environment accepts writes for infrastructure that does not. Unanswered means empty, and `CONFIG_ENVIRONMENTS_EMPTY` is written to be reached.
+21. **`init` may default what it can observe; it must ask for what it cannot.** A fact about the codebase (the framework in `package.json`, whether `src/` exists) may be detected and proposed. A fact about the deployment — `environments` above all — may not: no file says whether a staging tier exists, and an invented environment accepts writes for infrastructure that does not. Unanswered means empty, and `CONFIG_ENVIRONMENTS_EMPTY` is written to be reached.
 
-19. **Config records decisions, not identities.** There is no `framework` key and must not be one. Detection is an input to `init`; what gets written is the concrete facts it implied (`schemaFile`, `publicPrefixes`). A stored identity is one penv reinterprets on every run, so the meaning of a committed config could shift under the user when penv or the framework changes. Guess once, declare forever.
+22. **Config records decisions, not identities.** There is no `framework` key and must not be one. Detection is an input to `init`; what gets written is the concrete facts it implied (`schemaFile`, `publicPrefixes`). A stored identity is one penv reinterprets on every run, so the meaning of a committed config could shift under the user when penv or the framework changes. Guess once, declare forever.
 
 ## Provider-contract rule (roadmap-critical)
 
@@ -87,7 +87,7 @@ Run `pnpm typecheck && pnpm test && pnpm lint` before proposing a change as done
 ## Coding conventions
 
 - TypeScript strict. No `any` in exported surfaces. Prefer inferred types from Zod over hand-written duplicates — duplication is the drift penv opposes; practice it in the code too.
-- `import { env } from "@env"` is the blessed runtime path. Type-only consumers import `schema`, not `env`, to avoid triggering eager load. The `import "penv/config"` form is compat-only and carries an ESM ordering caveat.
+- `import { env } from "@env"` is the blessed runtime path. Type-only consumers import `schema`, not `env`, to avoid triggering eager load. The `import "@penvhq/penv/config"` form is compat-only and carries an ESM ordering caveat.
 - Every new `doctor` check needs a test that fires (true positive) *and* stays quiet when it should (no false positive). Stuck-rotation-vs-atomic-cutover is the canonical reason the negative test matters.
 
 ## Definition of done

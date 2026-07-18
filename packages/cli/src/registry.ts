@@ -23,7 +23,9 @@ import { pathToFileURL } from "node:url";
 import type { PenvConfig, Provider, ProviderConfig } from "@penvhq/core";
 import { PenvError } from "@penvhq/core";
 import { createFilesystemProvider } from "@penvhq/provider-filesystem";
+import { createKubernetesProvider } from "@penvhq/provider-kubernetes";
 import { createMockProvider } from "@penvhq/provider-mock";
+import { createSsmProvider } from "@penvhq/provider-ssm";
 import { createVaultProvider } from "@penvhq/provider-vault";
 
 /** What a factory needs to build a provider rooted at one project's `.penv`. */
@@ -70,6 +72,11 @@ export const LOCAL_TREE_TYPE = "filesystem";
 const REGISTRY = new Map<string, ProviderFactory>([
   [LOCAL_TREE_TYPE, ({ root, config }) => createFilesystemProvider({ root, config })],
   ["vault", ({ providerConfig }) => createVaultProvider({ path: providerConfig?.path ?? "penv" })],
+  ["ssm", ({ providerConfig }) => createSsmProvider({ path: providerConfig?.path ?? "penv" })],
+  [
+    "kubernetes",
+    ({ providerConfig }) => createKubernetesProvider(kubernetesOptions(providerConfig)),
+  ],
   ["mock", ({ root }) => createMockProvider({ storePath: resolve(root, ".penv-mock.json") })],
 ]);
 
@@ -235,6 +242,24 @@ function assertSatisfiesContract(provider: Provider, specifier: string): void {
       );
     }
   }
+}
+
+/**
+ * The Kubernetes provider's `providers.*.path` is `<namespace>/<secretName>`, or
+ * just `<secretName>` to use the current `kubectl` context's namespace. Splitting
+ * it here is what lets a Secret in a non-`default` namespace be reached from config
+ * — `ProviderConfig` has no namespace field of its own.
+ */
+function kubernetesOptions(providerConfig: ProviderConfig | undefined): {
+  namespace?: string;
+  secretName: string;
+} {
+  const path = providerConfig?.path ?? "penv";
+  const slash = path.indexOf("/");
+  if (slash === -1) return { secretName: path };
+  const namespace = path.slice(0, slash);
+  const secretName = path.slice(slash + 1) || "penv";
+  return namespace === "" ? { secretName } : { namespace, secretName };
 }
 
 function unknownProvider(type: string, environment?: string, specifier?: string): PenvError {

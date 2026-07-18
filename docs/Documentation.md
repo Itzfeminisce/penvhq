@@ -34,7 +34,7 @@ This is the reference for **penv as designed**: the complete system, every capab
 ## Install
 
 ```bash
-npm install penv        # or bun add penv / pnpm add penv
+npm install @penvhq/penv        # or bun add @penvhq/penv / pnpm add @penvhq/penv
 ```
 
 ## Quickstart
@@ -82,7 +82,7 @@ So the division is:
 
 ```ts
 // next.config.ts
-import "penv/config";       // loads .penv/ into process.env before the build reads it
+import "@penvhq/penv/config";       // loads .penv/ into process.env before the build reads it
 ```
 
 Next then inlines `NEXT_PUBLIC_*` from `.penv/` exactly as it would from a `.env`. Your parameter tree is the source of truth for both halves; only the delivery differs. `penv generate` is the other route, and the one deploy targets that read a `.env` file already expect.
@@ -98,7 +98,7 @@ There is no magic and nothing is read from disk at compile time. The types come 
 ```ts
 // .penv/env.ts
 import { z } from "zod";
-import { load } from "penv";
+import { load } from "@penvhq/penv";
 
 // The shape. Import this (or z.infer<typeof schema>) when you only need the
 // type — tests, tooling — so you don't trigger config loading.
@@ -295,7 +295,7 @@ Importing `env` loads configuration eagerly and validates it, so invalid configu
 A `process.env`-populating compatibility form exists for adopting penv without changing existing code:
 
 ```ts
-import "penv/config";              // populates process.env, dotenv-shaped
+import "@penvhq/penv/config";              // populates process.env, dotenv-shaped
 ```
 
 Like dotenv, this form must run before any module reads `process.env`. The typed `import { env } from "@env"` surface is the recommended path and has no ordering hazard.
@@ -305,7 +305,7 @@ Like dotenv, this form must run before any module reads `process.env`. The typed
 `penv.config.ts` lives at the project root, next to `package.json`.
 
 ```ts
-import { defineConfig } from "penv";
+import { defineConfig } from "@penvhq/penv";
 
 export default defineConfig({
   environments: ["development", "staging", "production"],
@@ -313,14 +313,14 @@ export default defineConfig({
   providers: {
     development: { type: "filesystem" },
     staging:     { type: "vault",   path: "secret/staging" },
-    production:  { type: "aws-ssm", path: "/prod/app" },
+    production:  { type: "ssm", path: "/prod/app" },
   },
 
   // Where values are pushed *to*. Separate from `providers` because a sink is
   // written and never read: penv cannot pull from one, and `doctor` cannot
   // compare values against one. An environment may have both.
   sinks: {
-    production: { type: "github-actions", repo: "acme/api" },
+    production: { type: "github", repo: "acme/api" },
   },
 
   keys: {
@@ -349,7 +349,7 @@ It will not invent `environments`. penv cannot observe your deployment topology 
 | `providers` | Per-environment backend — where an environment's values live, and what `penv pull` reads from. |
 | `providers.*.path` | The provider-side base path penv maps records onto. This explicit mapping is the translation penv owns on your behalf. |
 | `sinks` | Per-environment destination — where `penv push` sends values so something else can run. Never a provider: a sink is write-only, so penv cannot pull from it and `doctor` cannot compare values against it. An environment may declare both. |
-| `sinks.*.type` | `github-actions` today. A sink penv does not recognise is an error, never a fallback. |
+| `sinks.*.type` | `github`. A sink penv does not recognise is an error, never a fallback. |
 | `sinks.*.repo` | The destination repository, `owner/name`. penv reaches it through the `gh` CLI and holds no GitHub credential of its own. |
 | `schemaFile` | Where the module exporting the schema lives, relative to this config. Defaults to `.penv/env.ts`; `src/env.ts` is where most framework projects put it. The file is yours either way — penv scaffolds it once and never regenerates it. |
 | `publicPrefixes` | The variable prefixes your framework inlines into its client bundle — `["NEXT_PUBLIC_"]`, `["VITE_"]`. penv does not enforce them; the framework already does. Declaring them is what lets `doctor` catch a secret whose name makes the framework publish it. |
@@ -394,7 +394,7 @@ This is also how these providers are consumed in practice: the Vault Agent Injec
 
 The consequence, stated rather than hidden: a deploy must pull before it starts, or mount a tree something else has already materialised. penv does not fetch secrets for you at import time, and a tree that was never pulled resolves to whatever is on disk — which is what `penv doctor`'s drift check is for.
 
-Supported providers: Filesystem, HashiCorp Vault, AWS SSM Parameter Store, Kubernetes Secrets, Azure Key Vault, Google Secret Manager, Cloudflare Secrets. All satisfy one provider contract; the filesystem provider is the reference implementation of that contract.
+Supported providers: Filesystem, HashiCorp Vault, AWS SSM Parameter Store, and Kubernetes Secrets. All satisfy one provider contract; the filesystem provider is the reference implementation of that contract.
 
 **Not every provider retains a previous value, and that is declared rather than assumed.** Rotation's grace window reads the previous value back from the provider, which Vault (KV v2) and AWS SSM support natively and Kubernetes Secrets do not support at all — a Secret is a current-state object with no history to read. A provider therefore declares whether it retains. `dual-valid` rotation requires one that does; `atomic-cutover` does not; and `penv doctor` tells you which of those an environment can perform rather than letting you discover it mid-rotation. This is the same asymmetry the filesystem has always had, and Kubernetes sits on the same side of it.
 
@@ -412,7 +412,7 @@ GitHub Actions Secrets                   Vault
 (write-only — a sink)              (read-write — a provider)
 ```
 
-GitHub Actions Secrets is the first sink, and it is a sink because its API is write-only by construction: it creates, updates, deletes, and lists secret *names*, and no endpoint returns a value. That is not a limitation penv works around — it is what makes GitHub a different concept rather than a weak provider.
+GitHub Actions Secrets is a sink, and it is a sink because its API is write-only by construction: it creates, updates, deletes, and lists secret *names*, and no endpoint returns a value. That is not a limitation penv works around — it is what makes GitHub a different concept rather than a weak provider.
 
 For a team whose CI holds its secrets, the whole flow is local-first: declare a parameter, `penv push --env production`, and CI has it. No copy/paste, no browser tab, no `.env` pasted into a settings form at 2am. Your local tree is the source of truth and GitHub receives a copy — the same one-directional shape as `penv generate` writing a `.env`, pointed at CI instead of at disk.
 
@@ -529,9 +529,9 @@ $ penv doctor
 ⚠ Undecryptable value       redis/password.production.enc PENV_KEY_PROD is not set
 ⚠ Secret exposed to browser NEXT_PUBLIC_STRIPE_KEY meta declares this a secret, and the prefix makes it public
 ⚠ Edited outside penv       DATABASE_URL        github's copy is newer than penv's last push
-? Value drift (sink)        github-actions      not checked — secrets cannot be read back
+? Value drift (sink)        github              not checked — secrets cannot be read back
 ✓ Provider                  vault
-✓ Sink                      github-actions · acme/api
+✓ Sink                      github · acme/api
   penv set redis/password --env production
   penv set app/api-key --env production
 ```
@@ -561,12 +561,15 @@ Reporting is all it does. penv will not materialise a value file from a declarat
 | `penv push` | Send an environment's values to its sink, so CI can run. Resolves as CI would see it — both `.local` scopes are skipped. Needs `--env`. |
 | `penv get <key>` | Read a parameter. Supports `--env` and `--explain`. |
 | `penv set <key>` | Update a parameter and push to the active provider. |
+| `penv mv <from> <to>` | Rename a parameter, every scope and its meta at once. |
+| `penv rotate <key>` | Rotate a parameter's value by the mechanism its meta declares; `--begin`/`--complete` open and close a dual-valid grace window. Supports `--env`. |
 | `penv remove <key>` | Delete a parameter. |
 | `penv list` | List parameters. |
 | `penv encrypt` / `penv decrypt` | Encrypt / decrypt one parameter's value file at one scope. Both need `--env`. |
 | `penv key create` | Generate a key for an environment. penv prints it and stores nothing. |
 | `penv validate` | Validate configuration against the schema; non-zero on failure. |
 | `penv doctor` | Report drift, missing, unused, weak, fallback, plaintext-secret, encryption, and rotation issues. |
+| `penv watch` | Re-validate whenever `.penv/` or `penv.config.ts` changes. Supports `--env`. |
 
 `penv generate` writes plaintext, so it refuses an encrypted value unless you pass `--allow-decrypt`, and says how many secrets it unsealed when you do. The leaving guarantee below is why the flag exists rather than a refusal; the flag is why it is never a surprise.
 

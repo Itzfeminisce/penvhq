@@ -2,7 +2,7 @@
 
 This is the single source of truth for **what is available when.** The [documentation](./Documentation.md) describes finished penv as a complete system with no "not yet" language; this file is where every "not yet," every version number, and every availability caveat lives. If the docs describe a capability and you need to know whether you can use it today, this file answers that.
 
-The roadmap is sequenced by **which risk each milestone retires**, not by feature count. penv's design is settled; its two live risks are (1) whether provider portability holds against a real provider, and (2) whether the market wants this at all. Engineering effort is spent against the non-contestable advantage first, and everything that competes on t3-env's terrain is deferred until the provider story is proven.
+The roadmap is sequenced by **which risk each milestone retires**, not by feature count. penv's design is settled; the two live risks that sequenced it were (1) whether provider portability holds against a real provider — now proven across Vault, SSM, and Kubernetes — and (2) whether the market wants this at all, which remains open. Engineering effort is spent against the non-contestable advantage first, and everything that competes on t3-env's terrain is deferred until the provider story is proven.
 
 ---
 
@@ -35,7 +35,7 @@ Everything below describes the *finished* design (see docs). This table says whe
 | Public provider SDK / plugin ecosystem | (Future possibilities) | v1.0 |
 | IDE integration | (Future possibilities) | post-v1.0 |
 
-**On "amber" claims.** Two statements in the docs are true of the finished design but unproven until a specific milestone, and should be read as promises until then: *provider portability* (proven at v0.5, generalized at v0.6) and *encryption as a security rather than organizational improvement* (true once keys are provider-backed at v0.3). Until those milestones, treat them as roadmap items.
+**On "amber" claims.** Two statements in the docs were true of the finished design but unproven until a specific milestone: *provider portability* (proven at v0.5, generalized at v0.6) and *encryption as a security rather than organizational improvement* (true once keys are provider-backed at v0.3). All three milestones have now shipped, so both claims now hold in released code rather than standing as promises.
 
 **A sink is not a provider, and v0.4 does not move the portability claim.** The GitHub Actions sink ships first because it is what the teams trialling penv actually need, not because it advances the thesis. It cannot: GitHub Actions Secrets is write-only, so no adapter for it ever passes the provider contract, and shipping it leaves penv with exactly one provider — the filesystem — and nothing proven about switching between them. The portability gate is v0.5's, unchanged and untouched by v0.4. See the RFC's "A sink is a destination, not a provider" for why the two are separate concepts rather than one concept with a weak member.
 
@@ -185,7 +185,7 @@ What the sink genuinely does not do is prove portability — the thesis's other 
 
 Sequencing retires engineering risk. Two risks sit outside it and must be addressed in parallel, not by building:
 
-1. **Provider portability** stays a promise ("amber") until v0.5 proves it and v0.6 generalizes it. Everything the design implies is buildable from v0.1–v0.4; this is the one claim that is a promise until a real adapter proves it. v0.4 does not touch it, by construction — a sink cannot.
+1. **Provider portability** was a promise ("amber") until v0.5 proved it with the Vault adapter and v0.6 generalized it across SSM and Kubernetes — both now shipped, so it is a proven capability. Everything the design implies is buildable from v0.1–v0.4; this was the one claim that stayed a promise until a real adapter proved it. v0.4 did not touch it, by construction — a sink cannot.
 
 2. **Market demand** has its first signal, which is not the same as being measured. This section asked for five concrete yeses — teams who describe the local↔production seam pain unprompted and would change their source of truth to fix it, weighed against what they have already spent making their existing glue tolerable. That bar has not been cleared and should not be quietly retired: what exists is teams trialling penv, and a shared fact about them. The fact was enough to redirect the roadmap, because it was not the expected one — they keep their CI secrets in GitHub Actions, which is a sink and not a provider. So v0.4 was inserted to serve them and the provider proof moved to v0.5, rather than building a Vault adapter for a market that had not asked for one. Trialling is not yes. The five remain outstanding.
 
