@@ -1,5 +1,11 @@
 # @penvhq/provider-mock
 
+## 0.3.0
+
+### Patch Changes
+
+- @penvhq/core@0.3.0
+
 ## 0.2.0
 
 ### Patch Changes

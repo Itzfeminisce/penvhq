@@ -1,5 +1,12 @@
 # @penvhq/runtime
 
+## 0.3.0
+
+### Patch Changes
+
+- @penvhq/core@0.3.0
+- @penvhq/provider-filesystem@0.3.0
+
 ## 0.2.0
 
 ### Patch Changes
