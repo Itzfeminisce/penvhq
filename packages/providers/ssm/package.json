@@ -1,0 +1,29 @@
+{
+  "name": "@penvhq/provider-ssm",
+  "version": "0.0.0",
+  "description": "The AWS SSM Parameter Store penv provider — portability, generalized.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup"
+  },
+  "dependencies": {
+    "@penvhq/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@penvhq/provider-contract": "workspace:*"
+  }
+}

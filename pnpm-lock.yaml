@@ -38,9 +38,15 @@ importers:
       '@penvhq/provider-filesystem':
         specifier: workspace:*
         version: link:../providers/filesystem
+      '@penvhq/provider-kubernetes':
+        specifier: workspace:*
+        version: link:../providers/kubernetes
       '@penvhq/provider-mock':
         specifier: workspace:*
         version: link:../providers/mock
+      '@penvhq/provider-ssm':
+        specifier: workspace:*
+        version: link:../providers/ssm
       '@penvhq/provider-vault':
         specifier: workspace:*
         version: link:../providers/vault
@@ -115,7 +121,27 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
 
+  packages/providers/kubernetes:
+    dependencies:
+      '@penvhq/core':
+        specifier: workspace:*
+        version: link:../../core
+    devDependencies:
+      '@penvhq/provider-contract':
+        specifier: workspace:*
+        version: link:../contract
+
   packages/providers/mock:
+    dependencies:
+      '@penvhq/core':
+        specifier: workspace:*
+        version: link:../../core
+    devDependencies:
+      '@penvhq/provider-contract':
+        specifier: workspace:*
+        version: link:../contract
+
+  packages/providers/ssm:
     dependencies:
       '@penvhq/core':
         specifier: workspace:*
