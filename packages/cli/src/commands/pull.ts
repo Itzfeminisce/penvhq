@@ -54,7 +54,7 @@ export interface PullResult {
 export async function runPull(options: PullOptions): Promise<PullResult> {
   const project = openProject(options.cwd);
   const environment = targetEnvironment(project, options.environment);
-  const source = sourceProviderFor(project, environment);
+  const source = await sourceProviderFor(project, environment);
 
   // The local tree already IS the source of truth for an environment with no
   // declared backend: `sourceProviderFor` handed back the filesystem tree, and

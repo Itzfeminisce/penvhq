@@ -47,7 +47,7 @@ afterEach(() => {
 });
 
 describe("sourceProviderFor", () => {
-  it("builds the vault provider an environment declares as its source of truth", () => {
+  it("builds the vault provider an environment declares as its source of truth", async () => {
     const root = makeProject({
       environments: ["development", "production"],
       providers: {
@@ -57,12 +57,12 @@ describe("sourceProviderFor", () => {
     });
     const project = openProject(root);
 
-    const source = sourceProviderFor(project, "production");
+    const source = await sourceProviderFor(project, "production");
 
     expect(source.type).toBe("vault");
   });
 
-  it("builds the mock provider an environment declares", () => {
+  it("builds the mock provider an environment declares", async () => {
     const root = makeProject({
       environments: ["development", "production"],
       providers: {
@@ -72,12 +72,12 @@ describe("sourceProviderFor", () => {
     });
     const project = openProject(root);
 
-    const source = sourceProviderFor(project, "development");
+    const source = await sourceProviderFor(project, "development");
 
     expect(source.type).toBe("mock");
   });
 
-  it("falls back to the local filesystem tree when the environment declares no provider", () => {
+  it("falls back to the local filesystem tree when the environment declares no provider", async () => {
     const root = makeProject({
       environments: ["development", "production"],
       providers: {
@@ -86,7 +86,7 @@ describe("sourceProviderFor", () => {
     });
     const project = openProject(root);
 
-    const source = sourceProviderFor(project, "production");
+    const source = await sourceProviderFor(project, "production");
 
     expect(source.type).toBe("filesystem");
     expect(source).toBeInstanceOf(FilesystemProvider);

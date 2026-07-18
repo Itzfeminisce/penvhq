@@ -897,7 +897,7 @@ async function rotationSubjects(
     return { kind: "read", subjects: local };
   }
 
-  const source = override ?? sourceProviderFor(project, environment);
+  const source = override ?? (await sourceProviderFor(project, environment));
   try {
     const subjects: Subject[] = await Promise.all(
       local.map(async ({ resolution }) => ({
@@ -1168,7 +1168,7 @@ async function providerDriftFindings(
     ];
   }
 
-  const source = override ?? sourceProviderFor(project, environment);
+  const source = override ?? (await sourceProviderFor(project, environment));
 
   let local: Map<string, DriftEntry>;
   let remote: Map<string, DriftEntry>;

@@ -189,7 +189,7 @@ export async function runRotate(options: RotateOptions): Promise<RotateResult> {
   const project = openProject(options.cwd);
   const environment = targetEnvironment(project, options.environment);
   const ref = refFromKey(options.key, project.config);
-  const provider = sourceProviderFor(project, environment);
+  const provider = await sourceProviderFor(project, environment);
 
   const nowIso = options.now ?? new Date().toISOString();
   const before: Meta | undefined = await provider.readMeta(ref);
