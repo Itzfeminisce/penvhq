@@ -16,12 +16,14 @@ import type {
 import {
   candidatesFor,
   formatValueFile,
+  isCanonicalSegment,
   isReservedToken,
   loadConfig,
   openValue,
   PenvError,
   parameterId,
   ReservedTokenError,
+  refFromAccessPath,
   resolveEnvironment,
   resolveKeySource,
 } from "@penvhq/core";
@@ -155,6 +157,41 @@ export function refFromKey(key: string, config?: PenvConfig): ParameterRef {
     throw new ReservedTokenError("parameter", name, key);
   }
   return { namespace: segments.slice(0, -1), name };
+}
+
+/**
+ * Refuses a key that no canonical value file can back — the guard for the *write*
+ * path only, `set` and the destination of `mv`.
+ *
+ * It lives apart from {@link refFromKey} deliberately. Read, remove and the
+ * source of a rename address a file that already exists by its literal name, and
+ * the filename grammar admits a non-canonical name (`dbHost`, `database_url`)
+ * that the transform will never *produce* but a hand-written file or an older
+ * penv may already have on disk. Guarding those paths would leave such a tree
+ * repairable only by deleting the file by hand — the very lockout this function
+ * is here to avoid. So only creation is refused: a `set` or a rename *into* a
+ * name the schema cannot read is a file that would sit inert, and refusing it
+ * early names the file that actually backs the key instead of writing a dead one.
+ */
+export function assertWritableKey(key: string): void {
+  const segments = key.split(KEY_SEPARATOR).filter((s) => s.length > 0);
+  if (segments.length === 0 || segments.every((s) => isCanonicalSegment(s))) {
+    return;
+  }
+  const ref = refFromAccessPath(segments);
+  if (ref !== undefined) {
+    const suggestion = [...ref.namespace, ref.name].join("/");
+    throw new PenvError(
+      "PARAMETER_KEY_CASING",
+      `\`${key}\` is not a canonical parameter name`,
+      `Parameter files are lower-case and hyphenated. Did you mean \`${suggestion}\`? That is the file that backs the \`${key}\` key in your schema.`,
+    );
+  }
+  throw new PenvError(
+    "PARAMETER_KEY_UNREACHABLE",
+    `No value file can be named that reaches \`${key}\``,
+    "Parameter files are lower-case and hyphenated, and this key maps to no such file — a run of capitals like `apiURL` cannot be reached (use `api-url`, which the schema reads as `apiUrl`). Run `penv validate` or `penv fill` to see the names penv expects.",
+  );
 }
 
 /**

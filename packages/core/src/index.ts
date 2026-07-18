@@ -68,6 +68,7 @@ export {
   accessPath,
   checkNameCollisions,
   defaultVariableName,
+  isCanonicalSegment,
   refFromAccessPath,
   refFromVariable,
   roundTripsCleanly,

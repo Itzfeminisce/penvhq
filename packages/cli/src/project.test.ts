@@ -17,8 +17,10 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PenvError } from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { runExplain } from "./commands/get.js";
+import { assertWritableKey, refFromKey } from "./project.js";
 
 const FIXTURE_PARENT = fileURLToPath(new URL("../node_modules/.penv-test/", import.meta.url));
 
@@ -180,6 +182,76 @@ describe("--explain with an encrypted winner", () => {
 
     const local = explanation.candidates.find((c) => c.location === "api/key.test.local");
     expect(local?.skipped).toBe(SKIPPED_IN_TEST);
+  });
+});
+
+describe("assertWritableKey guards only the write path", () => {
+  /**
+   * A user who authored `databaseUrl` in the schema and typed `penv set
+   * databaseUrl` would otherwise create a `databaseurl` file the schema never
+   * reads. The write guard refuses the key and names the file that backs it.
+   */
+  it("refuses a camelCase key and names the kebab file that backs it", () => {
+    let thrown: unknown;
+    try {
+      assertWritableKey("databaseUrl");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(PenvError);
+    expect((thrown as PenvError).code).toBe("PARAMETER_KEY_CASING");
+    expect((thrown as PenvError).remedy).toContain("database-url");
+  });
+
+  it("names the backing file for each segment of a namespaced key", () => {
+    let thrown: unknown;
+    try {
+      assertWritableKey("redis/dbPassword");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(PenvError);
+    expect((thrown as PenvError).remedy).toContain("redis/db-password");
+  });
+
+  /** A run of capitals reaches no file at all, so there is nothing to suggest. */
+  it("refuses a key outside the transform's image as unreachable", () => {
+    let thrown: unknown;
+    try {
+      assertWritableKey("apiURL");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(PenvError);
+    expect((thrown as PenvError).code).toBe("PARAMETER_KEY_UNREACHABLE");
+  });
+
+  /**
+   * A canonical key is writable, and so is `database_url`: kebabSegment folds no
+   * capital in it, so `refFromAccessPath` accepts it and no dead file results.
+   */
+  it("permits a key the transform reads as-is", () => {
+    expect(() => assertWritableKey("database-url")).not.toThrow();
+    expect(() => assertWritableKey("redis/password")).not.toThrow();
+    expect(() => assertWritableKey("database_url")).not.toThrow();
+  });
+});
+
+describe("refFromKey addresses an existing file by its literal name", () => {
+  /**
+   * The read/remove path is unguarded: the filename grammar admits a
+   * non-canonical value file (a hand-written `database_url`, an `API_KEY` from an
+   * older penv), and `get`/`remove` must still address it by name rather than
+   * refuse it and leave the tree repairable only by hand.
+   */
+  it("returns the ref for a non-canonical name without throwing", () => {
+    expect(refFromKey("database_url")).toEqual({ namespace: [], name: "database_url" });
+    expect(refFromKey("API_KEY")).toEqual({ namespace: [], name: "API_KEY" });
+  });
+
+  it("leaves a canonical key untouched", () => {
+    expect(refFromKey("redis/password")).toEqual({ namespace: ["redis"], name: "password" });
+    expect(refFromKey("database-url")).toEqual({ namespace: [], name: "database-url" });
   });
 });
 
