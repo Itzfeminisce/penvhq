@@ -1,6 +1,6 @@
 {
   "name": "@penvhq/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "penv's filename grammar, value-resolution cascade, meta merge, and name mapping.",
   "license": "MIT",
   "type": "module",
