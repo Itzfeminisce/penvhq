@@ -1,5 +1,12 @@
 # @penvhq/provider-contract
 
+## 0.3.1
+
+### Patch Changes
+
+- Updated dependencies [e20f411]
+  - @penvhq/core@0.3.1
+
 ## 0.3.0
 
 ### Patch Changes
