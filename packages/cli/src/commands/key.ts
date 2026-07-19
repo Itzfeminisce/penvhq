@@ -21,7 +21,8 @@ import { KEY_BYTES, KEYCHAIN_SERVICE, PenvError } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { defaultKeychain } from "../keychain.js";
 import { openProject, targetEnvironment } from "../project.js";
-import { guard, write } from "../ui.js";
+import { out } from "../style.js";
+import { CHECK, guard, write } from "../ui.js";
 
 export interface KeyCreateOptions {
   readonly cwd: string;
@@ -104,20 +105,28 @@ export function runKeyCreate(options: KeyCreateOptions): KeyCreateResult {
 export function renderKeyCreate(result: KeyCreateResult): string[] {
   if (result.source === "keychain") {
     return [
-      `A new key for environment ${result.environment}, stored in your OS keychain as \`${result.id}\`.`,
+      `${out.green(CHECK)} A new key for environment ${result.environment}, stored in your OS keychain as \`${result.id}\`.`,
       "",
-      "penv kept no copy. Anything sealed under it is unreadable without your keychain, and running",
-      "`penv key create` again would replace it — so it lives in exactly one place, on this machine.",
+      out.dim(
+        "penv kept no copy. Anything sealed under it is unreadable without your keychain, and running",
+      ),
+      out.dim(
+        "`penv key create` again would replace it — so it lives in exactly one place, on this machine.",
+      ),
     ];
   }
   return [
-    `A new key for environment ${result.environment}. penv did not store it.`,
+    `${out.green(CHECK)} A new key for environment ${result.environment}. penv did not store it.`,
     "",
-    `  ${result.variable}=${result.key}`,
+    `  ${out.cyan(`${result.variable}=${result.key}`)}`,
     "",
-    "Export it where penv runs, and put it wherever this environment's secrets already live —",
-    "a KMS, your CI's secret store, a password manager. Anything sealed under it is unreadable",
-    "without it, and penv keeps no copy to fall back on.",
+    out.dim(
+      "Export it where penv runs, and put it wherever this environment's secrets already live —",
+    ),
+    out.dim(
+      "a KMS, your CI's secret store, a password manager. Anything sealed under it is unreadable",
+    ),
+    out.dim("without it, and penv keeps no copy to fall back on."),
   ];
 }
 

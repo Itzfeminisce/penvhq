@@ -138,6 +138,8 @@ interface Leaf {
   readonly path: readonly string[];
   /** False only when this key, and every namespace above it, must be present. */
   readonly absencePermitted: boolean | undefined;
+  /** The schema node as declared, wrappers intact, so a `.default()` stays readable. */
+  readonly node: unknown;
 }
 
 /**
@@ -165,7 +167,7 @@ function leaves(
   const shape = shapeOf(unwrap(node));
   if (shape === undefined) {
     if (path.length > 0) {
-      out.push({ path, absencePermitted });
+      out.push({ path, absencePermitted, node });
     }
     return;
   }
@@ -183,6 +185,48 @@ export function declaredLeaves(schema: z.ZodType): Leaf[] {
   const out: Leaf[] = [];
   leaves(schema, [], false, out);
   return out;
+}
+
+/**
+ * The declared default of a leaf, rendered for a prompt, when the leaf's wrapper
+ * chain carries one this module can read and display. Only a value a reader can
+ * take in at a glance is rendered — a string, a number, a boolean — because the
+ * display's one job is telling the user what Enter keeps, and `[object Object]`
+ * tells them nothing. A factory default is invoked to be shown; one that throws
+ * is a default this module cannot know, so no value is claimed (see the module
+ * note: no line is better than an untrue line).
+ */
+export function defaultValueOf(node: unknown): string | undefined {
+  let current = node;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const def = defOf(current);
+    if (def === undefined) {
+      return undefined;
+    }
+    if (typeOf(current) === "default" || typeOf(current) === "prefault") {
+      let value = def.defaultValue;
+      if (typeof value === "function") {
+        try {
+          value = (value as () => unknown)();
+        } catch {
+          return undefined;
+        }
+      }
+      if (typeof value === "string") {
+        return JSON.stringify(value);
+      }
+      if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+        return String(value);
+      }
+      return undefined;
+    }
+    const inner = def.innerType;
+    if (inner === undefined) {
+      return undefined;
+    }
+    current = inner;
+  }
+  return undefined;
 }
 
 /** A parameter `.penv/env.ts` declares that the tree has no value for. */
@@ -204,16 +248,37 @@ export interface UndeclaredDrift {
 }
 
 /**
+ * A parameter the schema declares but does not require — `.optional()`,
+ * `.default()`, and their kin — that the tree has no value for. Not drift in the
+ * verdict sense: absence here is a state the schema itself blessed, so `doctor`
+ * and `watch` say nothing about it. It is measured for `fill`, whose reader is
+ * deciding what to write, and for whom "the schema would take an override here"
+ * is exactly the kind of fact a silent skip would hide.
+ */
+export interface OptionalDrift {
+  /** The parameter id, or the dotted schema path when no filename could reach it. */
+  readonly subject: string;
+  /** Absent when no filename reaches this key — an override `penv set` cannot write. */
+  readonly ref?: ParameterRef;
+  /** What the schema falls back to, rendered for display, when it declares one this module can read. */
+  readonly defaultValue?: string;
+  /** The rename that must precede any override, for the key no filename reaches. */
+  readonly remedy: string;
+}
+
+/**
  * The distance between `.penv/env.ts` and the tree, in both directions. Named
  * `declared`/`undeclared` for the side that has it, not for a verdict: neither
- * direction is by itself an error, and only `validate` decides that.
+ * direction is by itself an error, and only `validate` decides that. `optional`
+ * is the deliberately verdict-free third list — see {@link OptionalDrift}.
  */
 export interface DriftReport {
   readonly declared: readonly DeclaredDrift[];
   readonly undeclared: readonly UndeclaredDrift[];
+  readonly optional: readonly OptionalDrift[];
 }
 
-export const EMPTY_DRIFT: DriftReport = { declared: [], undeclared: [] };
+export const EMPTY_DRIFT: DriftReport = { declared: [], undeclared: [], optional: [] };
 
 export interface DriftInput {
   readonly schema: z.ZodType;
@@ -238,28 +303,50 @@ export function computeDrift(input: DriftInput): DriftReport {
   const valued = new Set(resolutions.filter(hasValue).map((resolution) => resolution.parameter));
 
   const declared: DeclaredDrift[] = [];
+  const optional: OptionalDrift[] = [];
   for (const leaf of declaredLeaves(schema)) {
-    if (leaf.absencePermitted !== false) {
+    // "Cannot tell" produces no line at all — see the module note. Only a leaf
+    // the schema definitely requires is drift, and only one it definitely
+    // excuses is an optional override; a wrapper this module has never heard of
+    // is neither.
+    if (leaf.absencePermitted === undefined) {
       continue;
     }
     const path = leaf.path.join(".");
     const ref = refFromAccessPath(leaf.path);
+    const renameRemedy =
+      `Rename the \`${path}\` key in .penv/env.ts — a parameter name is lower-case, ` +
+      `hyphenated, and never a reserved token, so no value file reaches this key.`;
     // Declared, and permanently unreachable — two ways, one consequence. Either
     // the key is outside the name transform's image (`apiURL`), or it spells a
     // reserved token, which the filename grammar refuses as a parameter name
     // (invariant 11). No value file resolves to this key either way, so the
     // remedy is a rename: a `penv set` line here would be a command that errors.
+    // An optional key is not excused from this: the schema's default will serve,
+    // but the override the wrapper promises is one no file can ever deliver.
     if (ref === undefined || isReservedToken(ref.name, config)) {
-      declared.push({
-        subject: path,
-        remedy:
-          `Rename the \`${path}\` key in .penv/env.ts — a parameter name is lower-case, ` +
-          `hyphenated, and never a reserved token, so no value file reaches this key.`,
-        detail: "declared, no filename reaches it",
-      });
+      if (leaf.absencePermitted) {
+        optional.push({ subject: path, remedy: renameRemedy });
+      } else {
+        declared.push({
+          subject: path,
+          remedy: renameRemedy,
+          detail: "declared, no filename reaches it",
+        });
+      }
       continue;
     }
     if (valued.has(parameterId(ref))) {
+      continue;
+    }
+    if (leaf.absencePermitted) {
+      const defaultValue = defaultValueOf(leaf.node);
+      optional.push({
+        subject: parameterId(ref),
+        ref,
+        ...(defaultValue === undefined ? {} : { defaultValue }),
+        remedy: `penv set ${[...ref.namespace, ref.name].join("/")} --env ${environment}`,
+      });
       continue;
     }
     declared.push({
@@ -281,5 +368,5 @@ export function computeDrift(input: DriftInput): DriftReport {
     });
   }
 
-  return { declared, undeclared };
+  return { declared, undeclared, optional };
 }

@@ -31,7 +31,8 @@ import type { Project } from "../project.js";
 import { keySourceFor, openProject, refsFrom, targetEnvironment } from "../project.js";
 import type { DriftReport } from "../schema.js";
 import { computeDrift, EMPTY_DRIFT } from "../schema.js";
-import { CHECK, formatRows, guard, type Row, WARN, write } from "../ui.js";
+import { out } from "../style.js";
+import { CHECK, CROSS, formatRows, guard, type Row, tip, write } from "../ui.js";
 
 export type ValidateIssueKind = "config" | "reserved" | "collision" | "schema" | "undecryptable";
 
@@ -405,20 +406,30 @@ export function renderValidate(result: ValidateResult): string[] {
     ]);
   }
 
+  // Every issue validate reports is an error — that is the command's contract
+  // with CI — so the glyph is the failure cross, never the warning sign.
   const rows: Row[] = result.issues.map((issue) => ({
-    glyph: WARN,
+    glyph: CROSS,
     label: LABELS[issue.kind],
     subject: issue.subject,
     detail: issue.message,
   }));
 
   const lines = formatRows(rows);
-  const remedies = [...new Set(result.issues.map((issue) => issue.remedy))];
-  for (const remedy of remedies) {
-    if (remedy !== undefined) {
-      lines.push(`  ${remedy}`);
+  const remedies = [...new Set(result.issues.map((issue) => issue.remedy))].filter(
+    (remedy): remedy is string => remedy !== undefined,
+  );
+  if (remedies.length > 0) {
+    lines.push("");
+    for (const remedy of remedies) {
+      lines.push(tip(remedy));
     }
   }
+  const count = result.issues.length;
+  lines.push(
+    "",
+    `${out.red(CROSS)} ${count} ${count === 1 ? "issue" : "issues"} for environment ${result.environment}`,
+  );
   return lines;
 }
 

@@ -399,7 +399,7 @@ describe("drift", () => {
     const { results } = watching(root);
     await until(() => results.length >= 1);
 
-    expect(results[0]?.drift).toEqual({ declared: [], undeclared: [] });
+    expect(results[0]?.drift).toEqual({ declared: [], undeclared: [], optional: [] });
   });
 
   /** The loop is the point: an edit to the schema moves the distance it reports. */
@@ -438,7 +438,7 @@ describe("drift", () => {
 
 describe("renderDrift", () => {
   it("prints nothing at all when there is no drift", () => {
-    expect(renderDrift({ declared: [], undeclared: [] }, "production")).toEqual([]);
+    expect(renderDrift({ declared: [], undeclared: [], optional: [] }, "production")).toEqual([]);
   });
 
   it("prints both directions and the paste block", () => {
@@ -453,6 +453,7 @@ describe("renderDrift", () => {
           },
         ],
         undeclared: [{ ref: { namespace: [], name: "legacy" }, variable: "LEGACY_API_KEY" }],
+        optional: [],
       },
       "production",
     ).join("\n");

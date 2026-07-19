@@ -9,7 +9,8 @@ import type { Scope } from "@penvhq/core";
 import { assertNever, resolveAll, variableName } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { keySourceFor, openProject, PENV_DIR, targetEnvironment } from "../project.js";
-import { columns, guard, write } from "../ui.js";
+import { out } from "../style.js";
+import { columns, guard, heading, tip, write } from "../ui.js";
 
 export interface ListOptions {
   readonly cwd: string;
@@ -78,11 +79,38 @@ export async function runList(options: ListOptions): Promise<ListResult> {
   return { environment, parameters };
 }
 
+/**
+ * The scope column is the report, so it carries the verdict's color: green for a
+ * value written for this environment, yellow for the silent-drift shapes —
+ * `absent`, and a real environment riding the unscoped default (invariant 13:
+ * fallback is never silent) — and plain for everything else.
+ */
+function paintScope(entry: ListEntry): string {
+  if (entry.scope === "absent" || entry.viaUnscopedFallback) {
+    return out.yellow(entry.scope);
+  }
+  return out.green(entry.scope);
+}
+
 export function renderList(result: ListResult): string[] {
   if (result.parameters.length === 0) {
-    return [`No parameters in ${PENV_DIR}/ for environment ${result.environment}.`];
+    return [
+      `No parameters in ${PENV_DIR}/ for environment ${result.environment}.`,
+      tip(`penv set <key> --env ${result.environment}`),
+    ];
   }
-  return columns(result.parameters.map((entry) => [entry.parameter, entry.scope, entry.variable]));
+  const header = ["parameter", "scope", "variable", ""].map((cell) => out.dim(cell));
+  const rows = result.parameters.map((entry) => [
+    entry.parameter,
+    paintScope(entry),
+    entry.variable,
+    entry.encrypted ? out.dim("encrypted") : "",
+  ]);
+  return [
+    heading("penv list", `environment ${result.environment}`),
+    "",
+    ...columns([header, ...rows]),
+  ];
 }
 
 export const listCommand = defineCommand({

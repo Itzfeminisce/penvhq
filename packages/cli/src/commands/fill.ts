@@ -12,13 +12,20 @@
  * A value is never invented: a blank answer skips the parameter, because the
  * silent value reaching runtime is the failure penv exists to delete, and a
  * placeholder written here is exactly that value by a friendlier route.
+ *
+ * Optional parameters — `.optional()`, `.default()` — are asked too, after the
+ * required gaps, tagged so the reader knows an answer is an override and Enter
+ * keeps what the schema declared. Skipping them silently was the old behavior,
+ * and it hid a real choice: a schema default reaching runtime is legal, but the
+ * user who never heard the question never chose it.
  */
 
-import { createInterface } from "node:readline/promises";
 import { PenvError } from "@penvhq/core";
 import { defineCommand } from "citty";
+import { lineReader } from "../input.js";
 import { PENV_DIR } from "../project.js";
-import { CHECK, formatRows, guard, type Row, WARN, write } from "../ui.js";
+import { out } from "../style.js";
+import { CHECK, formatRows, guard, prompt as promptLine, type Row, WARN, write } from "../ui.js";
 import { runSet } from "./set.js";
 import { runValidate, type ValidateIssueKind } from "./validate.js";
 
@@ -43,6 +50,14 @@ export interface FillPrompt {
    * v1 does not, and the drift carries no meta, so this is `false` today.
    */
   readonly secret: boolean;
+  /**
+   * Whether the schema excuses absence — `.optional()`, `.default()`. An answer
+   * writes an override; a blank one leaves the schema's own behavior in place,
+   * which is a kept default rather than a lingering gap.
+   */
+  readonly optional: boolean;
+  /** What the schema falls back to, rendered for display, when it declares one penv can read. */
+  readonly defaultValue?: string;
   readonly description?: string;
 }
 
@@ -68,6 +83,12 @@ export interface FillResult {
   }>;
   /** The parameters a blank answer left for later — never written as an empty value. */
   readonly skipped: readonly string[];
+  /**
+   * The optional parameters a blank answer left to the schema. Not `skipped`:
+   * a skipped parameter is still a gap, and one of these is a decision — the
+   * schema's default (or declared absence) is the value, on purpose.
+   */
+  readonly kept: readonly string[];
   /**
    * The declared keys no filename reaches (`apiURL`, a reserved token). `fill`
    * cannot ask for a value it could never write, so it carries the rename remedy
@@ -118,6 +139,7 @@ export async function runFill(options: FillOptions): Promise<FillResult> {
 
   const written: Array<{ parameter: string; location: string; encrypted: boolean }> = [];
   const skipped: string[] = [];
+  const kept: string[] = [];
   const unreachable: Array<{ subject: string; remedy: string }> = [];
 
   for (const drift of validation.drift.declared) {
@@ -133,7 +155,12 @@ export async function runFill(options: FillOptions): Promise<FillResult> {
     const key = [...ref.namespace, ref.name].join("/");
     // `secret` stays false: the drift carries no meta, and echo-muting is not a
     // v1 feature. The write below still seals per meta — `runSet` reads it there.
-    const value = await options.ask({ parameter: key, environment, secret: false });
+    const value = await options.ask({
+      parameter: key,
+      environment,
+      secret: false,
+      optional: false,
+    });
     if (value === undefined || value === "") {
       skipped.push(drift.subject);
       continue;
@@ -147,18 +174,59 @@ export async function runFill(options: FillOptions): Promise<FillResult> {
     });
   }
 
-  return { environment, written, skipped, unreachable };
+  // The optional parameters, asked after the required gaps: the schema excuses
+  // their absence, so a blank answer here is a decision to keep the schema's
+  // default rather than a gap left open — `kept`, not `skipped`. Asking at all
+  // is the point: an override the user never hears about is one they can never
+  // choose, and the tag on the prompt is what keeps the choice a free one.
+  for (const item of validation.drift.optional) {
+    if (item.ref === undefined) {
+      unreachable.push({ subject: item.subject, remedy: item.remedy });
+      continue;
+    }
+
+    const ref = item.ref;
+    const key = [...ref.namespace, ref.name].join("/");
+    const value = await options.ask({
+      parameter: key,
+      environment,
+      secret: false,
+      optional: true,
+      ...(item.defaultValue === undefined ? {} : { defaultValue: item.defaultValue }),
+    });
+    if (value === undefined || value === "") {
+      kept.push(item.subject);
+      continue;
+    }
+
+    const result = await runSet({ cwd: options.cwd, key, value, environment });
+    written.push({
+      parameter: item.subject,
+      location: result.location,
+      encrypted: result.encrypted,
+    });
+  }
+
+  return { environment, written, skipped, kept, unreachable };
 }
 
 /** The one line that reports the run's shape when nothing else needs a row. */
 function summaryLine(result: FillResult): string {
   const filled = result.written.length;
-  if (filled === 0 && result.skipped.length === 0 && result.unreachable.length === 0) {
-    return `Nothing to fill for environment ${result.environment}: every declared parameter has a value`;
+  if (
+    filled === 0 &&
+    result.skipped.length === 0 &&
+    result.kept.length === 0 &&
+    result.unreachable.length === 0
+  ) {
+    return `${out.green(CHECK)} Nothing to fill for environment ${result.environment}: every declared parameter has a value`;
   }
   const parts = [`${filled} written`];
   if (result.skipped.length > 0) {
     parts.push(`${result.skipped.length} skipped`);
+  }
+  if (result.kept.length > 0) {
+    parts.push(`${result.kept.length} left to the schema's defaults`);
   }
   if (result.unreachable.length > 0) {
     parts.push(`${result.unreachable.length} unreachable`);
@@ -186,6 +254,26 @@ export function renderFill(result: FillResult): string[] {
   return lines;
 }
 
+/**
+ * The prompt's aside: what Enter does. For a required gap it skips; for an
+ * optional parameter it keeps whatever the schema declared — named exactly,
+ * with the default shown when penv can read it, because "optional" alone tells
+ * the user a choice exists without telling them what not choosing means. A
+ * default too long to sit inside a prompt is elided rather than allowed to push
+ * the cursor off the line.
+ */
+function contextFor(prompt: FillPrompt): string {
+  if (!prompt.optional) {
+    return `${prompt.environment}, Enter to skip`;
+  }
+  if (prompt.defaultValue === undefined) {
+    return `${prompt.environment} · optional, Enter leaves it unset`;
+  }
+  const shown =
+    prompt.defaultValue.length > 24 ? `${prompt.defaultValue.slice(0, 23)}…` : prompt.defaultValue;
+  return `${prompt.environment} · optional, Enter keeps ${shown}`;
+}
+
 export const fillCommand = defineCommand({
   meta: {
     name: "fill",
@@ -196,12 +284,13 @@ export const fillCommand = defineCommand({
   },
   run({ args }) {
     return guard(async () => {
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const reader = lineReader();
       // TODO: a `prompt.secret` answer still echoes — echo-muting is out of scope
       // for v1. The prompt shows the derived key, so a reader sees the file name
-      // their answer becomes.
-      const ask = (prompt: FillPrompt): Promise<string> =>
-        rl.question(`${prompt.parameter} (${prompt.environment}): `);
+      // their answer becomes. An empty answer skips — the prompt's aside says so,
+      // because the skip is a feature and an undiscoverable feature is not one.
+      const ask = (prompt: FillPrompt): Promise<string | undefined> =>
+        reader.ask(promptLine(prompt.parameter, contextFor(prompt)));
       try {
         write(
           renderFill(
@@ -213,7 +302,7 @@ export const fillCommand = defineCommand({
           ),
         );
       } finally {
-        rl.close();
+        reader.close();
       }
     });
   },

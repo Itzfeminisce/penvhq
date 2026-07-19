@@ -71,7 +71,19 @@ import { keySourceFor, openProject, sourceProviderFor, targetEnvironment } from 
 import { LOCAL_TREE_TYPE } from "../registry.js";
 import type { DriftReport } from "../schema.js";
 import { computeDrift, lookup, minLengthOf } from "../schema.js";
-import { CHECK, formatRows, guard, type Row, UNKNOWN, WARN, write } from "../ui.js";
+import { out } from "../style.js";
+import {
+  CHECK,
+  CROSS,
+  formatRows,
+  guard,
+  heading,
+  type Row,
+  tip,
+  UNKNOWN,
+  WARN,
+  write,
+} from "../ui.js";
 import { LAST_PUSHED_KEY } from "./push.js";
 import { loadSchema } from "./validate.js";
 
@@ -1255,15 +1267,43 @@ async function providerDriftFindings(
   ];
 }
 
+const GLYPHS: Readonly<Record<DoctorSeverity, string>> = {
+  pass: CHECK,
+  warning: WARN,
+  failure: CROSS,
+  unknown: UNKNOWN,
+};
+
+/** The one-line verdict under the table: every severity counted, colored to match its glyph. */
+function summarize(report: DoctorReport): string {
+  const counts = { pass: 0, warning: 0, failure: 0, unknown: 0 };
+  for (const finding of report.findings) {
+    counts[finding.severity] += 1;
+  }
+  const parts = [out.green(`${counts.pass} passed`)];
+  if (counts.warning > 0) {
+    parts.push(out.yellow(`${counts.warning} ${counts.warning === 1 ? "warning" : "warnings"}`));
+  }
+  if (counts.failure > 0) {
+    parts.push(out.red(`${counts.failure} ${counts.failure === 1 ? "failure" : "failures"}`));
+  }
+  if (counts.unknown > 0) {
+    parts.push(out.dim(`${counts.unknown} could not be checked`));
+  }
+  const verdict = report.ok ? out.green(CHECK) : out.red(CROSS);
+  return `${verdict} ${report.findings.length} checks: ${parts.join(out.dim(" · "))}`;
+}
+
 export function renderDoctor(report: DoctorReport): string[] {
   const rows: Row[] = report.findings.map((finding) => ({
-    glyph: finding.severity === "pass" ? CHECK : finding.severity === "unknown" ? UNKNOWN : WARN,
+    glyph: GLYPHS[finding.severity],
     label: finding.label,
     ...(finding.subject === undefined ? {} : { subject: finding.subject }),
     ...(finding.detail === undefined ? {} : { detail: finding.detail }),
   }));
 
-  const lines = formatRows(rows);
+  const lines = [heading("penv doctor", `environment ${report.environment}`), ""];
+  lines.push(...formatRows(rows));
   // Below the table rather than beside it: these are lines to paste, and a line
   // to paste has to survive being selected without a report's columns coming
   // with it. Deduped, because two parameters can share a remedy.
@@ -1275,9 +1315,13 @@ export function renderDoctor(report: DoctorReport): string[] {
         .filter((remedy): remedy is string => remedy !== undefined),
     ),
   ];
-  for (const remedy of remedies) {
-    lines.push(`  ${remedy}`);
+  if (remedies.length > 0) {
+    lines.push("");
+    for (const remedy of remedies) {
+      lines.push(tip(remedy));
+    }
   }
+  lines.push("", summarize(report));
   return lines;
 }
 
