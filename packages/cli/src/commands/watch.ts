@@ -32,7 +32,8 @@ import { schemaFileOf, schemaInsideTree } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { openProject } from "../project.js";
 import type { DriftReport } from "../schema.js";
-import { formatRows, guard, type Row, reportError, WARN, write } from "../ui.js";
+import { out } from "../style.js";
+import { formatRows, guard, type Row, reportError, tip, WARN, write } from "../ui.js";
 import type { ValidateResult } from "./validate.js";
 import { renderValidate, runValidate } from "./validate.js";
 
@@ -317,11 +318,11 @@ export function renderDrift(drift: DriftReport, environment: string): string[] {
     return [];
   }
 
-  const lines = ["", `Schema and tree differ for ${environment}:`, ...formatRows(rows)];
+  const lines = ["", out.bold(`Schema and tree differ for ${environment}:`), ...formatRows(rows)];
   // The paste block, exactly as `doctor` prints it — the reader who sees drift
   // here and drift there is looking at one report, not two that resemble each other.
   for (const remedy of new Set(drift.declared.map((item) => item.remedy))) {
-    lines.push(`  ${remedy}`);
+    lines.push(tip(remedy));
   }
   return lines;
 }
@@ -353,7 +354,7 @@ export const watchCommand = defineCommand({
           process.exitCode = previous;
         },
       });
-      write(["Watching .penv/ and penv.config.ts. Ctrl-C to stop."]);
+      write([`Watching .penv/ and penv.config.ts. ${out.dim("Ctrl-C to stop.")}`]);
       await new Promise<void>((resolve) => {
         process.once("SIGINT", () => {
           handle.close();

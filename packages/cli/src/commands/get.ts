@@ -9,7 +9,8 @@
 import { PenvError, requireValue, resolveParameter } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { keySourceFor, openProject, PENV_DIR, refFromKey, targetEnvironment } from "../project.js";
-import { columns, guard, write } from "../ui.js";
+import { out } from "../style.js";
+import { CROSS, columns, guard, write } from "../ui.js";
 
 export interface GetOptions {
   readonly cwd: string;
@@ -116,21 +117,22 @@ export function renderExplain(explanation: GetExplanation): string[] {
     explanation.location === undefined ? "nothing" : `${PENV_DIR}/${explanation.location}`;
 
   // Candidates stay in the order the cascade considered them: the answer to
-  // "why this file" is the list above it that did not win.
+  // "why this file" is the list above it that did not win. The winner is the one
+  // line in color; everything that lost is metadata and reads dimmed.
   const rows = explanation.candidates.map((candidate) => [
-    candidate.location,
+    candidate.wins ? candidate.location : out.dim(candidate.location),
     candidate.wins
-      ? "present, wins"
-      : candidate.present
-        ? (candidate.skipped ?? "present")
-        : (candidate.skipped ?? "absent"),
+      ? out.green("present, wins")
+      : out.dim(
+          candidate.present ? (candidate.skipped ?? "present") : (candidate.skipped ?? "absent"),
+        ),
   ]);
 
   return [
-    `${explanation.parameter} resolves to ${target} for environment ${explanation.environment}`,
+    `${out.bold(explanation.parameter)} resolves to ${target} for environment ${explanation.environment}`,
     ...(explanation.undecryptable === undefined
       ? []
-      : [`  penv cannot decrypt it: ${explanation.undecryptable}`]),
+      : [`  ${out.red(CROSS)} penv cannot decrypt it: ${explanation.undecryptable}`]),
     "",
     ...columns(rows).map((line) => `  ${line}`),
   ];

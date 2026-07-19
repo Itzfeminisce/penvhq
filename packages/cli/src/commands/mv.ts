@@ -35,7 +35,7 @@ import {
 import { defineCommand } from "citty";
 import type { Project } from "../project.js";
 import { assertWritableKey, keySourceFor, openProject, PENV_DIR, refFromKey } from "../project.js";
-import { CHECK, formatRows, guard, type Row, write } from "../ui.js";
+import { CHECK, formatRows, guard, type Row, tip, write } from "../ui.js";
 
 export interface MoveOptions {
   readonly cwd: string;
@@ -236,8 +236,10 @@ export function renderMove(result: MoveResult): string[] {
   // out from a failing `validate` — and it names the edit rather than the fault.
   lines.push(
     "",
-    `  .penv/env.ts still declares \`${result.schema.was}\`. Rename it to \`${result.schema.now}\`,`,
-    "  or `penv validate` will report the value as unused and the declaration as unset.",
+    tip(
+      `.penv/env.ts still declares \`${result.schema.was}\` — rename it to \`${result.schema.now}\`, ` +
+        "or `penv validate` will report the value as unused and the declaration as unset.",
+    ),
   );
   return lines;
 }

@@ -32,7 +32,8 @@ import {
 } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { DEFAULT_ALIAS, type Detected, detectAlias, detectFramework } from "../detect.js";
-import { CHECK, columns, formatSteps, guard, type Step, WARN, write } from "../ui.js";
+import { out } from "../style.js";
+import { CHECK, columns, formatSteps, guard, prompt, type Step, tip, WARN, write } from "../ui.js";
 
 export const SCHEMA_FILE = "env.ts";
 export const CONFIG_FILE = "penv.config.ts";
@@ -383,32 +384,39 @@ export interface PromptIo {
 export function renderPlan(plan: InitPlan): string[] {
   const rows: string[][] = [];
   rows.push([
-    "  environments",
-    plan.suggestedEnvironments.length === 0 ? "" : `[${plan.suggestedEnvironments.join(", ")}]`,
+    `  ${out.dim("environments")}`,
     plan.suggestedEnvironments.length === 0
-      ? "<- name them, or Enter to leave the whitelist empty"
-      : "<- from your .env files; edit, or Enter to accept",
+      ? ""
+      : out.cyan(`[${plan.suggestedEnvironments.join(", ")}]`),
+    out.dim(
+      plan.suggestedEnvironments.length === 0
+        ? "← name them, or Enter to leave the whitelist empty"
+        : "← from your .env files; edit, or Enter to accept",
+    ),
   ]);
   rows.push([
-    "  schemaFile",
+    `  ${out.dim("schemaFile")}`,
     plan.decisions.schemaFile,
-    plan.decisions.schemaFile === DEFAULT_SCHEMA_FILE ? "" : `(default: ${DEFAULT_SCHEMA_FILE})`,
+    plan.decisions.schemaFile === DEFAULT_SCHEMA_FILE
+      ? ""
+      : out.dim(`(default: ${DEFAULT_SCHEMA_FILE})`),
   ]);
   for (const prefix of plan.decisions.publicPrefixes) {
-    rows.push(["  publicPrefix", prefix, ""]);
+    rows.push([`  ${out.dim("publicPrefix")}`, prefix, ""]);
   }
 
-  const headline =
+  const headline = out.bold(
     plan.detected === undefined
       ? "No framework detected in package.json."
-      : `Detected ${plan.detected.name}.`;
+      : `Detected ${plan.detected.name}.`,
+  );
   return [headline, "", ...columns(rows), ""];
 }
 
 function environmentsHint(plan: InitPlan): string {
   return plan.suggestedEnvironments.length === 0
-    ? "environments (comma-separated, Enter for none) > "
-    : 'environments (Enter to accept, "none" for an empty whitelist) > ';
+    ? prompt("environments", "comma-separated, Enter for none")
+    : prompt("environments", 'Enter to accept, "none" for an empty whitelist');
 }
 
 /**
@@ -446,7 +454,7 @@ export async function promptForDecisions(
     io.write("");
   }
 
-  const proceed = (await io.ask("Proceed? [Y/n] ")).trim().toLowerCase();
+  const proceed = (await io.ask(prompt("Proceed?", "Y/n"))).trim().toLowerCase();
   if (proceed.length > 0 && proceed !== "y" && proceed !== "yes") {
     return undefined;
   }
@@ -1026,7 +1034,8 @@ export function renderInit(result: InitResult): string[] {
   return [
     ...formatSteps(steps),
     "",
-    `Done. Declare your parameters in ${result.decisions.schemaFile}, then \`penv set <key>\`.`,
+    `${out.green(CHECK)} ${out.bold("Done.")} Declare your parameters in ${result.decisions.schemaFile}, then:`,
+    tip(out.cyan("penv set <key>")),
     ...(result.decisions.environments.length === 0
       ? [
           `Then declare your environments in ${CONFIG_FILE}: penv leaves the whitelist empty ` +

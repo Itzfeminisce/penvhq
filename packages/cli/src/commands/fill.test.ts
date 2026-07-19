@@ -291,6 +291,110 @@ describe("penv fill", () => {
   });
 
   /**
+   * A `.default()` parameter used to be skipped without a word — validation
+   * tolerates its absence, so it never reached the prompt loop. But an override
+   * the user never hears about is one they can never choose: `fill` now asks,
+   * tagged optional and carrying the rendered default, and an answer writes an
+   * override through the same `runSet` every other answer takes.
+   */
+  it("prompts for a defaulted parameter, tagged optional, and writes an answer as an override", async () => {
+    const root = makeProject({ schema: 'logLevel: z.string().default("info")' });
+    const { ask, prompted } = scriptedAsk({ "log-level": "debug" });
+
+    const result = await runFill({ cwd: root, environment: "production", ask });
+
+    expect(prompted).toHaveLength(1);
+    expect(prompted[0]?.parameter).toBe("log-level");
+    expect(prompted[0]?.optional).toBe(true);
+    expect(prompted[0]?.defaultValue).toBe('"info"');
+    expect(result.written).toEqual([
+      { parameter: "log-level", location: "log-level.production", encrypted: false },
+    ]);
+    await expect(runGet({ cwd: root, key: "log-level", environment: "production" })).resolves.toBe(
+      "debug",
+    );
+  });
+
+  /**
+   * Enter on an optional prompt is a decision, not a gap: the schema's default
+   * is the value, on purpose, so nothing is written and the parameter lands in
+   * `kept` — never in `skipped`, whose entries are still work to do.
+   */
+  it("keeps the schema default on a blank answer rather than writing it", async () => {
+    const root = makeProject({ schema: 'logLevel: z.string().default("info")' });
+    const { ask } = scriptedAsk({ "log-level": "" });
+
+    const result = await runFill({ cwd: root, environment: "production", ask });
+
+    expect(result.written).toEqual([]);
+    expect(result.skipped).toEqual([]);
+    expect(result.kept).toEqual(["log-level"]);
+    // The default lives in the schema, never on disk: no file was invented.
+    await expect(
+      runGet({ cwd: root, key: "log-level", environment: "production" }),
+    ).rejects.toBeInstanceOf(PenvError);
+  });
+
+  /** `.optional()` with no default is still a choosable override — just with nothing to show for Enter. */
+  it("prompts for a plain optional parameter without claiming a default", async () => {
+    const root = makeProject({ schema: "sentryDsn: z.string().optional()" });
+    const { ask, prompted } = scriptedAsk({});
+
+    const result = await runFill({ cwd: root, environment: "production", ask });
+
+    expect(prompted).toHaveLength(1);
+    expect(prompted[0]?.optional).toBe(true);
+    expect(prompted[0]?.defaultValue).toBeUndefined();
+    expect(result.kept).toEqual(["sentry-dsn"]);
+  });
+
+  /** Required gaps first: the run leads with what blocks the app, then offers the overrides. */
+  it("asks required parameters before optional ones", async () => {
+    const root = makeProject({
+      schema: 'logLevel: z.string().default("info"), databaseUrl: z.url()',
+    });
+    const { ask, prompted } = scriptedAsk({ "database-url": "postgres://localhost/app" });
+
+    await runFill({ cwd: root, environment: "production", ask });
+
+    expect(prompted.map((prompt) => [prompt.parameter, prompt.optional])).toEqual([
+      ["database-url", false],
+      ["log-level", true],
+    ]);
+  });
+
+  /** An optional parameter with a value already in the tree is settled — not asked again. */
+  it("does not prompt for an optional parameter that already has a value", async () => {
+    const root = makeProject({
+      schema: 'logLevel: z.string().default("info")',
+      tree: { "log-level.production": "warn" },
+    });
+    const { ask, prompted } = scriptedAsk({});
+
+    const result = await runFill({ cwd: root, environment: "production", ask });
+
+    expect(prompted).toEqual([]);
+    expect(result.kept).toEqual([]);
+  });
+
+  /**
+   * A defaulted key no filename reaches: the default will serve, but the
+   * override the wrapper promises can never be written, so it carries the same
+   * rename remedy a required unreachable key does instead of a doomed prompt.
+   */
+  it("reports an unreachable optional key rather than prompting for it", async () => {
+    const root = makeProject({ schema: 'apiURL: z.url().default("https://api.example.com")' });
+    const { ask, prompted } = scriptedAsk({});
+
+    const result = await runFill({ cwd: root, environment: "production", ask });
+
+    expect(prompted).toEqual([]);
+    expect(result.unreachable).toHaveLength(1);
+    expect(result.unreachable[0]?.subject).toBe("apiURL");
+    expect(result.unreachable[0]?.remedy).toContain("Rename");
+  });
+
+  /**
    * `fill` owns neither the write nor the seal — it hands the value to `runSet`,
    * which seals per meta. So a parameter meta marks secret is written encrypted,
    * and the result says so, exactly as a `penv set` of the same parameter would.
