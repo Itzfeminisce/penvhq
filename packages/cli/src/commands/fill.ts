@@ -22,6 +22,7 @@
 
 import { PenvError } from "@penvhq/core";
 import { defineCommand } from "citty";
+import { shorthandCandidates } from "../env-flags.js";
 import { lineReader } from "../input.js";
 import { PENV_DIR } from "../project.js";
 import { out } from "../style.js";
@@ -64,6 +65,8 @@ export interface FillPrompt {
 export interface FillOptions {
   readonly cwd: string;
   readonly environment?: string;
+  /** Bare flags the command did not declare — environment shorthands, judged against the whitelist. */
+  readonly envFlags?: readonly string[];
   /**
    * How a value is obtained for one prompt. `undefined` or an empty answer skips
    * the parameter — the readline half lives only in the wrapper, so `runFill`
@@ -110,6 +113,7 @@ export async function runFill(options: FillOptions): Promise<FillResult> {
   const validation = await runValidate({
     cwd: options.cwd,
     ...(options.environment === undefined ? {} : { environment: options.environment }),
+    ...(options.envFlags === undefined ? {} : { envFlags: options.envFlags }),
   });
   const environment = validation.environment;
 
@@ -298,6 +302,7 @@ export const fillCommand = defineCommand({
               cwd: process.cwd(),
               ...(args.env === undefined ? {} : { environment: args.env }),
               ask,
+              envFlags: shorthandCandidates(args, ["env"]),
             }),
           ),
         );

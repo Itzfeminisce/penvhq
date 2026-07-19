@@ -1,6 +1,6 @@
 /**
  * The default {@link SsmTransport}: a thin boundary that shells out to the `aws`
- * CLI, mirroring the Vault adapter's `vault` precedent and the GitHub sink's `gh`.
+ * CLI, mirroring the Vault adapter's `vault` precedent and the GitHub provider's `gh`.
  *
  * penv holds no AWS credential of its own. The `aws` CLI's profile, region, and
  * IAM role are its to keep — penv's config gains no field for them. Reads always

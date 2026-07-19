@@ -21,7 +21,7 @@ This is the reference for **penv as designed**: the complete system, every capab
 9. [Runtime API](#runtime-api)
 10. [Configuration reference](#configuration-reference)
 11. [Providers](#providers)
-12. [Sinks](#sinks)
+12. [Projection providers](#projection-providers-github-actions-secrets)
 13. [Encryption](#encryption)
 14. [Rotation](#rotation)
 15. [`penv doctor`](#penv-doctor)
@@ -143,7 +143,7 @@ Two properties follow from this design, and both are intentional:
 
 **penv owns the translation, and makes it visible.** The mapping from a penv record to a provider path is explicit configuration, not magic. penv's value is that this translation is defined once, validated, and legible.
 
-**A provider is where values live; a sink is where they go.** Your application reads neither — it always reads the local tree. A *provider* is the system of record an environment's tree is pulled from, and penv can read it back, so `doctor` compares both copies value by value. A *sink* is a destination penv pushes to and cannot read back, so `doctor` compares names and push times and says plainly that it cannot compare values. One question separates them: **can penv read the value back out?** Vault and AWS SSM can. GitHub Actions Secrets cannot, by design — which makes it a sink rather than a weak provider.
+**Every store your config names is a provider, and what each one can do is declared, not guessed.** Your application reads none of them — it always reads the local tree. A record-holding provider is a system of record penv can read back, so `doctor` compares both copies value by value. A provider that declares it *withholds values* — GitHub Actions Secrets, whose API returns names but never a value, by design — gets the honest subset: `doctor` compares names and push times and says plainly that it cannot compare values. One question separates the two kinds, and the provider itself answers it: **can penv read the value back out?**
 
 ## The parameter tree
 
@@ -324,13 +324,6 @@ export default defineConfig({
     production:  { type: "@penvhq/provider-ssm",   location: "/prod/app" },
   },
 
-  // Where values are pushed *to*. Separate from `providers` because a sink is
-  // written and never read: penv cannot pull from one, and `doctor` cannot
-  // compare values against one. An environment may have both.
-  sinks: {
-    production: { type: "github", repo: "acme/api" },
-  },
-
   keys: {
     staging:    { source: "keychain", id: "staging" },
     production: { source: "env",      id: "prod" },
@@ -357,9 +350,6 @@ It will not invent `environments`. penv cannot observe your deployment topology 
 | `providers` | Per-environment backend — where an environment's values live, and what `penv pull` reads from. |
 | `providers.*.type` | The provider package's fully-qualified name — `@penvhq/provider-vault`. The name is the import specifier: penv resolves it from your own `node_modules`, so install what you declare (`npm i @penvhq/provider-vault`). The filesystem tree and the mock ship with the CLI; every other provider — and any third-party one — is a dependency of your project. Each package brings its own config types along, so your editor checks the entry against the provider's own declaration. |
 | `providers.*.location` | The place inside the provider that penv maps your tree onto. The format is the provider's own — a Vault KV base path, a Kubernetes `namespace/secretName`, an SSM path prefix — and its package documents it; the field name never changes between providers. This explicit mapping is the translation penv owns on your behalf. |
-| `sinks` | Per-environment destination — where `penv push` sends values so something else can run. Never a provider: a sink is write-only, so penv cannot pull from it and `doctor` cannot compare values against it. An environment may declare both. |
-| `sinks.*.type` | `github`. A sink penv does not recognise is an error, never a fallback. |
-| `sinks.*.repo` | The destination repository, `owner/name`. penv reaches it through the `gh` CLI and holds no GitHub credential of its own. |
 | `schemaFile` | Where the module exporting the schema lives, relative to this config. Defaults to `.penv/env.ts`; `src/env.ts` is where most framework projects put it. The file is yours either way — penv scaffolds it once and never regenerates it. |
 | `publicPrefixes` | The variable prefixes your framework inlines into its client bundle — `["NEXT_PUBLIC_"]`, `["VITE_"]`. penv does not enforce them; the framework already does. Declaring them is what lets `doctor` catch a secret whose name makes the framework publish it. |
 | `keys` | Per-environment encryption key source. An environment with no entry has no key source, which is not the same as having no key: penv reports that it was never told where to look, rather than that the key is missing. |
@@ -403,27 +393,42 @@ This is also how these providers are consumed in practice: the Vault Agent Injec
 
 The consequence, stated rather than hidden: a deploy must pull before it starts, or mount a tree something else has already materialised. penv does not fetch secrets for you at import time, and a tree that was never pulled resolves to whatever is on disk — which is what `penv doctor`'s drift check is for.
 
-Supported providers: Filesystem, HashiCorp Vault, AWS SSM Parameter Store, and Kubernetes Secrets. All satisfy one provider contract; the filesystem provider is the reference implementation of that contract.
+Supported providers: Filesystem, HashiCorp Vault, AWS SSM Parameter Store, Kubernetes Secrets, and GitHub Actions Secrets. The filesystem tree and the rehearsal mock ship with the CLI; every other provider is a package your project installs — `npm i -D @penvhq/provider-vault` — and the `type` in your config is that package's name.
+
+A provider declares its **capabilities**, and penv reads them rather than guessing. Two axes: what the store *holds* — penv records verbatim, or a resolved projection of them — and whether its values can be *read back*. Vault, SSM, and Kubernetes hold records and read back; they satisfy the full record contract, with the filesystem provider as its reference implementation. GitHub Actions Secrets holds a projection and withholds values — see [Projection providers](#projection-providers-github-actions-secrets) below.
 
 **Not every provider retains a previous value, and that is declared rather than assumed.** Rotation's grace window reads the previous value back from the provider, which Vault (KV v2) and AWS SSM support natively and Kubernetes Secrets do not support at all — a Secret is a current-state object with no history to read. A provider therefore declares whether it retains. `dual-valid` rotation requires one that does; `atomic-cutover` does not; and `penv doctor` tells you which of those an environment can perform rather than letting you discover it mid-rotation. This is the same asymmetry the filesystem has always had, and Kubernetes sits on the same side of it.
 
-## Sinks
+## Projection providers (GitHub Actions Secrets)
 
-A **sink** is where values go so something else can run. A provider is where they live; a sink is a destination. The two are separate concepts, and the one question that tells them apart is: **can penv read the value back out?**
+Every store your config names is a provider, and `penv push` and `penv pull` work against all of them. What differs is what each store can honestly do, and the store says so itself — a declared capability, not a config key you learn:
 
 ```
-                    .penv/  ← the source of truth
+                    .penv/  ← the working copy
                        │
-        penv push      │      penv pull
+        penv push      │      penv push / penv pull
    ┌───────────────────┴───────────────────┐
-   ▼                                       ▲
+   ▼                                       ▼▲
 GitHub Actions Secrets                   Vault
-(write-only — a sink)              (read-write — a provider)
+(holds a projection,               (holds records,
+ never returns a value)             reads back exactly)
 ```
 
-GitHub Actions Secrets is a sink, and it is a sink because its API is write-only by construction: it creates, updates, deletes, and lists secret *names*, and no endpoint returns a value. That is not a limitation penv works around — it is what makes GitHub a different concept rather than a weak provider.
+GitHub Actions Secrets declares both limits, because its API forces them: it creates, updates, deletes, and lists secret *names*, and no endpoint returns a value. That is not a limitation penv works around — it is a fact the provider states (`holds: "projection"`, `readsValues: false`) and every command reads.
 
-For a team whose CI holds its secrets, the whole flow is local-first: declare a parameter, `penv push --env production`, and CI has it. No copy/paste, no browser tab, no `.env` pasted into a settings form at 2am. Your local tree is the source of truth and GitHub receives a copy — the same one-directional shape as `penv generate` writing a `.env`, pointed at CI instead of at disk.
+For a team whose CI holds its secrets, the whole flow is local-first: declare the provider —
+
+```ts
+providers: {
+  production: { type: "@penvhq/provider-github", location: "acme/api" },
+}
+```
+
+— then `penv push --production`, and CI has it. No copy/paste, no browser tab, no `.env` pasted into a settings form at 2am. Your local tree is the source of truth and GitHub receives a *projection* of it — resolved variable names, the same one-directional shape as `penv generate` writing a `.env`, pointed at CI instead of at disk. If the GitHub deployment environment does not exist yet, the push offers to create it and creates it only on your yes (`--yes` pre-approves for CI).
+
+**What `penv pull` brings back.** Everything the store honestly has: the secret *names* come down as parameters with meta stubs, values stay absent — GitHub never returns one — and `penv validate` names every value you still need to fill. Pull the names, fill the values, and push the tree to any provider you like: that loop is also the migration path between stores.
+
+**A one-shot push needs no config change.** `penv push -e production --destination @penvhq/provider-github --location acme/api` pushes once to a provider the config does not name, persisting nothing — the declared provider stays the system of record.
 
 **What the push carries, and what it deliberately does not.** `penv push` resolves each parameter as CI would see it, which means **both `.local` scopes are skipped**. A `database-url.production.local` is your machine's override; pushing it would make one developer's laptop the source of production's secret, which is the scope-widening leak penv exists to delete. The rule is the same one the `test` environment already follows.
 
@@ -433,15 +438,17 @@ Your environment scope maps to a GitHub *environment* secret of the same name, a
 
 **Names are checked before anything is sent.** GitHub reserves the `GITHUB_` prefix, refuses a leading digit, and allows only `[A-Za-z0-9_]` — so a parameter named `githubToken` cannot be pushed, and penv says so before writing a single secret rather than sixty in. A push is all or nothing, for the same reason an import is.
 
-### What `doctor` can and cannot tell you about a sink
+### What `doctor` can and cannot tell you about a value-withholding provider
 
-A sink you can only half-see is still legible, as long as the half you cannot see says so. `penv doctor` reports three different kinds of certainty against a sink, and they never wear the same glyph:
+A store you can only half-see is still legible, as long as the half you cannot see says so. `penv doctor` reports three different kinds of certainty against a provider that declares `readsValues: false`, and they never wear the same glyph:
 
 | | |
 |---|---|
 | **Names** | Exact. Listing them is the one read GitHub allows, so "declared but never pushed" and "in GitHub but not declared here" are definite findings. |
-| **Manual edits** | Detected, indirectly. GitHub reports when each secret was last updated; penv records when it last pushed. A GitHub copy newer than penv's push means someone edited it by hand — the seam a sink exists to close, caught without reading a value. A warning rather than a failure: it detects that something was touched, not that the values differ. |
+| **Manual edits** | Detected, indirectly. GitHub reports when each secret was last updated; penv records when it last pushed. A GitHub copy newer than penv's push means someone edited it by hand — the seam this provider exists to close, caught without reading a value. A warning rather than a failure: it detects that something was touched, not that the values differ. |
 | **Values** | **Unknown, permanently.** penv cannot read a GitHub secret back, so it can never tell you the two copies agree. `doctor` reports this as `unknown` — its own verdict, never a ✓. A check that did not look must never look like a check that looked and found nothing wrong. |
+
+Against a record-holding provider none of this hedging applies: `doctor` reads both copies and compares them value by value, exactly.
 
 ## Encryption
 
@@ -538,9 +545,9 @@ $ penv doctor
 ⚠ Undecryptable value       redis/password.production.enc PENV_KEY_PROD is not set
 ⚠ Secret exposed to browser NEXT_PUBLIC_STRIPE_KEY meta declares this a secret, and the prefix makes it public
 ⚠ Edited outside penv       DATABASE_URL        github's copy is newer than penv's last push
-? Value drift (sink)        github              not checked — secrets cannot be read back
+? Value drift               github              not checked — secrets cannot be read back
 ✓ Provider                  vault
-✓ Sink                      github · acme/api
+✓ Destination               @penvhq/provider-github · acme/api
   penv set redis/password --env production
   penv set app/api-key --env production
 ```
@@ -557,7 +564,7 @@ Reporting is all it does. penv will not materialise a value file from a declarat
 
 `doctor`'s cross-provider drift check needs to know how local names map to provider paths; that correspondence comes from `penv.config.ts`.
 
-**Against a sink, drift is partial and says so.** A provider can be read back, so `Drifted from provider` is a definite finding: penv compared two values and they differ. A sink cannot, so the same certainty is unavailable and penv does not pretend otherwise — it reports the names exactly, catches a secret edited by hand outside penv by comparing timestamps, and marks value drift `?`. That is less than a provider gives you, and it is stated rather than papered over. See [Sinks](#sinks) for what each tier can and cannot claim.
+**Against a value-withholding provider, drift is partial and says so.** A record-holding provider can be read back, so `Drifted from provider` is a definite finding: penv compared two values and they differ. A store that never returns a value cannot offer that certainty, and penv does not pretend otherwise — it reports the names exactly, catches a secret edited by hand outside penv by comparing timestamps, and marks value drift `?`. That is less than records give you, and it is stated rather than papered over. See [Projection providers](#projection-providers-github-actions-secrets) for what each tier can and cannot claim.
 
 ## CLI reference
 
@@ -567,7 +574,7 @@ Reporting is all it does. penv will not materialise a value file from a declarat
 | `penv import <file>` | Import an existing dotenv file; it becomes the source of truth. The filename names the scope the values are written at (`.env.production` → `<name>.production`); `--env` names it for a file that doesn't, and contradicting the filename is an error. |
 | `penv generate` | Write a standard `.env` artifact for deploy targets. |
 | `penv pull` | Materialise the parameter tree for an environment from its provider. Supports `--env`. |
-| `penv push` | Send an environment's values to its sink, so CI can run. Resolves as CI would see it — both `.local` scopes are skipped. Needs `--env`. |
+| `penv push` | Ship an environment's values to its provider. A record-holding destination receives the tree verbatim (sealed values stay sealed); a projection-holding one receives the resolved projection, both `.local` scopes skipped. `--destination`/`-d` and `--location`/`-l` push once elsewhere; `--yes` pre-approves creating a missing destination environment. Takes `--env <name>` or the environment as a bare flag (`--production`). |
 | `penv get <key>` | Read a parameter. Supports `--env` and `--explain`. |
 | `penv set <key>` | Update a parameter and push to the active provider. |
 | `penv fill` | Prompt for each declared parameter the tree has no value for, deriving the value-file name from the schema so you never translate a camelCase key to its kebab file by hand. Supports `--env`. |

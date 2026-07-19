@@ -4,7 +4,7 @@
  * because they encode AWS's plumbing — the `aws` CLI, an IAM permission, a missing
  * region — which is someone else's product, not penv's. Core stays
  * provider-agnostic; the backend's rules live with the adapter, as the Vault
- * adapter and the GitHub sink keep theirs.
+ * adapter and the GitHub provider keep theirs.
  */
 
 import { PenvError } from "@penvhq/core";

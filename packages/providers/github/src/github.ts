@@ -1,5 +1,8 @@
 /**
- * The GitHub Actions Secrets sink.
+ * The GitHub Actions Secrets provider — the first to declare both capability
+ * limits: it holds a *projection* (resolved variable names, `.local` scopes
+ * skipped, plaintext GitHub re-seals) and it cannot read values back, because
+ * GitHub's API never returns one at any scope through any endpoint.
  *
  * penv reaches GitHub through the `gh` CLI and holds no GitHub credential of its
  * own: `gh auth login` has already happened, the token is `gh`'s to keep, and
@@ -10,10 +13,18 @@
  */
 
 import { execFileSync } from "node:child_process";
-import type { SecretScope, Sink, SinkSecret } from "@penvhq/core";
+import type {
+  ParameterRef,
+  PenvConfig,
+  PenvErrorLike,
+  ProjectionProvider,
+  ProjectionSecret,
+  SecretScope,
+} from "@penvhq/core";
 import { GithubUnavailableError } from "./errors.js";
+import { checkGithubNames } from "./names.js";
 
-/** A `gh` invocation failed. Normalized so the sink maps it without touching Node's error shape. */
+/** A `gh` invocation failed. Normalized so the provider maps it without touching Node's error shape. */
 export class GhInvocationError extends Error {
   override readonly name = "GhInvocationError";
   /** True when `gh` is not on PATH (spawn `ENOENT`). */
@@ -34,7 +45,7 @@ export class GhInvocationError extends Error {
 /**
  * Runs `gh` with an argument array (never a shell string, so values with spaces
  * or special characters are never re-parsed) and optional stdin, returning
- * stdout. Injectable so the sink is testable without the binary; throws
+ * stdout. Injectable so the provider is testable without the binary; throws
  * {@link GhInvocationError} on failure.
  */
 export type GhRunner = (args: readonly string[], input?: string) => string;
@@ -113,7 +124,7 @@ interface RawSecret {
   readonly updatedAt: unknown;
 }
 
-function parseSecretList(stdout: string, action: string): SinkSecret[] {
+function parseSecretList(stdout: string, action: string): ProjectionSecret[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
@@ -123,7 +134,7 @@ function parseSecretList(stdout: string, action: string): SinkSecret[] {
   if (!Array.isArray(parsed)) {
     throw commandFailed(action, "gh returned JSON that is not an array of secrets");
   }
-  const secrets: SinkSecret[] = [];
+  const secrets: ProjectionSecret[] = [];
   for (const entry of parsed as RawSecret[]) {
     if (typeof entry?.name !== "string" || typeof entry.updatedAt !== "string") {
       continue;
@@ -133,20 +144,29 @@ function parseSecretList(stdout: string, action: string): SinkSecret[] {
   return secrets;
 }
 
-export interface GithubSinkOptions {
+export interface GithubProviderOptions {
   /** The `owner/repo` `gh` targets. Left unset, `gh` resolves it from the working directory. */
   readonly repo?: string;
   /** The `gh` runner. Defaults to invoking the real binary; injected in tests. */
   readonly run?: GhRunner;
 }
 
-export class GithubSink implements Sink {
-  readonly type = "github";
+export class GithubProvider implements ProjectionProvider {
+  readonly type = "@penvhq/provider-github";
+  /**
+   * Both limits, declared: the store holds a resolved projection, and values
+   * never come back — GitHub's own reference says a get "without revealing its
+   * encrypted value" is all there is. The declaration is what lets `push`,
+   * `pull`, and `doctor` treat this store honestly without a separate concept.
+   */
+  readonly capabilities = { holds: "projection", readsValues: false } as const;
 
   readonly #repo: string | undefined;
   readonly #run: GhRunner;
+  /** The `owner/repo` actually targeted, resolved once when no option named it. */
+  #resolvedRepo: string | undefined;
 
-  constructor(options: GithubSinkOptions = {}) {
+  constructor(options: GithubProviderOptions = {}) {
     this.#repo = options.repo;
     this.#run = options.run ?? defaultGhRunner;
   }
@@ -188,7 +208,7 @@ export class GithubSink implements Sink {
     }
   }
 
-  async list(scope: SecretScope): Promise<SinkSecret[]> {
+  async list(scope: SecretScope): Promise<ProjectionSecret[]> {
     const args = ["secret", "list", ...scopeArgs(scope, this.#repo), "--json", "name,updatedAt"];
     let stdout: string;
     try {
@@ -198,8 +218,75 @@ export class GithubSink implements Sink {
     }
     return parseSecretList(stdout, "list secrets");
   }
+
+  /** GitHub's name grammar, judged before the first PUT — the provider owns its own rules. */
+  checkNames(refs: readonly ParameterRef[], config: PenvConfig): PenvErrorLike[] {
+    return checkGithubNames(refs, config);
+  }
+
+  /**
+   * The `owner/repo` the API paths below need. `gh secret` resolves the repo
+   * from the working directory on its own, but `gh api` takes a literal path —
+   * so when no `location` named one, ask `gh` once and keep the answer.
+   */
+  #targetRepo(): string {
+    if (this.#repo !== undefined) {
+      return this.#repo;
+    }
+    if (this.#resolvedRepo === undefined) {
+      let stdout: string;
+      try {
+        stdout = this.#run(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
+      } catch (error) {
+        throw mapFailure(error, "resolve the repository this directory belongs to");
+      }
+      const repo = stdout.trim();
+      if (repo === "") {
+        throw commandFailed(
+          "resolve the repository this directory belongs to",
+          "gh reported no repository. Set `location` to `owner/repo` in the provider entry.",
+        );
+      }
+      this.#resolvedRepo = repo;
+    }
+    return this.#resolvedRepo;
+  }
+
+  /**
+   * Whether the GitHub deployment environment exists. A 404 is an ordinary
+   * answer — the very one `ensureTarget` exists to fix — never an error.
+   */
+  async targetExists(environment: string): Promise<boolean> {
+    try {
+      this.#run(["api", `repos/${this.#targetRepo()}/environments/${environment}`]);
+      return true;
+    } catch (error) {
+      if (error instanceof GhInvocationError && /HTTP 404|Not Found/i.test(error.stderr)) {
+        return false;
+      }
+      throw mapFailure(error, `check whether the environment \`${environment}\` exists`);
+    }
+  }
+
+  /**
+   * Creates the deployment environment. Idempotent on GitHub's side (PUT), and
+   * only ever called after the CLI has an explicit go-ahead — the provider
+   * itself never asks, never guesses.
+   */
+  async ensureTarget(environment: string): Promise<void> {
+    try {
+      this.#run([
+        "api",
+        "--method",
+        "PUT",
+        `repos/${this.#targetRepo()}/environments/${environment}`,
+      ]);
+    } catch (error) {
+      throw mapFailure(error, `create the environment \`${environment}\``);
+    }
+  }
 }
 
-export function createGithubSink(options: GithubSinkOptions = {}): GithubSink {
-  return new GithubSink(options);
+export function createGithubProvider(options: GithubProviderOptions = {}): GithubProvider {
+  return new GithubProvider(options);
 }

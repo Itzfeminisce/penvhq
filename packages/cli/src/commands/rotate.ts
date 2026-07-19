@@ -37,6 +37,7 @@ import type {
 import {
   beginRotation,
   completeRotation,
+  holdsRecords,
   PenvError,
   retainsPrevious,
   rotationOf,
@@ -122,7 +123,7 @@ function rotatingFile(ref: ParameterRef, environment: string): ValueFile {
  * already there. So the local tree goes through {@link sealAwareWrite}, honouring
  * meta's policy. A real backend (vault, mock) holds custody of its own store and
  * penv's envelope is not its concern — the value crosses verbatim via
- * {@link rotatingFile}, the way `push` sends plaintext for the sink to re-seal.
+ * {@link rotatingFile}, the way `push` sends plaintext for a projection destination to re-seal.
  *
  * `--begin` only ever reaches a backend (a dual-valid window demands a retaining
  * provider, which the local tree is not), but it is routed here too, so both
@@ -189,7 +190,20 @@ export async function runRotate(options: RotateOptions): Promise<RotateResult> {
   const project = openProject(options.cwd);
   const environment = targetEnvironment(project, options.environment);
   const ref = refFromKey(options.key, project.config);
-  const provider = await sourceProviderFor(project, environment);
+  const source = await sourceProviderFor(project, environment);
+
+  // A rotation reads state back mid-flight — the phase in meta, the previous
+  // value during a grace window — and a projection-holding store cannot return
+  // either. Refused on the declared capability, before a single write.
+  if (!holdsRecords(source)) {
+    throw new PenvError(
+      "ROTATION_NOT_RECORDS",
+      `Environment ${environment} is backed by \`${source.type}\`, which holds a resolved projection penv cannot rotate in place`,
+      "Rotate the parameter in the environment that holds the records (the local tree, Vault, SSM), " +
+        "then `penv push` the result to this destination.",
+    );
+  }
+  const provider: Provider = source;
 
   const nowIso = options.now ?? new Date().toISOString();
   const before: Meta | undefined = await provider.readMeta(ref);

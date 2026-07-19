@@ -11,7 +11,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Meta, ValueFile } from "@penvhq/core";
+import type { Meta, ProjectionProvider, ValueFile } from "@penvhq/core";
 import { createFilesystemProvider } from "@penvhq/provider-filesystem";
 import { createMockProvider } from "@penvhq/provider-mock";
 import { afterEach, describe, expect, it } from "vitest";
@@ -79,6 +79,70 @@ afterEach(() => {
   for (const dir of created.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("runPull from a value-withholding provider", () => {
+  function fakeProjection(names: { repo?: string[]; env?: string[] } = {}): ProjectionProvider {
+    return {
+      type: "@penvhq/provider-github",
+      capabilities: { holds: "projection", readsValues: false },
+      verify: async () => {},
+      push: async () => {},
+      list: async (scope) =>
+        (scope.kind === "repository" ? (names.repo ?? []) : (names.env ?? [])).map((name) => ({
+          name,
+          updatedAt: "2026-01-01T00:00:00Z",
+        })),
+    };
+  }
+
+  it("materialises names as flat parameters with meta stubs and no values", async () => {
+    const root = makeProject({
+      providers: {
+        development: { type: "@penvhq/provider-filesystem" },
+        production: { type: "@penvhq/provider-github" },
+      },
+    });
+    const source = fakeProjection({ repo: ["API_KEY"], env: ["DB_URL"] });
+
+    const result = await runPull({ cwd: root, environment: "production", source });
+
+    expect(result.valuesUnreadable).toBe(true);
+    expect(result.values).toBe(0);
+    expect(result.refs).toBe(2);
+    expect(result.meta).toBe(2);
+
+    const tree = localTree(root);
+    expect(await tree.readMeta({ namespace: [], name: "api-key" })).toEqual({});
+    expect(await tree.readMeta({ namespace: [], name: "db-url" })).toEqual({});
+    expect(
+      await tree.read({
+        namespace: [],
+        name: "api-key",
+        scope: { kind: "unscoped" },
+        encrypted: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("never overwrites meta the user already wrote with an empty stub", async () => {
+    const root = makeProject({
+      providers: {
+        development: { type: "@penvhq/provider-filesystem" },
+        production: { type: "@penvhq/provider-github" },
+      },
+    });
+    const tree = localTree(root);
+    await tree.writeMeta({ namespace: [], name: "api-key" }, { description: "mine" });
+    const source = fakeProjection({ repo: ["API_KEY"] });
+
+    const result = await runPull({ cwd: root, environment: "production", source });
+
+    expect(result.meta).toBe(0);
+    expect(await tree.readMeta({ namespace: [], name: "api-key" })).toEqual({
+      description: "mine",
+    });
+  });
 });
 
 describe("runPull", () => {

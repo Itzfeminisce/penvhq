@@ -30,8 +30,8 @@
  *   and stalled with two credentials live at once.
  * - **provider-value-drift** — the local tree and the environment's readable
  *   source-of-truth provider hold different opaque values for the same address.
- *   The one drift the write-only sink can never report, because a provider can be
- *   read back and a sink cannot.
+ *   The one drift a value-withholding destination can never report, because a
+ *   record-holding provider can be read back and a projection cannot.
  *
  * Warnings are reported; failures are reported and exit non-zero.
  */
@@ -39,13 +39,12 @@
 import type {
   Meta,
   PenvConfig,
+  ProjectionProvider,
+  ProjectionSecret,
   Provider,
   Resolution,
   Scope,
   SecretScope,
-  Sink,
-  SinkConfig,
-  SinkSecret,
   ValueFile,
 } from "@penvhq/core";
 import {
@@ -53,6 +52,8 @@ import {
   assertNever,
   effectiveMeta,
   formatValueFile,
+  holdsProjection,
+  holdsRecords,
   isPublicVariable,
   isRequired,
   isSecret,
@@ -63,9 +64,9 @@ import {
   tryParseDuration,
   variableName,
 } from "@penvhq/core";
-import { createGithubSink } from "@penvhq/sink-github";
 import { defineCommand } from "citty";
 import type { z } from "zod";
+import { shadowedEnvironments, shorthandCandidates } from "../env-flags.js";
 import type { Project } from "../project.js";
 import { keySourceFor, openProject, sourceProviderFor, targetEnvironment } from "../project.js";
 import { LOCAL_TREE_TYPE } from "../registry.js";
@@ -91,7 +92,8 @@ import { loadSchema } from "./validate.js";
  * A check reports one of four verdicts. `unknown` — a check that ran but could
  * not reach a verdict — is never rendered as a pass: "I looked and found nothing
  * wrong" and "I could not look" are opposite situations with opposite remedies,
- * and a write-only sink makes most of what doctor can say the second kind.
+ * and a value-withholding destination makes most of what doctor can say the
+ * second kind.
  */
 export type DoctorSeverity = "pass" | "warning" | "failure" | "unknown";
 
@@ -109,10 +111,11 @@ export type DoctorCheck =
   | "rotation-stuck"
   | "provider-value-drift"
   | "provider"
-  | "sink-unreachable"
-  | "sink-name-drift"
-  | "sink-manual-edit"
-  | "sink-value-drift";
+  | "projection-unreachable"
+  | "projection-name-drift"
+  | "projection-manual-edit"
+  | "projection-value-drift"
+  | "environment-flag-shadow";
 
 export interface DoctorFinding {
   readonly check: DoctorCheck;
@@ -134,13 +137,15 @@ export interface DoctorReport {
 export interface DoctorOptions {
   readonly cwd: string;
   readonly environment?: string;
-  /** Injected in tests: the sink to check against. Defaults to the one the config declares. */
-  readonly sink?: Sink;
+  /** Bare flags the command did not declare — environment shorthands, judged against the whitelist. */
+  readonly envFlags?: readonly string[];
+  /** Injected in tests: the projection-holding destination to check against. Defaults to the one the config declares. */
+  readonly projection?: ProjectionProvider;
   /**
    * Injected in tests: the source-of-truth provider to compare the local tree
    * against. Defaults to the one the config declares (`sourceProviderFor`).
-   * Mirrors `sink`, for the same reason — the drift checks stay driveable without
-   * a live backend.
+   * Mirrors `projection`, for the same reason — the drift checks stay driveable
+   * without a live backend.
    */
   readonly source?: Provider;
   /** Injected in tests: the wall-clock reading the rotation clocks are read against. Defaults to now. */
@@ -179,13 +184,26 @@ function skipped(check: DoctorCheck, label: string): DoctorFinding {
 
 export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   const project = openProject(options.cwd);
-  const environment = targetEnvironment(project, options.environment);
+  const environment = targetEnvironment(project, options.environment, options.envFlags);
   const findings: DoctorFinding[] = [];
   // The wall clock, read once and passed down — never read inside a check — so the
   // rotation boundaries the roadmap names are testable without mocking time, the
   // same discipline `rotation.ts` and `push.ts` keep.
   const now = new Date(options.now ?? new Date().toISOString());
   const stuckThresholdMs = options.stuckThresholdMs ?? STUCK_THRESHOLD_MS;
+
+  // Rule 1 of the environment shorthand flags: a real flag always wins, so an
+  // environment sharing a flag's name simply has no shorthand. Said here, once,
+  // rather than discovered as a flag that quietly means something else.
+  for (const shadowed of shadowedEnvironments(project.config)) {
+    findings.push({
+      check: "environment-flag-shadow",
+      severity: "warning",
+      label: "Environment shadows a flag",
+      subject: shadowed,
+      detail: `\`--${shadowed}\` is a flag penv defines, so this environment has no shorthand — \`--env ${shadowed}\` always works`,
+    });
+  }
 
   const { schema, issues } = await loadSchema(project, environment);
   if (schema !== undefined) {
@@ -253,7 +271,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     findings.push(...stuckFindings(rotation.subjects, environment, now, stuckThresholdMs));
   }
   findings.push(...(await providerDriftFindings(project, environment, options.source)));
-  findings.push(...(await sinkFindings(project, environment, options.sink)));
+  findings.push(...(await projectionFindings(project, environment, options.projection)));
 
   findings.push({
     check: "provider",
@@ -604,12 +622,13 @@ function encryptionFindings(subjects: readonly Subject[], environment: string): 
 }
 
 /**
- * A sink report is mostly `unknown` by construction, and honest about it. Three
- * tiers, rendered differently (RFC "A sink is a destination, not a provider"):
+ * A report against a projection-holding, value-withholding provider is mostly
+ * `unknown` by construction, and honest about it. Three tiers, rendered
+ * differently (RFC "Everything the config names is a provider"):
  *
  * - **names** are exact, because listing them is the one read the destination
  *   allows: declared-but-never-pushed, and present-in-the-destination-but-
- *   undeclared — the `declared`/`unused` pair pointed at a sink.
+ *   undeclared — the `declared`/`unused` pair pointed at the store.
  * - **manual edits** are detectable indirectly: GitHub's `updated_at` newer than
  *   penv's own last-push time (kept per environment in committed meta) means the
  *   secret was touched outside penv. A warning, never a failure — it detects that
@@ -617,20 +636,10 @@ function encryptionFindings(subjects: readonly Subject[], environment: string): 
  * - **values** are `unknown`, permanently, because they cannot be read back.
  *
  * The whole report is `unknown` when the destination cannot be reached — the
- * fourth verdict earning its keep against a write-only store.
+ * fourth verdict earning its keep against a value-withholding store.
  */
 /** Slack between penv's local push time and the destination's server `updated_at` before a difference reads as a hand-edit. */
 const EDIT_SKEW_MS = 120_000;
-
-function buildSink(declared: SinkConfig, override: Sink | undefined): Sink | undefined {
-  if (override !== undefined) {
-    return override;
-  }
-  if (declared.type === "github") {
-    return createGithubSink(declared.repo === undefined ? {} : { repo: declared.repo });
-  }
-  return undefined;
-}
 
 function errorDetail(error: unknown): string {
   if (error instanceof Error) {
@@ -651,55 +660,68 @@ interface Expected {
   readonly scope: SecretScope;
 }
 
-async function sinkFindings(
+async function projectionFindings(
   project: Project,
   environment: string,
-  override: Sink | undefined,
+  override: ProjectionProvider | undefined,
 ): Promise<DoctorFinding[]> {
-  const declared = project.config.sinks?.[environment];
-  if (declared === undefined) {
-    return [];
-  }
-
-  const sink = buildSink(declared, override);
-  if (sink === undefined) {
-    return [
-      {
-        check: "sink-unreachable",
-        severity: "unknown",
-        label: "Sink",
-        subject: `sink type \`${declared.type}\` is not one penv knows`,
-        detail: "penv cannot check a sink it cannot build",
-      },
-    ];
+  let projection: ProjectionProvider;
+  if (override !== undefined) {
+    projection = override;
+  } else {
+    const declared = project.config.providers[environment];
+    if (declared === undefined || declared.type === LOCAL_TREE_TYPE) {
+      return [];
+    }
+    let source: Awaited<ReturnType<typeof sourceProviderFor>>;
+    try {
+      source = await sourceProviderFor(project, environment);
+    } catch (error) {
+      return [
+        {
+          check: "projection-unreachable",
+          severity: "unknown",
+          label: "Destination",
+          subject: `could not build the ${declared.type} provider for ${environment}`,
+          detail: errorDetail(error),
+        },
+      ];
+    }
+    // A record-holding source is checked value by value in
+    // `providerDriftFindings`; these tiers exist only for the store that
+    // withholds its values.
+    if (!holdsProjection(source)) {
+      return [];
+    }
+    projection = source;
   }
 
   try {
-    await sink.verify();
+    await projection.verify();
   } catch (error) {
     return [
       {
-        check: "sink-unreachable",
+        check: "projection-unreachable",
         severity: "unknown",
-        label: "Sink",
-        subject: `could not reach the ${declared.type} sink for ${environment}`,
+        label: "Destination",
+        subject: `could not reach the ${projection.type} destination for ${environment}`,
         detail: errorDetail(error),
       },
     ];
   }
 
-  let repoSecrets: SinkSecret[];
-  let envSecrets: SinkSecret[];
+  let repoSecrets: ProjectionSecret[];
+  let envSecrets: ProjectionSecret[];
   try {
-    repoSecrets = await sink.list({ kind: "repository" });
-    envSecrets = await sink.list({ kind: "environment", environment });
+    repoSecrets = await projection.list({ kind: "repository" });
+    envSecrets = await projection.list({ kind: "environment", environment });
   } catch (error) {
     return [
       {
-        check: "sink-unreachable",
+        check: "projection-unreachable",
         severity: "unknown",
-        label: "Sink",
-        subject: `could not list secrets in the ${declared.type} sink for ${environment}`,
+        label: "Destination",
+        subject: `could not list secrets in the ${projection.type} destination for ${environment}`,
         detail: errorDetail(error),
       },
     ];
@@ -734,7 +756,7 @@ async function sinkFindings(
   const upper = (name: string): string => name.toUpperCase();
   const repoByName = new Map(repoSecrets.map((secret) => [upper(secret.name), secret]));
   const envByName = new Map(envSecrets.map((secret) => [upper(secret.name), secret]));
-  const destOf = (scope: SecretScope): Map<string, SinkSecret> =>
+  const destOf = (scope: SecretScope): Map<string, ProjectionSecret> =>
     scope.kind === "repository" ? repoByName : envByName;
 
   const nameDrift: DoctorFinding[] = [];
@@ -753,7 +775,7 @@ async function sinkFindings(
     }
     if (!destOf(item.scope).has(key)) {
       nameDrift.push({
-        check: "sink-name-drift",
+        check: "projection-name-drift",
         severity: "warning",
         label: "Declared, not pushed",
         subject: item.variable,
@@ -765,7 +787,7 @@ async function sinkFindings(
   for (const secret of repoSecrets) {
     if (!allVariables.has(upper(secret.name))) {
       nameDrift.push({
-        check: "sink-name-drift",
+        check: "projection-name-drift",
         severity: "warning",
         label: "In destination, not declared",
         subject: secret.name,
@@ -776,7 +798,7 @@ async function sinkFindings(
   for (const secret of envSecrets) {
     if (!expectedEnv.has(upper(secret.name))) {
       nameDrift.push({
-        check: "sink-name-drift",
+        check: "projection-name-drift",
         severity: "warning",
         label: "In destination, not declared",
         subject: secret.name,
@@ -807,7 +829,7 @@ async function sinkFindings(
       continue;
     }
     manualEdits.push({
-      check: "sink-manual-edit",
+      check: "projection-manual-edit",
       severity: "warning",
       label: "Edited outside penv",
       subject: item.variable,
@@ -821,9 +843,9 @@ async function sinkFindings(
       ? nameDrift
       : [
           {
-            check: "sink-name-drift" as const,
+            check: "projection-name-drift" as const,
             severity: "pass" as const,
-            label: "Sink names",
+            label: "Destination names",
             subject: `every parameter resolving for ${environment} is present, and nothing undeclared is`,
           },
         ]),
@@ -833,17 +855,17 @@ async function sinkFindings(
       ? manualEdits
       : [
           {
-            check: "sink-manual-edit" as const,
+            check: "projection-manual-edit" as const,
             severity: "pass" as const,
-            label: "Sink hand-edits",
+            label: "Destination hand-edits",
             subject: `no secret has changed outside penv since its last push for ${environment}`,
           },
         ]),
   );
   findings.push({
-    check: "sink-value-drift",
+    check: "projection-value-drift",
     severity: "unknown",
-    label: "Sink values",
+    label: "Destination values",
     subject: "cannot be read back from a write-only destination",
     detail: "value drift between the tree and the destination is unknowable by design",
   });
@@ -886,7 +908,7 @@ function refPathOf(ref: Resolution["ref"]): string {
  * `filesystem` — the two coincide, so the metas already read for `subjects` are
  * reused rather than round-tripping the identical files a second time. A backend
  * is read once, wrapped in try/catch: an unreachable source yields a single
- * `unknown` rotation finding, mirroring `sinkFindings`' tiering, because "the
+ * `unknown` rotation finding, mirroring `projectionFindings`' tiering, because "the
  * clock says overdue" and "penv could not read the clock" are opposite verdicts.
  */
 type RotationSubjects =
@@ -910,6 +932,11 @@ async function rotationSubjects(
   }
 
   const source = override ?? (await sourceProviderFor(project, environment));
+  // A projection-holding destination stores no meta at all, so the local tree
+  // stays the keeper of this environment's rotation clocks.
+  if (!holdsRecords(source)) {
+    return { kind: "read", subjects: local };
+  }
   try {
     const subjects: Subject[] = await Promise.all(
       local.map(async ({ resolution }) => ({
@@ -1144,7 +1171,7 @@ async function readRelevant(
 }
 
 /**
- * The one drift the sink can never report. `sink-value-drift` is permanently
+ * The one drift a value-withholding destination can never report. `projection-value-drift` is permanently
  * `unknown` because a write-only destination cannot be read back; a provider is
  * the system of record precisely because it can, so here penv actually looks —
  * comparing PLAINTEXT, value by value.
@@ -1160,7 +1187,7 @@ async function readRelevant(
  * When the environment keeps its values in the local tree there is no second
  * system of record, so this is a plain `pass` — "not applicable", never
  * `unknown`: penv could look and there was one copy by design. An unreachable
- * source *is* `unknown`, mirroring `sinkFindings`' try/catch tiering: a differing
+ * source *is* `unknown`, mirroring `projectionFindings`' try/catch tiering: a differing
  * value and an unreachable store are opposite verdicts with opposite remedies.
  */
 async function providerDriftFindings(
@@ -1181,6 +1208,12 @@ async function providerDriftFindings(
   }
 
   const source = override ?? (await sourceProviderFor(project, environment));
+  // A value-withholding destination has nothing to compare value by value; its
+  // tiers — exact names, unknown values, indirect hand-edits — are
+  // `projectionFindings`' and are reported there.
+  if (!holdsRecords(source)) {
+    return [];
+  }
 
   let local: Map<string, DriftEntry>;
   let remote: Map<string, DriftEntry>;
@@ -1328,7 +1361,7 @@ export function renderDoctor(report: DoctorReport): string[] {
 export const doctorCommand = defineCommand({
   meta: {
     name: "doctor",
-    description: "Report missing, weak, unused, fallback, plaintext-secret, and sink-drift issues",
+    description: "Report missing, weak, unused, fallback, plaintext-secret, and drift issues",
   },
   args: {
     env: { type: "string", description: "The environment to report on" },
@@ -1338,6 +1371,7 @@ export const doctorCommand = defineCommand({
       const report = await runDoctor({
         cwd: process.cwd(),
         ...(args.env === undefined ? {} : { environment: args.env }),
+        envFlags: shorthandCandidates(args, ["env"]),
       });
       write(renderDoctor(report));
       if (!report.ok) {

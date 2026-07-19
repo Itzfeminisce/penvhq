@@ -16,8 +16,11 @@
  * key that opens it never has to be present to pull it.
  */
 
-import type { Meta } from "@penvhq/core";
+import type { AnyProvider, Meta, ProjectionProvider } from "@penvhq/core";
+import { holdsProjection, refFromVariable } from "@penvhq/core";
 import { defineCommand } from "citty";
+import { shorthandCandidates } from "../env-flags.js";
+import type { Project } from "../project.js";
 import {
   localTree,
   openProject,
@@ -26,11 +29,15 @@ import {
   targetEnvironment,
 } from "../project.js";
 import { LOCAL_TREE_TYPE } from "../registry.js";
-import { CHECK, formatRows, guard, write } from "../ui.js";
+import { CHECK, formatRows, guard, WARN, write } from "../ui.js";
 
 export interface PullOptions {
   readonly cwd: string;
   readonly environment?: string;
+  /** Bare flags the command did not declare — environment shorthands, judged against the whitelist. */
+  readonly envFlags?: readonly string[];
+  /** Injected in tests: the source provider. Defaults to the one the config declares. */
+  readonly source?: AnyProvider;
 }
 
 export interface PullResult {
@@ -49,18 +56,74 @@ export interface PullResult {
   readonly meta: number;
   /** Distinct parameters the pull touched, at any scope. */
   readonly refs: number;
+  /**
+   * True when the source declares `readsValues: false`: names and meta came
+   * down, values stayed absent — the destination never returns one, and the
+   * pull says so rather than dressing emptiness as freshness.
+   */
+  readonly valuesUnreadable?: boolean;
+}
+
+/**
+ * Pull from a value-withholding provider: materialise what the store can
+ * honestly give. Listing names is the one read it allows, so each name comes
+ * down as a flat parameter (the same `refFromVariable` mapping `import` uses —
+ * structure is never guessed back out of a flat namespace), a meta stub marks
+ * the parameters the destination holds, and values stay absent for
+ * `penv validate` to flag and the user to fill.
+ */
+async function pullProjection(
+  project: Project,
+  source: ProjectionProvider,
+  environment: string,
+): Promise<PullResult> {
+  const tree = localTree(project);
+  const names = new Set<string>();
+  for (const secret of await source.list({ kind: "repository" })) {
+    names.add(secret.name);
+  }
+  for (const secret of await source.list({ kind: "environment", environment })) {
+    names.add(secret.name);
+  }
+
+  let meta = 0;
+  for (const name of [...names].sort()) {
+    const ref = refFromVariable(name);
+    // A stub only where no meta exists: a pull must never overwrite policy the
+    // user already wrote with an empty marker.
+    if (tree.readMetaSync(ref) === undefined) {
+      tree.writeMetaSync(ref, {});
+      meta += 1;
+    }
+  }
+
+  return {
+    environment,
+    source: source.type,
+    localSource: false,
+    values: 0,
+    meta,
+    refs: names.size,
+    valuesUnreadable: true,
+  };
 }
 
 export async function runPull(options: PullOptions): Promise<PullResult> {
   const project = openProject(options.cwd);
-  const environment = targetEnvironment(project, options.environment);
-  const source = await sourceProviderFor(project, environment);
+  const environment = targetEnvironment(project, options.environment, options.envFlags);
+  const source = options.source ?? (await sourceProviderFor(project, environment));
 
   // The local tree already IS the source of truth for an environment with no
   // declared backend: `sourceProviderFor` handed back the filesystem tree, and
   // pulling it onto itself would be a no-op dressed as work. Report the truth.
   if (source.type === LOCAL_TREE_TYPE) {
     return { environment, source: source.type, localSource: true, values: 0, meta: 0, refs: 0 };
+  }
+
+  // A projection-holding source cannot return values, so its pull is the
+  // names-and-meta materialisation — everything the store honestly has.
+  if (holdsProjection(source)) {
+    return pullProjection(project, source, environment);
   }
 
   const tree = localTree(project);
@@ -108,6 +171,24 @@ export function renderPull(result: PullResult): string[] {
     ]);
   }
 
+  if (result.valuesUnreadable === true) {
+    return formatRows([
+      {
+        glyph: CHECK,
+        label: "Pulled",
+        subject: `${result.refs} ${result.refs === 1 ? "parameter name" : "parameter names"}`,
+        detail: `from ${result.source} for environment ${result.environment}`,
+      },
+      {
+        glyph: WARN,
+        label: "Values not readable",
+        subject: "this destination never returns a secret's value",
+        detail:
+          "fill them locally with `penv set` or `penv fill` — `penv validate` names every gap",
+      },
+    ]);
+  }
+
   return formatRows([
     {
       glyph: CHECK,
@@ -130,13 +211,17 @@ export const pullCommand = defineCommand({
     description: "Materialise the local .penv tree from an environment's source-of-truth provider",
   },
   args: {
-    env: { type: "string", description: "The environment to pull" },
+    env: {
+      type: "string",
+      description: "The environment to pull (or pass it as a bare flag: --production)",
+    },
   },
   run({ args }) {
     return guard(async () => {
       const result = await runPull({
         cwd: process.cwd(),
         ...(args.env === undefined ? {} : { environment: args.env }),
+        envFlags: shorthandCandidates(args, ["env"]),
       });
       write(renderPull(result));
     });

@@ -44,9 +44,6 @@ importers:
       '@penvhq/runtime':
         specifier: workspace:*
         version: link:../runtime
-      '@penvhq/sink-github':
-        specifier: workspace:*
-        version: link:../sinks/github
       citty:
         specifier: 0.2.2
         version: 0.2.2
@@ -54,6 +51,9 @@ importers:
         specifier: 2.7.0
         version: 2.7.0
     devDependencies:
+      '@penvhq/provider-github':
+        specifier: workspace:*
+        version: link:../providers/github
       '@penvhq/provider-vault':
         specifier: workspace:*
         version: link:../providers/vault
@@ -118,6 +118,12 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
 
+  packages/providers/github:
+    dependencies:
+      '@penvhq/core':
+        specifier: workspace:*
+        version: link:../../core
+
   packages/providers/kubernetes:
     dependencies:
       '@penvhq/core':
@@ -170,12 +176,6 @@ importers:
       zod:
         specifier: 4.4.3
         version: 4.4.3
-
-  packages/sinks/github:
-    dependencies:
-      '@penvhq/core':
-        specifier: workspace:*
-        version: link:../../core
 
 packages:
 

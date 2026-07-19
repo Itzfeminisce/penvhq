@@ -190,19 +190,27 @@ export type ValidatedProviders<P> = {
 };
 
 /**
- * A destination penv pushes values *to* and cannot read back. Declared under
- * `sinks`, never `providers`: a sink is not the system of record, so it is not a
- * provider, and collapsing the two in the config collapses them everywhere. An
- * environment may have both — a provider holding the truth and a sink receiving
- * it — which one key cannot express and two keys express exactly.
+ * What a provider's store can honestly do — the declaration that replaced the
+ * old sink/provider split. The distinction the split guarded is real (GitHub
+ * Actions Secrets never returns a value) and lives here now, in the contract,
+ * instead of in a second config key the user had to learn.
  */
-export interface SinkConfig {
-  readonly type: string;
+export interface ProviderCapabilities {
   /**
-   * The destination-side target, when it needs one — a GitHub `owner/repo`. Left
-   * unset, the destination's own CLI resolves it from the working directory.
+   * What the store holds. `records`: penv records verbatim — opaque envelope
+   * strings at every scope, meta as a sibling record — the shape the behavioural
+   * contract suite gates. `projection`: a resolved projection — generated
+   * variable names, both `.local` scopes skipped, plaintext for the destination
+   * to re-seal — the shape a CI secret store consumes.
    */
-  readonly repo?: string;
+  readonly holds: "records" | "projection";
+  /**
+   * Whether stored values can be read back. GitHub's API returns names and
+   * timestamps, never values, so it declares `false` — and `pull` materialises
+   * names and meta while `doctor` reports value drift as unknown, never as
+   * clean.
+   */
+  readonly readsValues: boolean;
 }
 
 /**
@@ -256,13 +264,6 @@ export interface PenvConfig {
    * has no key source, which is not the same as having no key — see `keys.ts`.
    */
   readonly keys?: Readonly<Record<string, KeyConfig>>;
-  /**
-   * Where each environment's resolved values are pushed. A sink is a destination,
-   * never the system of record — declared here, beside `providers` and never
-   * inside it, so the two concepts cannot be mistaken for one at the first place
-   * a user reads.
-   */
-  readonly sinks?: Readonly<Record<string, SinkConfig>>;
 }
 
 /**
@@ -272,6 +273,15 @@ export interface PenvConfig {
  */
 export interface Provider {
   readonly type: string;
+  /**
+   * What this provider's store can do. Absent means records-and-readable — the
+   * general case, so every record-holding provider is unchanged by the field's
+   * existence. A provider that declares `holds: "projection"` is a different
+   * declared kind ({@link ProjectionProvider}) and never satisfies this
+   * interface's methods; penv tells the two apart through
+   * {@link holdsProjection}, never by trying a method and watching it lie.
+   */
+  readonly capabilities?: ProviderCapabilities;
   /** Reads one value file. Resolves to `undefined` when absent. */
   read(file: ValueFile): Promise<string | undefined>;
   /** Writes one value file, creating namespaces as needed. */
@@ -359,44 +369,102 @@ export type SecretScope =
   | { readonly kind: "repository" }
   | { readonly kind: "environment"; readonly environment: string };
 
-/** One secret as a write-only destination reports it: a name and when it last changed, never a value. */
-export interface SinkSecret {
+/** One secret as a value-withholding store reports it: a name and when it last changed, never a value. */
+export interface ProjectionSecret {
   readonly name: string;
   /** The destination's last-modified time, ISO 8601. Compared against penv's last-push time to catch a hand-edit. */
   readonly updatedAt: string;
 }
 
 /**
- * A write-only destination. Unlike a {@link Provider} it cannot `read`, so no
- * adapter for it ever passes the provider contract, it never appears as an
- * environment's `provider`, and it does not participate in `penv pull`. penv
- * resolves the tree; the sink receives it.
+ * A provider whose store holds a resolved *projection* rather than penv records
+ * — generated variable names, both `.local` scopes skipped, plaintext the
+ * destination re-seals under its own custody. It declares
+ * `capabilities.holds: "projection"` and satisfies this contract instead of the
+ * seven-method record contract, which its store cannot honestly implement: a
+ * `read` that can never return a value would make every downstream check read
+ * an unreadable store as an empty one.
+ *
+ * penv resolves the tree; the projection receives it. `push` speaks this
+ * surface; `pull` materialises what `list` can honestly give — names and
+ * timestamps, never values.
  */
-export interface Sink {
+export interface ProjectionProvider {
   readonly type: string;
+  readonly capabilities: ProviderCapabilities & { readonly holds: "projection" };
   /**
    * Confirms the destination is reachable before the first push. Every name is
    * already judged up front, so a push never places half its secrets and then
    * hits a reserved name; this closes the other pre-push gap — the destination
    * being unreachable. GitHub through `gh` checks it is installed, authenticated,
    * and can reach this repository's secrets, and refuses loudly rather than
-   * falling back. It cannot prove per-environment write permission without
-   * writing, so that narrower failure surfaces at push time as the same loud
-   * refusal. Resolves when it is safe to push.
+   * falling back. Resolves when it is safe to push.
    */
   verify(): Promise<void>;
   /**
    * Sends one value to the destination, which seals it under its own key. The
    * value crosses in plaintext because a CI runner holds no penv key — penv's
-   * encryption stops at the sink and the destination's custody takes over.
+   * encryption stops at the projection and the destination's custody takes over.
    */
   push(name: string, value: string, scope: SecretScope): Promise<void>;
   /**
    * The names the destination holds at a scope, each with its last-modified
-   * time. Listing names is the one read a write-only destination allows; values
-   * never come back.
+   * time. Listing names is the one read a value-withholding store allows.
    */
-  list(scope: SecretScope): Promise<SinkSecret[]>;
+  list(scope: SecretScope): Promise<ProjectionSecret[]>;
+  /**
+   * The destination's own name grammar, judged before the first PUT. The rules
+   * are the destination's (GitHub's reserved `GITHUB_` prefix, its charset, its
+   * case-insensitivity), so the provider owns the check — the CLI only insists
+   * it runs before anything is pushed, never mid-push.
+   */
+  checkNames?(refs: readonly ParameterRef[], config: PenvConfig): PenvErrorLike[];
+  /**
+   * Whether the destination-side target an environment's push lands in exists
+   * yet — a GitHub deployment environment, say. Implemented only where the
+   * destination has such a notion.
+   */
+  targetExists?(environment: string): Promise<boolean>;
+  /**
+   * Creates the destination-side target for an environment. Never called
+   * without an explicit go-ahead: the CLI prompts (or `--yes` pre-approves) and
+   * only then asks the provider, which stays non-interactive. Creation on an
+   * explicit answer, never a guess — a typo'd environment name must not summon
+   * infrastructure.
+   */
+  ensureTarget?(environment: string): Promise<void>;
+}
+
+/**
+ * The error shape {@link ProjectionProvider.checkNames} returns — structurally
+ * `PenvError`, stated as an interface so the contract does not force provider
+ * packages to subclass core's error class.
+ */
+export interface PenvErrorLike extends Error {
+  readonly code: string;
+  readonly remedy?: string | undefined;
+}
+
+/** Any provider penv can build from a `providers.*` entry: records or projection. */
+export type AnyProvider = Provider | ProjectionProvider;
+
+/**
+ * Narrows to a projection-holding provider, reading the capability it declared.
+ * The one place penv asks — the same pattern as {@link retainsPrevious}, one
+ * level up.
+ */
+export function holdsProjection(provider: AnyProvider): provider is ProjectionProvider {
+  return provider.capabilities?.holds === "projection";
+}
+
+/** Narrows to a record-holding provider — the general case, absent capabilities included. */
+export function holdsRecords(provider: AnyProvider): provider is Provider {
+  return !holdsProjection(provider);
+}
+
+/** Whether a provider's stored values can be read back. Absent capabilities means yes. */
+export function readsValues(provider: AnyProvider): boolean {
+  return provider.capabilities?.readsValues !== false;
 }
 
 /**

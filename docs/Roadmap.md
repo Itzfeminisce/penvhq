@@ -30,6 +30,7 @@ Everything below describes the *finished* design (see docs). This table says whe
 | AWS SSM, Kubernetes providers | Yes | v0.6 |
 | Provider portability as a *proven* claim | Yes | v0.5 (Vault), generalized v0.6 |
 | Provider unification — `sinks` deleted, `@penvhq/provider-github`, `push`/`pull` against every provider | Yes | v0.7 (in progress) |
+| Ambient delivery — blessed `process.env` mirror, schema exclusivity, per-framework seams, `override` rename | RFC only | v0.8 (planned) |
 | Fully-qualified provider `type`, declaration-merged config types, `location` | Yes | v0.7 (in progress) |
 | Install-what-you-use providers — Vault, SSM, Kubernetes, GitHub external to the CLI | Yes | v0.7 (in progress) |
 | `--destination` one-shot push, environment shorthand flags, `ensureTarget` create-on-approval | Yes | v0.7 (in progress) |
@@ -164,6 +165,19 @@ Decided 2026-07-19; the [provider unification plan](./provider-unification-plan.
 Ships on npm as **0.5.0** — a breaking release: configs naming short provider types or a `sinks` key are refused with the exact rewrite named in the error.
 
 **Gate to advance:** the full migration loop runs — pull names and meta down from GitHub, fill values locally, `validate` to green, push the tree to a freshly-declared Vault — with the contract suite passing unchanged for every record-holding provider and `doctor` reporting exactly (Vault) and honestly-partially (GitHub) at each step.
+
+## v0.8 — Ambient delivery (planned)
+
+**Retires:** the per-SDK bridge file — the hand-written mapping of `@env` values onto the exact `process.env` keys a third-party SDK reads, first written inside penv's own hosted product, which is what made the gap undeniable.
+
+Decided 2026-07-19; the [v0.8 plan](./v0.8-plan.md) owns *how*, the RFC's "The ambient surface is a projection, and the schema is the pin list" owns *why*. In brief:
+
+- `import "@penvhq/penv/config"` is promoted from compat-only to blessed: it validates through `load()` before writing, writes generated (`override`-bent) names, and is exclusive over the schema — a declared parameter is written when it resolves and deleted when it does not, so nothing configures an SDK behind `@env`'s back.
+- `penv init` scaffolds the import at the detected framework's guaranteed pre-app seam (Next `instrumentation.ts`, Nitro plugin, SvelteKit `hooks.server.ts`, `node --import`), plus the build-time seam for client-inlined variables. Halves scaffolded only where they exist; unknown frameworks are asked, never guessed.
+- `names` becomes `override`, with schema-typed keys via an optional, type-only `defineConfig<typeof schema>` parameter. Breaking; rides the 0.5.0 release train.
+- `doctor` gains `ambient-shadow`.
+
+**Gate to advance:** penv-cloud deletes its WorkOS bridge files, declares the SDK's surface in its schema plus one `override` entry, and WorkOS authenticates with no penv-aware code in the app — including the exclusivity proof: a stray exported `WORKOS_API_HOSTNAME` never reaches the SDK.
 
 ## v1.0 — Stable SDK
 

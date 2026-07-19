@@ -4,7 +4,7 @@
  * because they encode Vault's grammar and Vault's plumbing — the KV version of a
  * mount, the `vault` CLI — which are someone else's product, not penv's. Core
  * stays provider-agnostic; the backend's rules live with the adapter, the way the
- * GitHub sink keeps its own `gh` errors beside it.
+ * GitHub provider keeps its own `gh` errors beside it.
  */
 
 import { PenvError } from "@penvhq/core";

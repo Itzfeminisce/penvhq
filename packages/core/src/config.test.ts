@@ -324,6 +324,35 @@ describe("validateConfig", () => {
     expect(codes).not.toContain("PROVIDER_TYPE_INVALID");
   });
 
+  it("refuses a config still carrying a `sinks` block, naming the provider rewrite", () => {
+    const config = {
+      environments: ["production"],
+      providers: { production: { type: "@penvhq/provider-filesystem" } },
+      sinks: { production: { type: "github", repo: "acme/api" } },
+    } as unknown as PenvConfig;
+
+    const errors = validateConfig(config);
+    const removed = errors.find((error) => error.code === "CONFIG_SINKS_REMOVED");
+
+    expect(removed).toBeDefined();
+    expect(removed?.remedy).toContain("@penvhq/provider-github");
+    expect(removed?.remedy).toContain("location");
+  });
+
+  it("stays quiet about sinks for a config that never declared one", () => {
+    expect(codesFor(valid)).not.toContain("CONFIG_SINKS_REMOVED");
+  });
+
+  it("rewrites the legacy `github` short type to its package", () => {
+    const config: PenvConfig = {
+      environments: ["production"],
+      providers: { production: { type: "github" } },
+    };
+
+    const legacy = validateConfig(config).find((error) => error.code === "PROVIDER_TYPE_LEGACY");
+    expect(legacy?.remedy).toContain("@penvhq/provider-github");
+  });
+
   it("rejects an empty name override", () => {
     const config: PenvConfig = { ...valid, names: { "database-url": "" } };
 

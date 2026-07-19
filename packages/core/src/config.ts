@@ -22,7 +22,6 @@ import {
 import { isLegalEnvironmentName, validateEnvironmentNames } from "./grammar.js";
 import { validateKeys } from "./keys.js";
 import { validatePublicPrefixes, validateSchemaFile } from "./schema-file.js";
-import { validateSinks } from "./sinks.js";
 import type { PenvConfig, ValidatedProviders } from "./types.js";
 
 const CONFIG_FILENAMES = ["penv.config.ts", "penv.config.js", "penv.config.mjs"] as const;
@@ -186,6 +185,7 @@ const LEGACY_PROVIDER_TYPES: Readonly<Record<string, string>> = {
   ssm: "@penvhq/provider-ssm",
   kubernetes: "@penvhq/provider-kubernetes",
   mock: "@penvhq/provider-mock",
+  github: "@penvhq/provider-github",
 };
 
 /**
@@ -214,6 +214,28 @@ function validateProviderType(environment: string, type: string): PenvError | un
     );
   }
   return undefined;
+}
+
+/**
+ * The `sinks` key is gone — everything it declared is a provider now — but a
+ * config still carrying one deserves the exact rewrite, not a silent ignore
+ * that would quietly stop pushing what it used to push.
+ */
+function legacySinksBlock(config: PenvConfig): PenvError[] {
+  const sinks = (config as unknown as Readonly<Record<string, unknown>>).sinks;
+  if (sinks === undefined) {
+    return [];
+  }
+  return [
+    new PenvError(
+      "CONFIG_SINKS_REMOVED",
+      "`sinks` in penv.config.ts is no longer a config key — everything is a provider now",
+      "Move each entry into `providers` as that environment's provider: " +
+        '`sinks: { production: { type: "github", repo: "acme/api" } }` becomes ' +
+        '`providers: { production: { type: "@penvhq/provider-github", location: "acme/api" } }`, ' +
+        "with `npm i -D @penvhq/provider-github`. `penv push` and `penv pull` work against it directly.",
+    ),
+  ];
 }
 
 /**
@@ -336,7 +358,7 @@ export function validateConfig(config: PenvConfig): PenvError[] {
   }
 
   errors.push(...validateKeys(config, declared));
-  errors.push(...validateSinks(config, declared));
+  errors.push(...legacySinksBlock(config));
   errors.push(...validateSchemaFile(config));
   errors.push(...validatePublicPrefixes(config));
 
