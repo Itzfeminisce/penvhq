@@ -27,6 +27,7 @@ import {
 } from "@penvhq/core";
 import { defineCommand } from "citty";
 import type { z } from "zod";
+import { shorthandCandidates } from "../env-flags.js";
 import type { Project } from "../project.js";
 import { keySourceFor, openProject, refsFrom, targetEnvironment } from "../project.js";
 import type { DriftReport } from "../schema.js";
@@ -62,6 +63,8 @@ export interface ValidateResult {
 export interface ValidateOptions {
   readonly cwd: string;
   readonly environment?: string;
+  /** Bare flags the command did not declare — environment shorthands, judged against the whitelist. */
+  readonly envFlags?: readonly string[];
 }
 
 const SCHEMA_EXPORT = "schema";
@@ -294,7 +297,7 @@ async function loadSchemaExclusively(
 
 export async function runValidate(options: ValidateOptions): Promise<ValidateResult> {
   const project = openProject(options.cwd);
-  const environment = targetEnvironment(project, options.environment);
+  const environment = targetEnvironment(project, options.environment, options.envFlags);
   const schemaPath = schemaFileOf(project.config);
   const issues: ValidateIssue[] = [];
 
@@ -446,6 +449,7 @@ export const validateCommand = defineCommand({
       const result = await runValidate({
         cwd: process.cwd(),
         ...(args.env === undefined ? {} : { environment: args.env }),
+        envFlags: shorthandCandidates(args, ["env"]),
       });
       write(renderValidate(result));
       if (!result.ok) {

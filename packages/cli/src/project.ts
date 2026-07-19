@@ -6,6 +6,7 @@
 
 import { dirname, resolve } from "node:path";
 import type {
+  AnyProvider,
   DecryptFailure,
   KeySource,
   ParameterRef,
@@ -28,6 +29,7 @@ import {
   resolveKeySource,
 } from "@penvhq/core";
 import { FilesystemProvider } from "@penvhq/provider-filesystem";
+import { environmentFromShorthand } from "./env-flags.js";
 import {
   assertProvidersRegistered,
   createProvider,
@@ -103,7 +105,10 @@ export function localTree(project: Project): FilesystemProvider {
  * local tree — the two coincide, and there is nothing to pull from elsewhere.
  * `openProject` is untouched: the working copy stays filesystem regardless.
  */
-export async function sourceProviderFor(project: Project, environment: string): Promise<Provider> {
+export async function sourceProviderFor(
+  project: Project,
+  environment: string,
+): Promise<AnyProvider> {
   const providerConfig = project.config.providers[environment];
   if (providerConfig === undefined) {
     return createProvider(LOCAL_TREE_TYPE, { root: project.penvDir, config: project.config });
@@ -111,6 +116,9 @@ export async function sourceProviderFor(project: Project, environment: string): 
   // A declared backend may be a plugin (`penv-cloud`, a third-party provider), so
   // this goes through the async, plugin-aware path rather than the built-in-only
   // `createProvider`. The local tree above is always a built-in and stays sync.
+  // The result may hold records or a projection — callers narrow through
+  // `holdsRecords`/`holdsProjection` and never call a method the capability
+  // declaration did not promise.
   return createSourceProvider(providerConfig.type, {
     root: project.penvDir,
     config: project.config,
@@ -119,9 +127,22 @@ export async function sourceProviderFor(project: Project, environment: string): 
   });
 }
 
-/** The environment to act on: `--env`, then `PENV_ENV`, then `NODE_ENV`. */
-export function targetEnvironment(project: Project, explicit?: string): string {
-  return resolveEnvironment(project.config, explicit);
+/**
+ * The environment to act on: `--env` (or a whitelisted shorthand flag like
+ * `--production`), then `PENV_ENV`, then `NODE_ENV`. `shorthand` carries the
+ * bare flags the command did not declare, judged here against the whitelist —
+ * the config interprets flags, it never parses them.
+ */
+export function targetEnvironment(
+  project: Project,
+  explicit?: string,
+  shorthand?: readonly string[],
+): string {
+  const fromFlags =
+    shorthand === undefined
+      ? undefined
+      : environmentFromShorthand(project.config, shorthand, explicit);
+  return resolveEnvironment(project.config, explicit ?? fromFlags);
 }
 
 /** A namespace separator on the command line, either spelling. */

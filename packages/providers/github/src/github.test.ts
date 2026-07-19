@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GithubUnavailableError } from "./errors.js";
-import { createGithubSink, GhInvocationError, type GhRunner } from "./github.js";
+import { createGithubProvider, GhInvocationError, type GhRunner } from "./github.js";
 
 interface Call {
   readonly args: string[];
@@ -37,10 +37,10 @@ function authOkButFails(stderr: string): GhRunner {
   };
 }
 
-describe("GithubSink.push", () => {
+describe("GithubProvider.push", () => {
   it("sends the value on stdin and scopes an environment secret with --env", async () => {
     const { run, calls } = recording();
-    await createGithubSink({ repo: "org/app", run }).push("API_URL", "https://x", {
+    await createGithubProvider({ repo: "org/app", run }).push("API_URL", "https://x", {
       kind: "environment",
       environment: "production",
     });
@@ -58,36 +58,38 @@ describe("GithubSink.push", () => {
 
   it("omits --env for a repository secret and --repo when none is declared", async () => {
     const { run, calls } = recording();
-    await createGithubSink({ run }).push("SHARED", "v", { kind: "repository" });
+    await createGithubProvider({ run }).push("SHARED", "v", { kind: "repository" });
     expect(calls[0]?.args).toEqual(["secret", "set", "SHARED"]);
   });
 
   it("maps a missing gh binary to a loud not-installed refusal", async () => {
-    const sink = createGithubSink({ run: failing(true, null, "") });
-    await expect(sink.push("X", "v", { kind: "repository" })).rejects.toBeInstanceOf(
+    const provider = createGithubProvider({ run: failing(true, null, "") });
+    await expect(provider.push("X", "v", { kind: "repository" })).rejects.toBeInstanceOf(
       GithubUnavailableError,
     );
-    await expect(sink.push("X", "v", { kind: "repository" })).rejects.toMatchObject({
+    await expect(provider.push("X", "v", { kind: "repository" })).rejects.toMatchObject({
       reason: "not-installed",
     });
   });
 
   it("maps an auth failure to not-authenticated", async () => {
-    const sink = createGithubSink({ run: failing(false, 1, "gh auth login required") });
-    await expect(sink.push("X", "v", { kind: "repository" })).rejects.toMatchObject({
+    const provider = createGithubProvider({ run: failing(false, 1, "gh auth login required") });
+    await expect(provider.push("X", "v", { kind: "repository" })).rejects.toMatchObject({
       reason: "not-authenticated",
     });
   });
 
   it("maps any other failure to command-failed, carrying gh's own words", async () => {
-    const sink = createGithubSink({ run: failing(false, 1, "HTTP 404: environment not found") });
+    const provider = createGithubProvider({
+      run: failing(false, 1, "HTTP 404: environment not found"),
+    });
     await expect(
-      sink.push("X", "v", { kind: "environment", environment: "production" }),
+      provider.push("X", "v", { kind: "environment", environment: "production" }),
     ).rejects.toMatchObject({ reason: "command-failed" });
   });
 });
 
-describe("GithubSink.list", () => {
+describe("GithubProvider.list", () => {
   it("parses name and updatedAt from gh's json", async () => {
     const { run } = recording({
       "secret list --repo org/app --json name,updatedAt": JSON.stringify([
@@ -95,7 +97,9 @@ describe("GithubSink.list", () => {
         { name: "B", updatedAt: "2026-02-01T00:00:00Z" },
       ]),
     });
-    const secrets = await createGithubSink({ repo: "org/app", run }).list({ kind: "repository" });
+    const secrets = await createGithubProvider({ repo: "org/app", run }).list({
+      kind: "repository",
+    });
     expect(secrets).toEqual([
       { name: "A", updatedAt: "2026-01-01T00:00:00Z" },
       { name: "B", updatedAt: "2026-02-01T00:00:00Z" },
@@ -106,7 +110,7 @@ describe("GithubSink.list", () => {
     const { run, calls } = recording({
       "secret list --env production --json name,updatedAt": "[]",
     });
-    await createGithubSink({ run }).list({ kind: "environment", environment: "production" });
+    await createGithubProvider({ run }).list({ kind: "environment", environment: "production" });
     expect(calls[0]?.args).toEqual([
       "secret",
       "list",
@@ -119,7 +123,7 @@ describe("GithubSink.list", () => {
 
   it("refuses when gh returns output that is not JSON", async () => {
     const { run } = recording({ "secret list --json name,updatedAt": "not json at all" });
-    await expect(createGithubSink({ run }).list({ kind: "repository" })).rejects.toMatchObject({
+    await expect(createGithubProvider({ run }).list({ kind: "repository" })).rejects.toMatchObject({
       reason: "command-failed",
     });
   });
@@ -132,30 +136,30 @@ describe("GithubSink.list", () => {
         { updatedAt: "2026-01-01T00:00:00Z" },
       ]),
     });
-    const secrets = await createGithubSink({ run }).list({ kind: "repository" });
+    const secrets = await createGithubProvider({ run }).list({ kind: "repository" });
     expect(secrets).toEqual([{ name: "GOOD", updatedAt: "2026-01-01T00:00:00Z" }]);
   });
 });
 
-describe("GithubSink.verify", () => {
+describe("GithubProvider.verify", () => {
   it("checks gh auth status, then probes that it can reach the repository's secrets", async () => {
     const { run, calls } = recording();
-    await createGithubSink({ repo: "org/app", run }).verify();
+    await createGithubProvider({ repo: "org/app", run }).verify();
     expect(calls[0]?.args).toEqual(["auth", "status"]);
     expect(calls[1]?.args).toEqual(["secret", "list", "--repo", "org/app", "--json", "name"]);
   });
 
   it("refuses when gh is not installed", async () => {
-    await expect(createGithubSink({ run: failing(true, null, "") }).verify()).rejects.toMatchObject(
-      {
-        reason: "not-installed",
-      },
-    );
+    await expect(
+      createGithubProvider({ run: failing(true, null, "") }).verify(),
+    ).rejects.toMatchObject({
+      reason: "not-installed",
+    });
   });
 
   it("refuses when gh is not authenticated", async () => {
     await expect(
-      createGithubSink({ run: failing(false, 1, "not logged in") }).verify(),
+      createGithubProvider({ run: failing(false, 1, "not logged in") }).verify(),
     ).rejects.toMatchObject({ reason: "not-authenticated" });
   });
 
@@ -163,7 +167,57 @@ describe("GithubSink.verify", () => {
     // Authenticated, but the token cannot reach this repo's secrets (wrong repo,
     // under-scoped). Caught at verify, not mid-push.
     await expect(
-      createGithubSink({ repo: "org/nope", run: authOkButFails("HTTP 404: Not Found") }).verify(),
+      createGithubProvider({
+        repo: "org/nope",
+        run: authOkButFails("HTTP 404: Not Found"),
+      }).verify(),
     ).rejects.toMatchObject({ reason: "command-failed" });
+  });
+});
+
+describe("GithubProvider capabilities and targets", () => {
+  it("declares a projection that withholds values", () => {
+    const { run } = recording();
+    const provider = createGithubProvider({ repo: "org/app", run });
+    expect(provider.capabilities).toEqual({ holds: "projection", readsValues: false });
+    expect(provider.type).toBe("@penvhq/provider-github");
+  });
+
+  it("answers false for a 404'd environment and true for one that exists", async () => {
+    const { run } = recording({ "api repos/org/app/environments/production": "{}" });
+    const provider = createGithubProvider({ repo: "org/app", run });
+    expect(await provider.targetExists?.("production")).toBe(true);
+
+    const missing = createGithubProvider({
+      repo: "org/app",
+      run: authOkButFails("HTTP 404: Not Found"),
+    });
+    expect(await missing.targetExists?.("production")).toBe(false);
+  });
+
+  it("creates the environment with an idempotent PUT", async () => {
+    const { run, calls } = recording();
+    const provider = createGithubProvider({ repo: "org/app", run });
+    await provider.ensureTarget?.("production");
+    expect(calls[0]?.args).toEqual([
+      "api",
+      "--method",
+      "PUT",
+      "repos/org/app/environments/production",
+    ]);
+  });
+
+  it("resolves the repository from gh once when no location named one", async () => {
+    const { run, calls } = recording({
+      "repo view --json nameWithOwner --jq .nameWithOwner": "acme/api\n",
+    });
+    const provider = createGithubProvider({ run });
+    await provider.targetExists?.("production");
+    await provider.ensureTarget?.("production");
+    const views = calls.filter((call) => call.args[0] === "repo");
+    expect(views).toHaveLength(1);
+    expect(calls.some((call) => call.args.includes("repos/acme/api/environments/production"))).toBe(
+      true,
+    );
   });
 });

@@ -101,8 +101,8 @@ export {
   validatePublicPrefixes,
   validateSchemaFile,
 } from "./schema-file.js";
-export { validateSinks } from "./sinks.js";
 export type {
+  AnyProvider,
   DecryptFailure,
   DecryptReason,
   KeyConfig,
@@ -114,7 +114,11 @@ export type {
   ParameterRef,
   ParsedFile,
   PenvConfig,
+  PenvErrorLike,
+  ProjectionProvider,
+  ProjectionSecret,
   Provider,
+  ProviderCapabilities,
   ProviderConfig,
   ProviderConfigMap,
   ProviderFactoryContext,
@@ -124,11 +128,16 @@ export type {
   RetainingProvider,
   Scope,
   SecretScope,
-  Sink,
-  SinkConfig,
-  SinkSecret,
   ValidatedProviderEntry,
   ValidatedProviders,
   ValueFile,
 } from "./types.js";
-export { assertNever, META_FORMATS, RESERVED_TOKENS, retainsPrevious } from "./types.js";
+export {
+  assertNever,
+  holdsProjection,
+  holdsRecords,
+  META_FORMATS,
+  RESERVED_TOKENS,
+  readsValues,
+  retainsPrevious,
+} from "./types.js";

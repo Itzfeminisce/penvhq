@@ -25,7 +25,6 @@
     "@penvhq/core": "workspace:*",
     "@penvhq/provider-filesystem": "workspace:*",
     "@penvhq/provider-mock": "workspace:*",
-    "@penvhq/sink-github": "workspace:*",
     "@penvhq/runtime": "workspace:*",
     "citty": "0.2.2",
     "jiti": "2.7.0"
@@ -34,6 +33,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@penvhq/provider-github": "workspace:*",
     "@penvhq/provider-vault": "workspace:*",
     "server-only": "0.0.1",
     "zod": "4.4.3"

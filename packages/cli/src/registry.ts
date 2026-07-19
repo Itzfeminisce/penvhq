@@ -21,8 +21,8 @@
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { PenvConfig, Provider, ProviderFactoryContext } from "@penvhq/core";
-import { PenvError } from "@penvhq/core";
+import type { AnyProvider, PenvConfig, Provider, ProviderFactoryContext } from "@penvhq/core";
+import { holdsProjection, PenvError } from "@penvhq/core";
 import { createFilesystemProvider } from "@penvhq/provider-filesystem";
 import { createMockProvider } from "@penvhq/provider-mock";
 
@@ -37,7 +37,7 @@ export type ProviderContext = ProviderFactoryContext;
 export type ProviderFactory = (context: ProviderContext) => Provider;
 
 /** The factory shape a provider package exports. May be async. */
-type PluginProviderFactory = (context: ProviderContext) => Provider | Promise<Provider>;
+type PluginProviderFactory = (context: ProviderContext) => AnyProvider | Promise<AnyProvider>;
 
 /** The symbol a provider package exports — the entry point this seam calls. */
 const PLUGIN_FACTORY_EXPORT = "penvProviderFactory";
@@ -63,8 +63,8 @@ const REGISTRY = new Map<string, ProviderFactory>([
   ],
 ]);
 
-/** The contract methods a loaded provider must carry before penv will trust it. */
-const CONTRACT_METHODS = [
+/** The record contract's methods — what a records-holding provider must carry before penv trusts it. */
+const RECORD_CONTRACT_METHODS = [
   "read",
   "write",
   "list",
@@ -73,6 +73,9 @@ const CONTRACT_METHODS = [
   "writeMeta",
   "removeMeta",
 ] as const;
+
+/** The projection contract's required methods — the smaller surface a projection-holding provider carries. */
+const PROJECTION_CONTRACT_METHODS = ["verify", "push", "list"] as const;
 
 /**
  * Loaded provider modules, memoized by resolved path, so a command touching
@@ -110,14 +113,14 @@ export function createProvider(type: string, context: ProviderContext): Provider
 export async function createSourceProvider(
   type: string,
   context: ProviderContext,
-): Promise<Provider> {
+): Promise<AnyProvider> {
   if (REGISTRY.has(type)) {
     return createProvider(type, context);
   }
   return loadPluginProvider(type, context);
 }
 
-async function loadPluginProvider(type: string, context: ProviderContext): Promise<Provider> {
+async function loadPluginProvider(type: string, context: ProviderContext): Promise<AnyProvider> {
   const fromDir = resolutionBase(context);
 
   const resolved = resolvePlugin(type, fromDir);
@@ -207,14 +210,26 @@ function importPlugin(resolvedPath: string): Promise<Record<string, unknown>> {
   return loading;
 }
 
-/** Fails loudly if a loaded provider is missing a contract method — at load, not mid-write. */
-function assertSatisfiesContract(provider: Provider, specifier: string): void {
-  for (const method of CONTRACT_METHODS) {
+/**
+ * Fails loudly if a loaded provider is missing a contract method — at load, not
+ * mid-write. Which contract is the provider's own declaration: a
+ * `holds: "projection"` capability selects the projection surface, anything
+ * else the seven-method record contract the filesystem defines.
+ */
+function assertSatisfiesContract(provider: AnyProvider, specifier: string): void {
+  const projection = holdsProjection(provider);
+  const methods: readonly string[] = projection
+    ? PROJECTION_CONTRACT_METHODS
+    : RECORD_CONTRACT_METHODS;
+  const contract = projection
+    ? "the @penvhq/core ProjectionProvider contract its declared capabilities select"
+    : "the @penvhq/core Provider contract that the filesystem provider defines";
+  for (const method of methods) {
     if (typeof (provider as unknown as Record<string, unknown>)[method] !== "function") {
       throw new PenvError(
         "PROVIDER_PLUGIN_INVALID",
         `The provider from \`${specifier}\` is missing \`${method}()\``,
-        "It must satisfy the @penvhq/core Provider contract that the filesystem provider defines.",
+        `It must satisfy ${contract}.`,
       );
     }
   }

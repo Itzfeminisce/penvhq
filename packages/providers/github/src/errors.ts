@@ -1,9 +1,9 @@
 /**
- * The sink's own errors, extending penv's base so they print with a remedy and
+ * The provider's own errors, extending penv's base so they print with a remedy and
  * carry a stable code, exactly as core's do. They live here rather than in core
  * because they encode GitHub's grammar and GitHub's plumbing — the reserved
  * `GITHUB_` prefix, the `gh` CLI — which are someone else's product, not penv's.
- * Core stays destination-agnostic; the destination's rules live with the sink.
+ * Core stays destination-agnostic; the destination's rules live with the provider.
  */
 
 import { PenvError } from "@penvhq/core";
@@ -38,7 +38,7 @@ export class GithubNameError extends PenvError {
   }
 }
 
-/** Why penv cannot reach GitHub. Never fallen back from — see the RFC's sink decision. */
+/** Why penv cannot reach GitHub. Never fallen back from — see the RFC's provider-unification decision. */
 export type GithubUnavailableReason = "not-installed" | "not-authenticated" | "command-failed";
 
 /**

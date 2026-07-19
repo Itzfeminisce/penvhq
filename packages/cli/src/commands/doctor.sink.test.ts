@@ -1,14 +1,15 @@
 /**
- * `doctor` against a sink. Three tiers, rendered by verdict: names are exact
- * (the one read a write-only destination allows), values are permanently
- * `unknown`, and a hand-edit is caught indirectly — GitHub's `updatedAt` newer
- * than penv's own last-push time. The sink is injected, so no test runs `gh`.
+ * `doctor` against a projection-holding, value-withholding provider. Three
+ * tiers, rendered by verdict: names are exact (the one read the destination
+ * allows), values are permanently `unknown`, and a hand-edit is caught
+ * indirectly — GitHub's `updatedAt` newer than penv's own last-push time.
+ * The provider is injected, so no test runs `gh`.
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SecretScope, Sink, SinkSecret } from "@penvhq/core";
+import type { ProjectionProvider, ProjectionSecret, SecretScope } from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DoctorCheck, DoctorFinding } from "./doctor.js";
 import { runDoctor } from "./doctor.js";
@@ -18,8 +19,7 @@ const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", i
 
 const CONFIG = {
   environments: ["production"],
-  providers: { production: { type: "@penvhq/provider-filesystem" } },
-  sinks: { production: { type: "github" } },
+  providers: { production: { type: "@penvhq/provider-github", location: "org/app" } },
 };
 
 const created: string[] = [];
@@ -60,16 +60,17 @@ function makeProject(fixture: Fixture): string {
   return root;
 }
 
-interface SinkFixture {
-  readonly repo?: readonly SinkSecret[];
-  readonly env?: readonly SinkSecret[];
+interface ProjectionFixture {
+  readonly repo?: readonly ProjectionSecret[];
+  readonly env?: readonly ProjectionSecret[];
   readonly verifyError?: Error;
   readonly listError?: Error;
 }
 
-function fakeSink(fixture: SinkFixture = {}): Sink {
+function fakeProjection(fixture: ProjectionFixture = {}): ProjectionProvider {
   return {
-    type: "github",
+    type: "@penvhq/provider-github",
+    capabilities: { holds: "projection", readsValues: false },
     verify: async () => {
       if (fixture.verifyError !== undefined) throw fixture.verifyError;
     },
@@ -90,7 +91,7 @@ function pushedMeta(iso: string): string {
   return JSON.stringify({ environments: { production: { [LAST_PUSHED_KEY]: iso } } });
 }
 
-describe("doctor sink checks", () => {
+describe("doctor projection checks", () => {
   it("flags a secret edited outside penv — updatedAt newer than the last push", async () => {
     const root = makeProject({
       schema: "apiKey: z.string()",
@@ -99,11 +100,13 @@ describe("doctor sink checks", () => {
         "api-key.json": pushedMeta("2026-01-01T00:00:00.000Z"),
       },
     });
-    const sink = fakeSink({ env: [{ name: "API_KEY", updatedAt: "2026-06-01T00:00:00Z" }] });
+    const projection = fakeProjection({
+      env: [{ name: "API_KEY", updatedAt: "2026-06-01T00:00:00Z" }],
+    });
 
-    const report = await runDoctor({ cwd: root, environment: "production", sink });
+    const report = await runDoctor({ cwd: root, environment: "production", projection });
 
-    const edits = findingsOf(report.findings, "sink-manual-edit");
+    const edits = findingsOf(report.findings, "projection-manual-edit");
     expect(edits).toHaveLength(1);
     expect(edits[0]?.severity).toBe("warning");
     expect(edits[0]?.subject).toBe("API_KEY");
@@ -119,11 +122,13 @@ describe("doctor sink checks", () => {
         "api-key.json": pushedMeta("2026-06-01T00:00:00.000Z"),
       },
     });
-    const sink = fakeSink({ env: [{ name: "API_KEY", updatedAt: "2026-01-01T00:00:00Z" }] });
+    const projection = fakeProjection({
+      env: [{ name: "API_KEY", updatedAt: "2026-01-01T00:00:00Z" }],
+    });
 
-    const report = await runDoctor({ cwd: root, environment: "production", sink });
+    const report = await runDoctor({ cwd: root, environment: "production", projection });
 
-    expect(findingsOf(report.findings, "sink-manual-edit")[0]?.severity).toBe("pass");
+    expect(findingsOf(report.findings, "projection-manual-edit")[0]?.severity).toBe("pass");
   });
 
   it("names a declared parameter absent from the destination", async () => {
@@ -131,39 +136,45 @@ describe("doctor sink checks", () => {
       schema: "apiKey: z.string()",
       tree: { "api-key.production": "v" },
     });
-    const sink = fakeSink({ env: [] });
+    const projection = fakeProjection({ env: [] });
 
-    const report = await runDoctor({ cwd: root, environment: "production", sink });
+    const report = await runDoctor({ cwd: root, environment: "production", projection });
 
-    const drift = findingsOf(report.findings, "sink-name-drift");
+    const drift = findingsOf(report.findings, "projection-name-drift");
     expect(drift.some((f) => f.severity === "warning" && f.subject === "API_KEY")).toBe(true);
   });
 
   it("names a destination secret with no declared parameter", async () => {
     const root = makeProject({ tree: {} });
-    const sink = fakeSink({ env: [{ name: "STALE", updatedAt: "2026-01-01T00:00:00Z" }] });
+    const projection = fakeProjection({
+      env: [{ name: "STALE", updatedAt: "2026-01-01T00:00:00Z" }],
+    });
 
-    const report = await runDoctor({ cwd: root, environment: "production", sink });
+    const report = await runDoctor({ cwd: root, environment: "production", projection });
 
-    const drift = findingsOf(report.findings, "sink-name-drift");
+    const drift = findingsOf(report.findings, "projection-name-drift");
     expect(drift.some((f) => f.subject === "STALE")).toBe(true);
   });
 
   it("always reports value drift as unknown — it cannot be read back", async () => {
     const root = makeProject({ tree: {} });
-    const report = await runDoctor({ cwd: root, environment: "production", sink: fakeSink() });
+    const report = await runDoctor({
+      cwd: root,
+      environment: "production",
+      projection: fakeProjection(),
+    });
 
-    const value = findingsOf(report.findings, "sink-value-drift")[0];
+    const value = findingsOf(report.findings, "projection-value-drift")[0];
     expect(value?.severity).toBe("unknown");
   });
 
-  it("reports the whole sink as unknown when the destination cannot be reached", async () => {
+  it("reports the whole destination as unknown when it cannot be reached", async () => {
     const root = makeProject({ tree: { "api-key.production": "v" }, schema: "apiKey: z.string()" });
-    const sink = fakeSink({ verifyError: new Error("gh not installed") });
+    const projection = fakeProjection({ verifyError: new Error("gh not installed") });
 
-    const report = await runDoctor({ cwd: root, environment: "production", sink });
+    const report = await runDoctor({ cwd: root, environment: "production", projection });
 
-    const unreachable = findingsOf(report.findings, "sink-unreachable");
+    const unreachable = findingsOf(report.findings, "projection-unreachable");
     expect(unreachable).toHaveLength(1);
     expect(unreachable[0]?.severity).toBe("unknown");
     expect(report.ok).toBe(true);
@@ -171,11 +182,11 @@ describe("doctor sink checks", () => {
 
   it("reports unknown when the destination is reachable but listing secrets fails", async () => {
     const root = makeProject({ tree: { "api-key.production": "v" }, schema: "apiKey: z.string()" });
-    const sink = fakeSink({ listError: new Error("HTTP 403: forbidden") });
+    const projection = fakeProjection({ listError: new Error("HTTP 403: forbidden") });
 
-    const report = await runDoctor({ cwd: root, environment: "production", sink });
+    const report = await runDoctor({ cwd: root, environment: "production", projection });
 
-    const unreachable = findingsOf(report.findings, "sink-unreachable");
+    const unreachable = findingsOf(report.findings, "projection-unreachable");
     expect(unreachable).toHaveLength(1);
     expect(unreachable[0]?.severity).toBe("unknown");
     expect(unreachable[0]?.subject).toContain("could not list");
@@ -190,24 +201,27 @@ describe("doctor sink checks", () => {
       schema: "foo: z.string()",
       tree: { foo: "shared-default", "foo.production": "prod-override" },
     });
-    const sink = fakeSink({
+    const projection = fakeProjection({
       repo: [{ name: "FOO", updatedAt: "2026-01-01T00:00:00Z" }],
       env: [{ name: "FOO", updatedAt: "2026-01-01T00:00:00Z" }],
     });
 
-    const report = await runDoctor({ cwd: root, environment: "production", sink });
+    const report = await runDoctor({ cwd: root, environment: "production", projection });
 
-    const undeclared = findingsOf(report.findings, "sink-name-drift").filter(
+    const undeclared = findingsOf(report.findings, "projection-name-drift").filter(
       (f) => f.label === "In destination, not declared",
     );
     expect(undeclared).toEqual([]);
   });
 
-  it("adds no sink findings when the environment declares no sink", async () => {
-    const root = makeProject({ tree: { "api-key.production": "v" }, config: { sinks: {} } });
+  it("adds no projection findings when the environment's provider is the local tree", async () => {
+    const root = makeProject({
+      tree: { "api-key.production": "v" },
+      config: { providers: { production: { type: "@penvhq/provider-filesystem" } } },
+    });
 
     const report = await runDoctor({ cwd: root, environment: "production" });
 
-    expect(report.findings.some((f) => f.check.startsWith("sink-"))).toBe(false);
+    expect(report.findings.some((f) => f.check.startsWith("projection-"))).toBe(false);
   });
 });

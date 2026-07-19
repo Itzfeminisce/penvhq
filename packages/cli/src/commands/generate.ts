@@ -21,6 +21,7 @@ import {
   variableName,
 } from "@penvhq/core";
 import { defineCommand } from "citty";
+import { shorthandCandidates } from "../env-flags.js";
 import type { Project } from "../project.js";
 import {
   keySourceFor,
@@ -38,6 +39,8 @@ export const DEFAULT_OUTPUT = ".env";
 export interface GenerateOptions {
   readonly cwd: string;
   readonly environment?: string;
+  /** Bare flags the command did not declare — environment shorthands, judged against the whitelist. */
+  readonly envFlags?: readonly string[];
   /** Where to write, absolute or relative to `cwd`. Defaults to `.env` at the project root. */
   readonly out?: string;
   /** Permits sealed values to be written into the artifact as plaintext. */
@@ -123,13 +126,13 @@ function entriesFor(project: Project, environment: string, allowDecrypt: boolean
 /** The `.env` text for one environment — what `penv generate` writes. */
 export function generateDotenv(options: Omit<GenerateOptions, "out">): string {
   const project = openProject(options.cwd);
-  const environment = targetEnvironment(project, options.environment);
+  const environment = targetEnvironment(project, options.environment, options.envFlags);
   return serializeDotenv(entriesFor(project, environment, options.allowDecrypt === true).entries);
 }
 
 export function runGenerate(options: GenerateOptions): GenerateResult {
   const project = openProject(options.cwd);
-  const environment = targetEnvironment(project, options.environment);
+  const environment = targetEnvironment(project, options.environment, options.envFlags);
   const { entries, decrypted } = entriesFor(project, environment, options.allowDecrypt === true);
 
   // `--out` is the caller's path, so it is relative to where they are standing;
@@ -192,6 +195,7 @@ export const generateCommand = defineCommand({
         ...(args.env === undefined ? {} : { environment: args.env }),
         ...(args.out === undefined ? {} : { out: args.out }),
         ...(args["allow-decrypt"] === undefined ? {} : { allowDecrypt: args["allow-decrypt"] }),
+        envFlags: shorthandCandidates(args, ["env", "out", "allow-decrypt", "allowDecrypt"]),
       });
       write(renderGenerate(result, cwd));
     });

@@ -1,7 +1,7 @@
 {
-  "name": "@penvhq/sink-github",
+  "name": "@penvhq/provider-github",
   "version": "0.4.0",
-  "description": "The GitHub Actions Secrets sink — a write-only destination penv pushes to through the gh CLI.",
+  "description": "The GitHub Actions Secrets provider — a projection-holding, value-withholding store penv pushes to through the gh CLI.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.cjs",

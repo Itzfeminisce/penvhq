@@ -1,6 +1,6 @@
 /**
  * The default {@link VaultTransport}: a thin boundary that shells out to the
- * `vault` CLI, mirroring the GitHub sink's `gh` precedent.
+ * `vault` CLI, mirroring the GitHub provider's `gh` precedent.
  *
  * penv holds no Vault credential of its own. `vault login` has already happened and
  * `VAULT_ADDR`/`VAULT_TOKEN` are the CLI's to keep — penv's config gains no field
