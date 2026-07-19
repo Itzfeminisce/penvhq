@@ -15,3 +15,14 @@
 
 export type { MockProviderOptions } from "./mock.js";
 export { createMockProvider, MockProvider } from "./mock.js";
+
+declare module "@penvhq/core" {
+  interface ProviderConfigMap {
+    /**
+     * The rehearsal store: a JSON file beside the tree. It places itself, so it
+     * takes no `location`.
+     */
+    // biome-ignore lint/complexity/noBannedTypes: no fields is the declaration.
+    "@penvhq/provider-mock": {};
+  }
+}

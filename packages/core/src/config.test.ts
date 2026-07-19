@@ -42,8 +42,8 @@ function makeProject(source: string, filename = "penv.config.ts"): string {
 const valid: PenvConfig = {
   environments: ["development", "staging", "production"],
   providers: {
-    development: { type: "filesystem" },
-    staging: { type: "vault", path: "secret/staging" },
+    development: { type: "@penvhq/provider-filesystem" },
+    staging: { type: "@penvhq/provider-vault", location: "secret/staging" },
     production: { type: "aws-ssm", path: "/prod/app" },
   },
   names: { "database-url": "DATABASE_URL" },
@@ -102,7 +102,7 @@ describe("loadConfigFrom", () => {
         "interface Config { environments: string[]; providers: Record<string, { type: string }> }",
         "const config: Config = {",
         '  environments: ["development", "production"],',
-        '  providers: { development: { type: "filesystem" }, production: { type: "filesystem" } },',
+        '  providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-filesystem" } },',
         "};",
         "export default config;",
         "",
@@ -112,7 +112,7 @@ describe("loadConfigFrom", () => {
     const config = loadConfigFrom(resolve(root, "penv.config.ts"));
 
     expect(config.environments).toEqual(["development", "production"]);
-    expect(config.providers.production).toEqual({ type: "filesystem" });
+    expect(config.providers.production).toEqual({ type: "@penvhq/provider-filesystem" });
     expect(validateConfig(config)).toEqual([]);
   });
 
@@ -164,7 +164,7 @@ describe("validateConfig", () => {
   it("rejects an environment named `local`", () => {
     const config: PenvConfig = {
       environments: ["local", "production"],
-      providers: { local: { type: "filesystem" }, production: { type: "filesystem" } },
+      providers: { local: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-filesystem" } },
     };
 
     const errors = validateConfig(config);
@@ -180,7 +180,7 @@ describe("validateConfig", () => {
       [
         "export default {",
         '  environments: ["local", "production"],',
-        '  providers: { local: { type: "filesystem" }, production: { type: "filesystem" } },',
+        '  providers: { local: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-filesystem" } },',
         "};",
         "",
       ].join("\n"),
@@ -195,7 +195,7 @@ describe("validateConfig", () => {
     for (const token of ["enc", "json", "toml", "yml"]) {
       const config: PenvConfig = {
         environments: [token],
-        providers: { [token]: { type: "filesystem" } },
+        providers: { [token]: { type: "@penvhq/provider-filesystem" } },
       };
       expect(codesFor(config)).toContain("RESERVED_TOKEN");
     }
@@ -212,13 +212,13 @@ describe("validateConfig", () => {
   it("rejects a blank or duplicated environment name", () => {
     const blank: PenvConfig = {
       environments: ["  "],
-      providers: { "  ": { type: "filesystem" } },
+      providers: { "  ": { type: "@penvhq/provider-filesystem" } },
     };
     expect(codesFor(blank)).toContain("CONFIG_ENVIRONMENT_INVALID");
 
     const duplicated: PenvConfig = {
       environments: ["production", "production"],
-      providers: { production: { type: "filesystem" } },
+      providers: { production: { type: "@penvhq/provider-filesystem" } },
     };
     expect(codesFor(duplicated)).toContain("CONFIG_ENVIRONMENT_DUPLICATE");
   });
@@ -226,7 +226,7 @@ describe("validateConfig", () => {
   it("rejects a declared environment with no providers entry", () => {
     const config: PenvConfig = {
       environments: ["development", "production"],
-      providers: { development: { type: "filesystem" } },
+      providers: { development: { type: "@penvhq/provider-filesystem" } },
     };
 
     const errors = validateConfig(config);
@@ -239,7 +239,7 @@ describe("validateConfig", () => {
   it("rejects a providers entry naming an undeclared environment", () => {
     const config: PenvConfig = {
       environments: ["development"],
-      providers: { development: { type: "filesystem" }, staging: { type: "vault" } },
+      providers: { development: { type: "@penvhq/provider-filesystem" }, staging: { type: "@penvhq/provider-vault" } },
     };
 
     const errors = validateConfig(config);
@@ -252,7 +252,7 @@ describe("validateConfig", () => {
   it("reports both directions at once", () => {
     const config: PenvConfig = {
       environments: ["development", "production"],
-      providers: { development: { type: "filesystem" }, staging: { type: "vault" } },
+      providers: { development: { type: "@penvhq/provider-filesystem" }, staging: { type: "@penvhq/provider-vault" } },
     };
 
     expect(codesFor(config)).toEqual(
@@ -271,6 +271,48 @@ describe("validateConfig", () => {
 
     expect(typeError).toBeDefined();
     expect(typeError?.message).toContain("production");
+  });
+
+  it("rejects a legacy short provider type, naming the exact package rewrite", () => {
+    const config: PenvConfig = {
+      environments: ["production"],
+      providers: { production: { type: "vault" } },
+    };
+
+    const errors = validateConfig(config);
+    const legacy = errors.find((error) => error.code === "PROVIDER_TYPE_LEGACY");
+
+    expect(legacy).toBeDefined();
+    expect(legacy?.message).toContain("vault");
+    expect(legacy?.remedy).toContain("@penvhq/provider-vault");
+  });
+
+  it("rejects a provider type that is not a package name", () => {
+    const config: PenvConfig = {
+      environments: ["production"],
+      providers: { production: { type: "Not A Package!" } },
+    };
+
+    const errors = validateConfig(config);
+    const invalid = errors.find((error) => error.code === "PROVIDER_TYPE_INVALID");
+
+    expect(invalid).toBeDefined();
+    expect(invalid?.message).toContain("production");
+  });
+
+  it("accepts scoped and bare package names as provider types", () => {
+    const config: PenvConfig = {
+      environments: ["development", "staging", "production"],
+      providers: {
+        development: { type: "@penvhq/provider-filesystem" },
+        staging: { type: "@acme/penv-provider-doppler", location: "apps/web" },
+        production: { type: "penv-provider-custom" },
+      },
+    };
+
+    const codes = validateConfig(config).map((error) => error.code);
+    expect(codes).not.toContain("PROVIDER_TYPE_LEGACY");
+    expect(codes).not.toContain("PROVIDER_TYPE_INVALID");
   });
 
   it("rejects an empty name override", () => {

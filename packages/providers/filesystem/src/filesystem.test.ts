@@ -9,7 +9,7 @@ import { createFilesystemProvider } from "./filesystem.js";
 
 const config: PenvConfig = {
   environments: ["development", "staging", "production"],
-  providers: { development: { type: "filesystem" } },
+  providers: { development: { type: "@penvhq/provider-filesystem" } },
 };
 
 const roots: string[] = [];
@@ -52,7 +52,7 @@ const redisPassword: ValueFile = {
 
 describe("FilesystemProvider", () => {
   it("is the filesystem provider", () => {
-    expect(makeProvider().type).toBe("filesystem");
+    expect(makeProvider().type).toBe("@penvhq/provider-filesystem");
   });
 
   describe("nested namespaces", () => {

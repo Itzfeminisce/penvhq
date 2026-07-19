@@ -45,7 +45,7 @@ function isErrnoCode(error: unknown, code: string): boolean {
 }
 
 export class FilesystemProvider implements Provider {
-  readonly type = "filesystem";
+  readonly type = "@penvhq/provider-filesystem";
 
   readonly #root: string;
   readonly #config: PenvConfig;

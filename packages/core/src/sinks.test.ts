@@ -5,7 +5,7 @@ import type { PenvConfig } from "./types.js";
 
 const base: PenvConfig = {
   environments: ["development", "production"],
-  providers: { development: { type: "filesystem" }, production: { type: "filesystem" } },
+  providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-filesystem" } },
 };
 
 const declared: ReadonlySet<string> = new Set(["development", "production"]);

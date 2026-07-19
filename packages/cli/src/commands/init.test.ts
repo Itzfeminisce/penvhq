@@ -374,8 +374,8 @@ describe("environments", () => {
     });
 
     expect(config).toContain('environments: ["development", "production"],');
-    expect(config).toContain('"development": { type: "filesystem" },');
-    expect(config).toContain('"production": { type: "filesystem" },');
+    expect(config).toContain('"development": { type: "@penvhq/provider-filesystem" },');
+    expect(config).toContain('"production": { type: "@penvhq/provider-filesystem" },');
   });
 
   it("declares what --env names, however it was written", () => {
@@ -770,7 +770,7 @@ describe("re-running init on a project that already decided", () => {
     const root = makeProject(NEXT, { src: true });
     configured(
       root,
-      '{ environments: ["production"], providers: { production: { type: "filesystem" } } }',
+      '{ environments: ["production"], providers: { production: { type: "@penvhq/provider-filesystem" } } }',
     );
 
     const plan = planInit(root);

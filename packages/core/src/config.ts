@@ -23,7 +23,7 @@ import { isLegalEnvironmentName, validateEnvironmentNames } from "./grammar.js";
 import { validateKeys } from "./keys.js";
 import { validatePublicPrefixes, validateSchemaFile } from "./schema-file.js";
 import { validateSinks } from "./sinks.js";
-import type { PenvConfig } from "./types.js";
+import type { PenvConfig, ValidatedProviders } from "./types.js";
 
 const CONFIG_FILENAMES = ["penv.config.ts", "penv.config.js", "penv.config.mjs"] as const;
 
@@ -102,8 +102,16 @@ function causeMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-/** Identity at runtime; it exists so a config file is typed as it is written. */
-export function defineConfig(config: PenvConfig): PenvConfig {
+/**
+ * Identity at runtime; the type is where it earns its keep. Each installed
+ * provider package merges its config shape into `ProviderConfigMap`, and the
+ * generic holds every `providers.<env>` entry to the declaration its `type`
+ * names — exact fields for a known provider, the open base shape for one core
+ * has no declaration for. See {@link ValidatedProviders}.
+ */
+export function defineConfig<const C extends PenvConfig>(
+  config: C & { readonly providers: ValidatedProviders<C["providers"]> },
+): PenvConfig {
   return config;
 }
 
@@ -164,6 +172,48 @@ export function loadConfig(cwd: string = process.cwd()): { config: PenvConfig; f
     );
   }
   return { config: loadConfigFrom(file), file };
+}
+
+/**
+ * The short names providers went by before `type` became the package name.
+ * Recognised only to name the exact rewrite: a config carrying one is a config
+ * written against the old surface, and "install `@penvhq/provider-vault` and
+ * name it" is a better answer than "not a package specifier".
+ */
+const LEGACY_PROVIDER_TYPES: Readonly<Record<string, string>> = {
+  filesystem: "@penvhq/provider-filesystem",
+  vault: "@penvhq/provider-vault",
+  ssm: "@penvhq/provider-ssm",
+  kubernetes: "@penvhq/provider-kubernetes",
+  mock: "@penvhq/provider-mock",
+};
+
+/**
+ * The npm package-name grammar, scoped or bare. `type` is an import specifier,
+ * so anything npm would refuse as a name, penv refuses as a `type` — before the
+ * registry ever tries to resolve it.
+ */
+const PACKAGE_NAME = /^(@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/;
+
+function validateProviderType(environment: string, type: string): PenvError | undefined {
+  const legacy = LEGACY_PROVIDER_TYPES[type];
+  if (legacy !== undefined) {
+    return new PenvError(
+      "PROVIDER_TYPE_LEGACY",
+      `The provider type \`${type}\` for environment ${environment} is a short name, and provider types are package names`,
+      `Write \`${environment}: { type: "${legacy}" }\` and make sure the package is installed. ` +
+        "A provider's `type` is the package penv imports, so the config and the dependency tree name the same thing.",
+    );
+  }
+  if (!PACKAGE_NAME.test(type)) {
+    return new PenvError(
+      "PROVIDER_TYPE_INVALID",
+      `The provider type \`${type}\` for environment ${environment} is not a package name`,
+      `Name the provider's package, e.g. \`${environment}: { type: "@penvhq/provider-filesystem" }\`. ` +
+        "penv imports the package the `type` names from this project's node_modules.",
+    );
+  }
+  return undefined;
 }
 
 /**
@@ -229,7 +279,7 @@ export function validateConfig(config: PenvConfig): PenvError[] {
       new PenvError(
         "CONFIG_PROVIDERS_INVALID",
         "`providers` in penv.config.ts is not an object",
-        'Declare one provider per environment, e.g. `providers: { production: { type: "filesystem" } }`.',
+        'Declare one provider per environment, e.g. `providers: { production: { type: "@penvhq/provider-filesystem" } }`.',
       ),
     );
     return errors;
@@ -244,7 +294,7 @@ export function validateConfig(config: PenvConfig): PenvError[] {
         new PenvError(
           "PROVIDER_MISSING",
           `Environment ${environment} has no entry in \`providers\` in penv.config.ts`,
-          `Add \`${environment}: { type: "filesystem" }\` to the \`providers\` block, or remove ` +
+          `Add \`${environment}: { type: "@penvhq/provider-filesystem" }\` to the \`providers\` block, or remove ` +
             `\`${environment}\` from \`environments\`.`,
         ),
       );
@@ -255,7 +305,7 @@ export function validateConfig(config: PenvConfig): PenvError[] {
         new PenvError(
           "PROVIDER_INVALID",
           `The provider for environment ${environment} is ${describeValue(provider)}, not a provider object`,
-          `Declare it as \`${environment}: { type: "filesystem" }\`, adding a \`path\` when the ` +
+          `Declare it as \`${environment}: { type: "@penvhq/provider-filesystem" }\`, adding a \`location\` when the ` +
             "backend needs one.",
         ),
       );
@@ -267,9 +317,15 @@ export function validateConfig(config: PenvConfig): PenvError[] {
         new PenvError(
           "PROVIDER_TYPE_MISSING",
           `The provider for environment ${environment} declares no \`type\``,
-          `Name the backend that holds this environment's values, e.g. \`${environment}: { type: "filesystem" }\`.`,
+          `Name the package of the backend that holds this environment's values, e.g. ` +
+            `\`${environment}: { type: "@penvhq/provider-filesystem" }\`.`,
         ),
       );
+      continue;
+    }
+    const typeError = validateProviderType(environment, type);
+    if (typeError !== undefined) {
+      errors.push(typeError);
     }
   }
 

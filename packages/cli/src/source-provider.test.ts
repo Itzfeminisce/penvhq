@@ -51,44 +51,44 @@ describe("sourceProviderFor", () => {
     const root = makeProject({
       environments: ["development", "production"],
       providers: {
-        development: { type: "filesystem" },
-        production: { type: "vault", path: "secret/app" },
+        development: { type: "@penvhq/provider-filesystem" },
+        production: { type: "@penvhq/provider-vault", location: "secret/app" },
       },
     });
     const project = openProject(root);
 
     const source = await sourceProviderFor(project, "production");
 
-    expect(source.type).toBe("vault");
+    expect(source.type).toBe("@penvhq/provider-vault");
   });
 
   it("builds the mock provider an environment declares", async () => {
     const root = makeProject({
       environments: ["development", "production"],
       providers: {
-        development: { type: "mock" },
-        production: { type: "filesystem" },
+        development: { type: "@penvhq/provider-mock" },
+        production: { type: "@penvhq/provider-filesystem" },
       },
     });
     const project = openProject(root);
 
     const source = await sourceProviderFor(project, "development");
 
-    expect(source.type).toBe("mock");
+    expect(source.type).toBe("@penvhq/provider-mock");
   });
 
   it("falls back to the local filesystem tree when the environment declares no provider", async () => {
     const root = makeProject({
       environments: ["development", "production"],
       providers: {
-        development: { type: "filesystem" },
+        development: { type: "@penvhq/provider-filesystem" },
       },
     });
     const project = openProject(root);
 
     const source = await sourceProviderFor(project, "production");
 
-    expect(source.type).toBe("filesystem");
+    expect(source.type).toBe("@penvhq/provider-filesystem");
     expect(source).toBeInstanceOf(FilesystemProvider);
   });
 });

@@ -38,18 +38,9 @@ importers:
       '@penvhq/provider-filesystem':
         specifier: workspace:*
         version: link:../providers/filesystem
-      '@penvhq/provider-kubernetes':
-        specifier: workspace:*
-        version: link:../providers/kubernetes
       '@penvhq/provider-mock':
         specifier: workspace:*
         version: link:../providers/mock
-      '@penvhq/provider-ssm':
-        specifier: workspace:*
-        version: link:../providers/ssm
-      '@penvhq/provider-vault':
-        specifier: workspace:*
-        version: link:../providers/vault
       '@penvhq/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -63,6 +54,9 @@ importers:
         specifier: 2.7.0
         version: 2.7.0
     devDependencies:
+      '@penvhq/provider-vault':
+        specifier: workspace:*
+        version: link:../providers/vault
       server-only:
         specifier: 0.0.1
         version: 0.0.1

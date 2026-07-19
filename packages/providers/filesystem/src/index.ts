@@ -10,3 +10,14 @@
 
 export type { FilesystemProviderOptions } from "./filesystem.js";
 export { createFilesystemProvider, FilesystemProvider } from "./filesystem.js";
+
+declare module "@penvhq/core" {
+  interface ProviderConfigMap {
+    /**
+     * The local `.penv` tree. It is rooted at the project and takes no
+     * `location`: the tree on disk is the place.
+     */
+    // biome-ignore lint/complexity/noBannedTypes: no fields is the declaration.
+    "@penvhq/provider-filesystem": {};
+  }
+}

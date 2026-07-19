@@ -99,7 +99,7 @@ const unscoped: ValueFile = {
 describe("SsmProvider", () => {
   it("reports the ssm type", async () => {
     const { provider } = await makeProvider();
-    expect(provider.type).toBe("ssm");
+    expect(provider.type).toBe("@penvhq/provider-ssm");
   });
 
   describe("readPrevious retention", () => {

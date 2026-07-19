@@ -77,8 +77,9 @@ export interface SsmValue {
 
 export interface SsmProviderOptions {
   /**
-   * The `/`-prefixed base path penv maps records under, from `providers.*.path`.
-   * Defaults to `/penv`. Every parameter name is `<path>/<value-filename>`.
+   * The `/`-prefixed base path penv maps records under; the plugin factory
+   * fills it from `providers.*.location`. Defaults to `/penv`. Every parameter
+   * name is `<path>/<value-filename>`.
    */
   readonly path?: string;
   /** The transport. Defaults to shelling out to the `aws` CLI; injected in tests. */
@@ -157,7 +158,7 @@ function parseLeaf(leaf: string): ParsedLeaf | undefined {
 }
 
 export class SsmProvider implements RetainingProvider {
-  readonly type = "ssm";
+  readonly type = "@penvhq/provider-ssm";
 
   readonly #base: string;
   readonly #transport: SsmTransport;

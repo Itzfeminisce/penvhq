@@ -50,9 +50,9 @@ const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", i
 const CONFIG = {
   environments: ["development", "test", "production"],
   providers: {
-    development: { type: "filesystem" },
-    test: { type: "filesystem" },
-    production: { type: "filesystem" },
+    development: { type: "@penvhq/provider-filesystem" },
+    test: { type: "@penvhq/provider-filesystem" },
+    production: { type: "@penvhq/provider-filesystem" },
   },
 };
 
@@ -190,7 +190,7 @@ describe("a variable that is a reserved token", () => {
   it("accepts that same variable when no environment declares it", () => {
     const root = makeProject({
       dotenv: "PRODUCTION=eu-west-1\n",
-      config: { environments: ["development"], providers: { development: { type: "filesystem" } } },
+      config: { environments: ["development"], providers: { development: { type: "@penvhq/provider-filesystem" } } },
     });
 
     const report = importDotenv({ cwd: root, file: ".env" });

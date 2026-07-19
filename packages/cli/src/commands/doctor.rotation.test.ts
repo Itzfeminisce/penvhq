@@ -21,8 +21,8 @@ const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", i
 const CONFIG = {
   environments: ["development", "production"],
   providers: {
-    development: { type: "filesystem" },
-    production: { type: "filesystem" },
+    development: { type: "@penvhq/provider-filesystem" },
+    production: { type: "@penvhq/provider-filesystem" },
   },
 };
 
@@ -112,7 +112,7 @@ const ENC_KEY = Buffer.alloc(32, 7).toString("base64");
 
 /** The config that points production at a mock backend and reads its key from `PENV_KEY_PROD`. */
 const ENC_CONFIG = {
-  providers: { development: { type: "filesystem" }, production: { type: "mock" } },
+  providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-mock" } },
   keys: { production: { source: "env", id: "prod" } },
 };
 
@@ -230,7 +230,7 @@ describe("rotation-overdue", () => {
     const root = makeProject({
       schema: "apiKey: z.string()",
       tree: { "api-key.production": "v" },
-      config: { providers: { development: { type: "filesystem" }, production: { type: "mock" } } },
+      config: { providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-mock" } } },
     });
     const source = createMockProvider({ storePath: join(root, ".penv-mock-source.json") });
     const meta: Meta = {
@@ -324,7 +324,7 @@ describe("provider-value-drift", () => {
     const root = makeProject({
       schema: "apiKey: z.string()",
       tree: { "api-key.production": "local-value" },
-      config: { providers: { development: { type: "filesystem" }, production: { type: "mock" } } },
+      config: { providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-mock" } } },
     });
     const source = mockSource(root, { "api-key": "source-value" });
 
@@ -341,7 +341,7 @@ describe("provider-value-drift", () => {
     const root = makeProject({
       schema: "apiKey: z.string()",
       tree: { "api-key.production": "same-value" },
-      config: { providers: { development: { type: "filesystem" }, production: { type: "mock" } } },
+      config: { providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-mock" } } },
     });
     const source = mockSource(root, { "api-key": "same-value" });
 
@@ -356,7 +356,7 @@ describe("provider-value-drift", () => {
     const root = makeProject({
       schema: "apiKey: z.string()",
       tree: { "api-key.production": "local-only" },
-      config: { providers: { development: { type: "filesystem" }, production: { type: "mock" } } },
+      config: { providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-mock" } } },
     });
     const source = mockSource(root, {});
 
@@ -395,10 +395,10 @@ describe("provider-value-drift", () => {
     const root = makeProject({
       schema: "apiKey: z.string()",
       tree: { "api-key.production": "v" },
-      config: { providers: { development: { type: "filesystem" }, production: { type: "mock" } } },
+      config: { providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-mock" } } },
     });
     const source: Provider = {
-      type: "mock",
+      type: "@penvhq/provider-mock",
       read: async () => undefined,
       write: async () => {},
       list: async () => {
@@ -433,7 +433,7 @@ describe("provider-value-drift", () => {
         "api-key.production": "shared",
         "api-key.development": "dev-only",
       },
-      config: { providers: { development: { type: "filesystem" }, production: { type: "mock" } } },
+      config: { providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-mock" } } },
     });
     const source = mockSource(root, { "api-key": "shared" });
 

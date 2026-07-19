@@ -22,8 +22,8 @@ const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", i
 const CONFIG = {
   environments: ["development", "production"],
   providers: {
-    development: { type: "filesystem" },
-    production: { type: "mock" },
+    development: { type: "@penvhq/provider-filesystem" },
+    production: { type: "@penvhq/provider-mock" },
   },
 };
 
@@ -90,7 +90,7 @@ describe("runPull", () => {
 
     const result = await runPull({ cwd: root, environment: "production" });
 
-    expect(result.source).toBe("mock");
+    expect(result.source).toBe("@penvhq/provider-mock");
     expect(result.localSource).toBe(false);
     expect(result.values).toBe(2);
 
@@ -132,7 +132,7 @@ describe("runPull", () => {
     const result = await runPull({ cwd: root, environment: "development" });
 
     expect(result.localSource).toBe(true);
-    expect(result.source).toBe("filesystem");
+    expect(result.source).toBe("@penvhq/provider-filesystem");
     expect(result.values).toBe(0);
     expect(result.meta).toBe(0);
     expect(result.refs).toBe(0);

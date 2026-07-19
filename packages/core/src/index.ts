@@ -106,6 +106,7 @@ export type {
   DecryptFailure,
   DecryptReason,
   KeyConfig,
+  KnownProviderType,
   Meta,
   MetaBlock,
   MetaFileRef,
@@ -115,6 +116,8 @@ export type {
   PenvConfig,
   Provider,
   ProviderConfig,
+  ProviderConfigMap,
+  ProviderFactoryContext,
   ReservedToken,
   Resolution,
   ResolutionCandidate,
@@ -124,6 +127,8 @@ export type {
   Sink,
   SinkConfig,
   SinkSecret,
+  ValidatedProviderEntry,
+  ValidatedProviders,
   ValueFile,
 } from "./types.js";
 export { assertNever, META_FORMATS, RESERVED_TOKENS, retainsPrevious } from "./types.js";

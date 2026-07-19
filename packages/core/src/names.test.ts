@@ -14,10 +14,10 @@ import type { ParameterRef, PenvConfig } from "./types.js";
 const config: PenvConfig = {
   environments: ["development", "staging", "production", "test"],
   providers: {
-    development: { type: "filesystem" },
-    staging: { type: "filesystem" },
-    production: { type: "filesystem" },
-    test: { type: "filesystem" },
+    development: { type: "@penvhq/provider-filesystem" },
+    staging: { type: "@penvhq/provider-filesystem" },
+    production: { type: "@penvhq/provider-filesystem" },
+    test: { type: "@penvhq/provider-filesystem" },
   },
 };
 

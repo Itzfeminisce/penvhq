@@ -84,16 +84,28 @@ export interface Meta extends MetaBlock {
 }
 ```
 
-The provider is told which store to talk to by **`ProviderConfig`** — a `type` and an
-optional base `path` the provider maps records onto:
+The provider is told which store to talk to by **`ProviderConfig`** — a `type` that
+is the provider package's fully-qualified name, and an optional `location` the
+provider maps records onto:
 
 ```ts
 export interface ProviderConfig {
-  readonly type: string;
-  /** The provider-side base path penv maps records onto. */
-  readonly path?: string;
+  /** The provider package's fully-qualified name — the import specifier penv resolves. */
+  readonly type: KnownProviderType | (string & {});
+  /** The place inside the provider penv maps the tree onto. Format is the provider's own. */
+  readonly location?: string;
+  /** Fields beyond `location` belong to the provider's own config type. */
+  readonly [key: string]: unknown;
 }
 ```
+
+Each provider package augments core's `ProviderConfigMap` with its own config shape
+under its own package name, and exports a `penvProviderFactory(context)` — the entry
+point the CLI calls with a `ProviderFactoryContext` when a `providers.*.type` names
+the package. The factory owns the translation from `location` to the provider's own
+options (the Kubernetes package splits `namespace/secretName` there; Vault and SSM
+default the base path), so the config stays provider-agnostic and the provider never
+parses config.
 
 Everything a provider does is a translation between these types and its own store.
 The Vault adapter turns them into KV v2 paths; the filesystem provider turns them
@@ -127,7 +139,9 @@ export interface Provider {
 
 Seven required methods over `ValueFile` and `ParameterRef`, plus one optional
 `readPrevious` treated separately [below](#the-optional-capability-readprevious).
-The `type` is a non-empty string naming the provider (`"filesystem"`, `"vault"`);
+The `type` is a non-empty string naming the provider by its package
+(`"@penvhq/provider-filesystem"`, `"@penvhq/provider-vault"`) — the same string the
+config declares, so a report and the config that produced it use one vocabulary;
 the suite's first assertion is only that it exists and is non-empty.
 
 The invariants below are not advisory. Each is a test the suite runs against every

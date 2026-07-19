@@ -519,7 +519,7 @@ function renderEnvironments(decisions: InitDecisions): string {
       "  // can read off your codebase, and an environment you do not have is worse\n" +
       "  // than one you have not declared yet. Name yours, and give each a provider:\n" +
       '  //   environments: ["development", "production"],\n' +
-      '  //   providers: { development: { type: "filesystem" }, production: { type: "filesystem" } },\n' +
+      '  //   providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-filesystem" } },\n' +
       "  environments: [],\n" +
       "\n" +
       "  providers: {},\n"
@@ -527,7 +527,7 @@ function renderEnvironments(decisions: InitDecisions): string {
   }
   const names = decisions.environments.map((name) => JSON.stringify(name)).join(", ");
   const providers = decisions.environments
-    .map((name) => `    ${JSON.stringify(name)}: { type: "filesystem" },\n`)
+    .map((name) => `    ${JSON.stringify(name)}: { type: "@penvhq/provider-filesystem" },\n`)
     .join("");
   return (
     `${shared}  environments: [${names}],\n` +

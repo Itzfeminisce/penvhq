@@ -159,7 +159,7 @@ function parseLeaf(leaf: string): ParsedLeaf | undefined {
 }
 
 export class KubernetesProvider implements Provider {
-  readonly type = "kubernetes";
+  readonly type = "@penvhq/provider-kubernetes";
 
   readonly #transport: KubernetesTransport;
 
