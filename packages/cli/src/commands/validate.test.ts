@@ -39,6 +39,9 @@ const DEFAULT_SCHEMA_FILE = ".penv/env.ts";
 interface Fixture {
   readonly tree?: Readonly<Record<string, string>>;
   readonly schema?: string;
+  /** The whole schema module, verbatim — overrides `schema` when a fixture needs its
+   * own imports (e.g. a `server-only` guard). */
+  readonly schemaModule?: string;
   /** Declared as `schemaFile` and written there. Defaults to `.penv/env.ts`. */
   readonly schemaFile?: string;
   /** Replaces the default config entirely. */
@@ -65,7 +68,8 @@ function makeProject(fixture: Fixture): string {
   mkdirSync(dirname(schemaFile), { recursive: true });
   writeFileSync(
     schemaFile,
-    `import { z } from "zod";\nexport const schema = z.object({${fixture.schema ?? ""}});\n`,
+    fixture.schemaModule ??
+      `import { z } from "zod";\nexport const schema = z.object({${fixture.schema ?? ""}});\n`,
     "utf8",
   );
 
@@ -139,6 +143,40 @@ describe("two schema loads at once", () => {
     expect(development?.environment).toBe("development");
     expect(production?.environment).toBe("production");
     expect(process.env.PENV_ENV).toBeUndefined();
+  });
+});
+
+describe("a schema guarded with server-only", () => {
+  // An app that also imports its schema types into client components guards `.penv/env.ts`
+  // with `import "server-only"`, which throws outside an RSC bundle. penv's CLI runs in
+  // plain Node, so it must resolve server-only to its no-throw `react-server` variant —
+  // otherwise it can't even read the `schema` export of a schema the app legitimately
+  // marks server-only.
+  it("still reads the schema instead of failing to load the module", async () => {
+    const root = makeProject({
+      schemaModule:
+        'import "server-only";\nimport { z } from "zod";\nexport const schema = z.object({ databaseUrl: z.url() });\n',
+      tree: { "database-url": "postgres://localhost/app" },
+    });
+    const project = openProject(root);
+
+    const { schema, issues } = await loadSchema(project, "development");
+
+    expect(issues).toEqual([]);
+    expect(schema).toBeDefined();
+  });
+
+  it("validates green end-to-end (server-only does not stop the command)", async () => {
+    const root = makeProject({
+      schemaModule:
+        'import "server-only";\nimport { z } from "zod";\nexport const schema = z.object({ databaseUrl: z.url() });\n',
+      tree: { "database-url": "postgres://localhost/app" },
+    });
+
+    const result = await runValidate({ cwd: root, environment: "production" });
+
+    expect(result.ok).toBe(true);
+    expect(result.issues).toEqual([]);
   });
 });
 

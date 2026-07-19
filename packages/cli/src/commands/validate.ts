@@ -16,6 +16,7 @@ import type { ParameterRef, ValueFile } from "@penvhq/core";
 import {
   accessPath,
   checkNameCollisions,
+  jitiFor,
   NameCollisionError,
   PenvError,
   ReservedTokenError,
@@ -24,7 +25,6 @@ import {
   validateConfig,
 } from "@penvhq/core";
 import { defineCommand } from "citty";
-import { createJiti } from "jiti";
 import type { z } from "zod";
 import type { Project } from "../project.js";
 import { keySourceFor, openProject, refsFrom, targetEnvironment } from "../project.js";
@@ -221,8 +221,10 @@ async function loadSchemaExclusively(
   environment: string,
 ): Promise<SchemaLoad> {
   // Resolved from the user's own file: `zod` and `penv` are their dependencies,
-  // not the CLI's. `moduleCache` is off so an edited schema is the schema penv reads.
-  const jiti = createJiti(file, { interopDefault: false, moduleCache: false });
+  // not the CLI's. Shared with config loading (jitiFor) so both evaluate user modules
+  // identically — including resolving `server-only` to its no-throw variant so a
+  // server-guarded `.penv/env.ts` still yields its `schema` export.
+  const jiti = jitiFor(file);
 
   const previous = process.env.PENV_ENV;
   process.env.PENV_ENV = environment;
