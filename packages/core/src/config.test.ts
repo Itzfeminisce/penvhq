@@ -44,7 +44,7 @@ const valid: PenvConfig = {
   providers: {
     development: { type: "@penvhq/provider-filesystem" },
     staging: { type: "@penvhq/provider-vault", location: "secret/staging" },
-    production: { type: "aws-ssm", path: "/prod/app" },
+    production: { type: "@penvhq/provider-ssm", location: "/prod/app" },
   },
   names: { "database-url": "DATABASE_URL" },
 };
@@ -164,7 +164,10 @@ describe("validateConfig", () => {
   it("rejects an environment named `local`", () => {
     const config: PenvConfig = {
       environments: ["local", "production"],
-      providers: { local: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-filesystem" } },
+      providers: {
+        local: { type: "@penvhq/provider-filesystem" },
+        production: { type: "@penvhq/provider-filesystem" },
+      },
     };
 
     const errors = validateConfig(config);
@@ -239,7 +242,10 @@ describe("validateConfig", () => {
   it("rejects a providers entry naming an undeclared environment", () => {
     const config: PenvConfig = {
       environments: ["development"],
-      providers: { development: { type: "@penvhq/provider-filesystem" }, staging: { type: "@penvhq/provider-vault" } },
+      providers: {
+        development: { type: "@penvhq/provider-filesystem" },
+        staging: { type: "@penvhq/provider-vault" },
+      },
     };
 
     const errors = validateConfig(config);
@@ -252,7 +258,10 @@ describe("validateConfig", () => {
   it("reports both directions at once", () => {
     const config: PenvConfig = {
       environments: ["development", "production"],
-      providers: { development: { type: "@penvhq/provider-filesystem" }, staging: { type: "@penvhq/provider-vault" } },
+      providers: {
+        development: { type: "@penvhq/provider-filesystem" },
+        staging: { type: "@penvhq/provider-vault" },
+      },
     };
 
     expect(codesFor(config)).toEqual(

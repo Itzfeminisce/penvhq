@@ -190,7 +190,10 @@ describe("a variable that is a reserved token", () => {
   it("accepts that same variable when no environment declares it", () => {
     const root = makeProject({
       dotenv: "PRODUCTION=eu-west-1\n",
-      config: { environments: ["development"], providers: { development: { type: "@penvhq/provider-filesystem" } } },
+      config: {
+        environments: ["development"],
+        providers: { development: { type: "@penvhq/provider-filesystem" } },
+      },
     });
 
     const report = importDotenv({ cwd: root, file: ".env" });
