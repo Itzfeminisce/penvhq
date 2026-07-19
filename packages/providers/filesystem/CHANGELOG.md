@@ -1,5 +1,12 @@
 # @penvhq/provider-filesystem
 
+## 0.3.2
+
+### Patch Changes
+
+- Updated dependencies [37008df]
+  - @penvhq/core@0.3.2
+
 ## 0.3.1
 
 ### Patch Changes

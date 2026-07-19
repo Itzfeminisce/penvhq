@@ -1,6 +1,6 @@
 {
   "name": "@penvhq/provider-contract",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "The provider-agnostic acceptance suite every penv provider must pass, plus an in-memory provider that proves the seam is pluggable. Test-only.",
   "license": "MIT",
   "type": "module",

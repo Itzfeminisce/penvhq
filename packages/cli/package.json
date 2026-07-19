@@ -1,6 +1,6 @@
 {
   "name": "@penvhq/cli",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "penv's command line. Dependency budget is deliberately looser than the runtime's.",
   "license": "MIT",
   "type": "module",
