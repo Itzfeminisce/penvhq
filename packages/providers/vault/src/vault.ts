@@ -62,9 +62,9 @@ export interface VaultTransport {
 
 export interface VaultProviderOptions {
   /**
-   * The provider-side base path penv maps records onto, from `providers.*.path`.
-   * The one `ProviderConfig.path` field, in its first real use: the mapping is
-   * explicit config, never inferred.
+   * The mount-relative base path penv maps records onto. The plugin factory
+   * fills it from `providers.*.location`: the mapping is explicit config, never
+   * inferred.
    */
   readonly path: string;
   /**
@@ -152,7 +152,7 @@ function parseLeaf(leaf: string): ParsedLeaf | undefined {
 }
 
 export class VaultProvider implements RetainingProvider {
-  readonly type = "vault";
+  readonly type = "@penvhq/provider-vault";
 
   readonly #base: string;
   readonly #transport: VaultTransport;

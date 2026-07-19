@@ -33,9 +33,9 @@ function setEnv(name: string, value: string | undefined): void {
 const CONFIG = {
   environments: ["development", "test", "production"],
   providers: {
-    development: { type: "filesystem" },
-    test: { type: "filesystem" },
-    production: { type: "filesystem" },
+    development: { type: "@penvhq/provider-filesystem" },
+    test: { type: "@penvhq/provider-filesystem" },
+    production: { type: "@penvhq/provider-filesystem" },
   },
 };
 
@@ -324,8 +324,8 @@ describe("load", () => {
     const VAULT_CONFIG = {
       environments: ["development", "production"],
       providers: {
-        development: { type: "filesystem" },
-        production: { type: "vault", path: "secret/app" },
+        development: { type: "@penvhq/provider-filesystem" },
+        production: { type: "@penvhq/provider-vault", location: "secret/app" },
       },
     };
 

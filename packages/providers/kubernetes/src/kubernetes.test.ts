@@ -47,7 +47,7 @@ const K8S_KEY = /^[A-Za-z0-9._-]+$/;
 describe("KubernetesProvider", () => {
   it("reports the kubernetes type", async () => {
     const { provider } = await makeProvider();
-    expect(provider.type).toBe("kubernetes");
+    expect(provider.type).toBe("@penvhq/provider-kubernetes");
   });
 
   describe("retention is declared absent", () => {

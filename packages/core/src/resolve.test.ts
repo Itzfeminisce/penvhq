@@ -9,7 +9,7 @@ import type { Meta, ParameterRef, PenvConfig, Provider, Scope, ValueFile } from 
 
 const config: PenvConfig = {
   environments: ["development", "test", "staging", "production"],
-  providers: { development: { type: "filesystem" } },
+  providers: { development: { type: "@penvhq/provider-filesystem" } },
 };
 
 /** An in-memory provider keyed by `formatValueFile`, standing in for the filesystem. */

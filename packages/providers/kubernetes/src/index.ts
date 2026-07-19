@@ -11,6 +11,7 @@
 
 export type { KubernetesUnavailableReason } from "./errors.js";
 export { KubernetesUnavailableError } from "./errors.js";
+export { penvProviderFactory } from "./factory.js";
 export type { KubernetesProviderOptions, KubernetesTransport } from "./kubernetes.js";
 export {
   createKubernetesProvider,

@@ -33,9 +33,9 @@ const CONFIG = {
   environments: ["development", "production"],
   providers: {
     // A non-retaining source of truth, for the refusal test.
-    development: { type: "filesystem" },
+    development: { type: "@penvhq/provider-filesystem" },
     // A retaining source of truth, for the dual-valid and cutover tests.
-    production: { type: "mock" },
+    production: { type: "@penvhq/provider-mock" },
   },
 };
 

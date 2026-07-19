@@ -27,7 +27,10 @@ const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", i
 
 const CONFIG = {
   environments: ["development", "production"],
-  providers: { development: { type: "filesystem" }, production: { type: "filesystem" } },
+  providers: {
+    development: { type: "@penvhq/provider-filesystem" },
+    production: { type: "@penvhq/provider-filesystem" },
+  },
 };
 
 const created: string[] = [];

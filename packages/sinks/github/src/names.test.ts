@@ -4,7 +4,7 @@ import { checkGithubNames } from "./names.js";
 
 const base: PenvConfig = {
   environments: ["production"],
-  providers: { production: { type: "filesystem" } },
+  providers: { production: { type: "@penvhq/provider-filesystem" } },
 };
 
 function withNames(names: Record<string, string>): PenvConfig {

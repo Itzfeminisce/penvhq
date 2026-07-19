@@ -92,7 +92,7 @@ const scoped: ValueFile = {
 describe("VaultProvider", () => {
   it("reports the vault type", async () => {
     const { provider } = await makeProvider();
-    expect(provider.type).toBe("vault");
+    expect(provider.type).toBe("@penvhq/provider-vault");
   });
 
   describe("readPrevious retention", () => {

@@ -319,9 +319,9 @@ export default defineConfig({
   environments: ["development", "staging", "production"],
 
   providers: {
-    development: { type: "filesystem" },
-    staging:     { type: "vault",   path: "secret/staging" },
-    production:  { type: "ssm", path: "/prod/app" },
+    development: { type: "@penvhq/provider-filesystem" },
+    staging:     { type: "@penvhq/provider-vault", location: "secret/staging" },
+    production:  { type: "@penvhq/provider-ssm",   location: "/prod/app" },
   },
 
   // Where values are pushed *to*. Separate from `providers` because a sink is
@@ -355,7 +355,8 @@ It will not invent `environments`. penv cannot observe your deployment topology 
 |---|---|
 | `environments` | Whitelist of valid environment names. The only source of truth for what counts as an environment; segments are matched against this list, never inferred — including by `penv init`, which asks rather than inventing them. |
 | `providers` | Per-environment backend — where an environment's values live, and what `penv pull` reads from. |
-| `providers.*.path` | The provider-side base path penv maps records onto. This explicit mapping is the translation penv owns on your behalf. |
+| `providers.*.type` | The provider package's fully-qualified name — `@penvhq/provider-vault`. The name is the import specifier: penv resolves it from your own `node_modules`, so install what you declare (`npm i @penvhq/provider-vault`). The filesystem tree and the mock ship with the CLI; every other provider — and any third-party one — is a dependency of your project. Each package brings its own config types along, so your editor checks the entry against the provider's own declaration. |
+| `providers.*.location` | The place inside the provider that penv maps your tree onto. The format is the provider's own — a Vault KV base path, a Kubernetes `namespace/secretName`, an SSM path prefix — and its package documents it; the field name never changes between providers. This explicit mapping is the translation penv owns on your behalf. |
 | `sinks` | Per-environment destination — where `penv push` sends values so something else can run. Never a provider: a sink is write-only, so penv cannot pull from it and `doctor` cannot compare values against it. An environment may declare both. |
 | `sinks.*.type` | `github`. A sink penv does not recognise is an error, never a fallback. |
 | `sinks.*.repo` | The destination repository, `owner/name`. penv reaches it through the `gh` CLI and holds no GitHub credential of its own. |
@@ -371,12 +372,12 @@ It will not invent `environments`. penv cannot observe your deployment topology 
 The filesystem is one provider among several. Switching a provider is a config change — application code does not change:
 
 ```ts
-staging: { type: "filesystem" }
+staging: { type: "@penvhq/provider-filesystem" }
 // →
-staging: { type: "vault", path: "secret/staging" }
+staging: { type: "@penvhq/provider-vault", location: "secret/staging" }
 ```
 
-penv maps its record `(production, redis, password)` onto the provider's path (for Vault, `secret/production/redis/password`) using the `path` you declare. The mapping is explicit rather than inferred, so what penv sends where is always legible. The `env.stripe.secretKey` line in your code is identical whether that value came from a local file, Vault, or SSM.
+penv maps its record `(production, redis, password)` onto the provider-side place (for Vault, `secret/production/redis/password`) using the `location` you declare. The mapping is explicit rather than inferred, so what penv sends where is always legible. The `env.stripe.secretKey` line in your code is identical whether that value came from a local file, Vault, or SSM.
 
 ### A provider is where the source of truth lives, not where the runtime reads
 
@@ -453,7 +454,7 @@ Encryption keys are provider-backed: the OS keychain locally, and KMS-derived ke
 ```ts
 export default defineConfig({
   environments: ["development", "production"],
-  providers: { development: { type: "filesystem" }, production: { type: "filesystem" } },
+  providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-filesystem" } },
   keys: { production: { source: "env", id: "prod" } },
 });
 ```

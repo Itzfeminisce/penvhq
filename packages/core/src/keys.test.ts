@@ -79,7 +79,10 @@ const prod: KeyConfig = { source: "env", id: "prod" };
 
 const config: PenvConfig = {
   environments: ["development", "production"],
-  providers: { development: { type: "filesystem" }, production: { type: "filesystem" } },
+  providers: {
+    development: { type: "@penvhq/provider-filesystem" },
+    production: { type: "@penvhq/provider-filesystem" },
+  },
 };
 
 describe("createEnvKeySource", () => {

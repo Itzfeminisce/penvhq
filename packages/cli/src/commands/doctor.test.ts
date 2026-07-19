@@ -23,9 +23,9 @@ const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", i
 const CONFIG = {
   environments: ["development", "test", "production"],
   providers: {
-    development: { type: "filesystem" },
-    test: { type: "filesystem" },
-    production: { type: "filesystem" },
+    development: { type: "@penvhq/provider-filesystem" },
+    test: { type: "@penvhq/provider-filesystem" },
+    production: { type: "@penvhq/provider-filesystem" },
   },
 };
 
@@ -722,6 +722,6 @@ describe("the report", () => {
     // test that has to be renumbered to stay green is one that gets renumbered
     // without being read.
     expect(findingsOf(report.findings, "schema")[0]?.label).toBe("Schema valid");
-    expect(findingsOf(report.findings, "provider")[0]?.subject).toBe("filesystem");
+    expect(findingsOf(report.findings, "provider")[0]?.subject).toBe("@penvhq/provider-filesystem");
   });
 });

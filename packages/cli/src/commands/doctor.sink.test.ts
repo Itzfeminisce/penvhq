@@ -18,7 +18,7 @@ const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", i
 
 const CONFIG = {
   environments: ["production"],
-  providers: { production: { type: "filesystem" } },
+  providers: { production: { type: "@penvhq/provider-filesystem" } },
   sinks: { production: { type: "github" } },
 };
 

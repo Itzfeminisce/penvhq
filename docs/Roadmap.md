@@ -29,6 +29,10 @@ Everything below describes the *finished* design (see docs). This table says whe
 | `readPrevious` — the retention capability, declared per provider | Yes | v0.5 |
 | AWS SSM, Kubernetes providers | Yes | v0.6 |
 | Provider portability as a *proven* claim | Yes | v0.5 (Vault), generalized v0.6 |
+| Provider unification — `sinks` deleted, `@penvhq/provider-github`, `push`/`pull` against every provider | Yes | v0.7 (in progress) |
+| Fully-qualified provider `type`, declaration-merged config types, `location` | Yes | v0.7 (in progress) |
+| Install-what-you-use providers — Vault, SSM, Kubernetes, GitHub external to the CLI | Yes | v0.7 (in progress) |
+| `--destination` one-shot push, environment shorthand flags, `ensureTarget` create-on-approval | Yes | v0.7 (in progress) |
 | `.json` meta format | Yes | v0.2 |
 | `.toml` / `.yml` meta formats | Yes | post-v1.0, pluggable |
 | Azure Key Vault, Google Secret Manager, Cloudflare providers | Yes | post-v1.0, community SDK |
@@ -37,7 +41,7 @@ Everything below describes the *finished* design (see docs). This table says whe
 
 **On "amber" claims.** Two statements in the docs were true of the finished design but unproven until a specific milestone: *provider portability* (proven at v0.5, generalized at v0.6) and *encryption as a security rather than organizational improvement* (true once keys are provider-backed at v0.3). All three milestones have now shipped, so both claims now hold in released code rather than standing as promises.
 
-**A sink is not a provider, and v0.4 does not move the portability claim.** The GitHub Actions sink ships first because it is what the teams trialling penv actually need, not because it advances the thesis. It cannot: GitHub Actions Secrets is write-only, so no adapter for it ever passes the provider contract, and shipping it leaves penv with exactly one provider — the filesystem — and nothing proven about switching between them. The portability gate is v0.5's, unchanged and untouched by v0.4. See the RFC's "A sink is a destination, not a provider" for why the two are separate concepts rather than one concept with a weak member.
+**A sink is not a provider, and v0.4 does not move the portability claim.** The GitHub Actions sink ships first because it is what the teams trialling penv actually need, not because it advances the thesis. It cannot: GitHub Actions Secrets is write-only, so no adapter for it ever passes the provider contract, and shipping it leaves penv with exactly one provider — the filesystem — and nothing proven about switching between them. The portability gate is v0.5's, unchanged and untouched by v0.4. At v0.4 this distinction was expressed as a separate `sinks` config concept; v0.7 later unified it into the provider contract as declared capabilities — see the RFC's "Everything the config names is a provider; a store's limits are declared, not renamed" for the supersession and what survives of the original argument.
 
 **On the docs' key sources.** The docs say keys are "the OS keychain locally, and KMS-derived keys in CI and production". The second half is true at v0.3; the first ships at v0.4. What is never true, at any milestone, is a key stored repo-adjacent — that is a design property, not a schedule.
 
@@ -146,6 +150,21 @@ This is a real cost, stated plainly: v0.3 no longer retires the rotation risk, a
 
 **One bend has already been found, and priced.** Reading the three providers' documentation before v0.5 begins established that retention is not portable — Vault has it on a TTL, SSM on a fixed count of 100, Kubernetes not at all. Had that surfaced here instead, it would have reopened the provider-proof milestone after the fact. It surfaced early, so retention enters v0.5 as an optional capability rather than leaving v0.6 as a casualty. What that does *not* license is assuming the rest of the contract is safe: the remaining verbs are still unproven against a real network provider, and the rule stands.
 
+## v0.7 — Provider unification (in progress)
+
+**Retires:** the friction the sink/provider split imposed on users — two config keys, two half-commands, and a migration between stores that the vocabulary made inexpressible.
+
+Decided 2026-07-19; the [provider unification plan](./provider-unification-plan.md) owns *how*, and the RFC's two new sections ("Everything the config names is a provider" and "A provider is named by its package") own *why*, including what they supersede. In brief:
+
+- `sinks` is deleted; `@penvhq/sink-github` becomes `@penvhq/provider-github`; `penv push` and `penv pull` work against every provider. What distinguished a sink moves into the contract as declared capabilities (`holds: "records" | "projection"`, `readsValues`) — the record-holding contract suite is untouched.
+- `providers.<env>.type` becomes the provider package's fully-qualified name, typed via a declaration-merged `ProviderConfigMap`; `location` replaces `path`/`repo`; one provider per environment.
+- The CLI pre-installs only the filesystem and mock providers; Vault, SSM, Kubernetes, and GitHub are installed by the projects that use them.
+- `penv push --destination <package> --location <place>` as a one-shot, unpersisted target; `ensureTarget` with a CLI prompt (and `--yes`) when a push's destination does not exist yet; whitelisted environments usable as bare flags (`--production`).
+
+Ships on npm as **0.5.0** — a breaking release: configs naming short provider types or a `sinks` key are refused with the exact rewrite named in the error.
+
+**Gate to advance:** the full migration loop runs — pull names and meta down from GitHub, fill values locally, `validate` to green, push the tree to a freshly-declared Vault — with the contract suite passing unchanged for every record-holding provider and `doctor` reporting exactly (Vault) and honestly-partially (GitHub) at each step.
+
 ## v1.0 — Stable SDK
 
 **Retires:** the risk that third parties cannot safely build providers on penv.
@@ -168,7 +187,7 @@ This is a real cost, stated plainly: v0.3 no longer retires the rotation risk, a
 ## Explicitly deferred, and why
 
 - **VS Code extension / IDE tooling** — competes on t3-env's ground; follows the provider proof, never precedes it.
-- **Broad provider matrix** — no provider is claimed as supported until its adapter passes the contract suite. A sink is never counted toward it: sinks do not take the suite, because they cannot.
+- **Broad provider matrix** — no provider is claimed as supported until its adapter passes the contract suite. A projection-holding provider (GitHub) is never counted toward it: it does not take the record-holding suite, because it cannot, and it says so in its declared capabilities.
 
 **On the rule the sink appears to break.** Deferring IDE tooling until after the provider proof is a rule about *terrain*, and v0.4 shipping first looks like it violates it. It does not, and the distinction is worth being exact about rather than waving through. t3-env's terrain is typed access to `process.env` — onboarding speed, IDE feel, dev-loop latency. t3-env pushes nothing anywhere; it has no notion of a destination. The seam between a developer's machine and the system that runs the code is penv's own subject, stated in the first paragraph of the RFC's motivation, and deleting the hand-copy into CI *is* that subject rather than an excursion from it.
 

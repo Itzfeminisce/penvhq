@@ -90,19 +90,104 @@ export interface Meta extends MetaBlock {
   readonly environments?: Readonly<Record<string, MetaBlock>>;
 }
 
+/**
+ * The provider config types penv knows about, keyed by package name. Empty here,
+ * deliberately: core owns the `Provider` contract and must not know which
+ * implementations exist. Each provider package augments this interface with its
+ * own config shape under its own name —
+ *
+ * ```ts
+ * declare module "@penvhq/core" {
+ *   interface ProviderConfigMap {
+ *     "@penvhq/provider-vault": VaultProviderConfig;
+ *   }
+ * }
+ * ```
+ *
+ * — so the compile-time union is exactly the set of providers the project has
+ * installed, and {@link defineConfig} can hold a known `type`'s fields to the
+ * provider's own declaration while leaving an unknown `type` the open base shape.
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: augmentation target — see docblock.
+export interface ProviderConfigMap {}
+
+/** The provider package names whose config types are installed and merged in. */
+export type KnownProviderType = keyof ProviderConfigMap & string;
+
 export interface ProviderConfig {
-  readonly type: string;
-  /** The provider-side base path penv maps records onto. */
-  readonly path?: string;
   /**
-   * The package supplying a provider whose `type` is not one penv builds in. penv
-   * resolves an unregistered `type` by convention to `@penvhq/provider-<type>`;
-   * this overrides that when the implementation ships under a different name. It
-   * names a package the project has installed — penv imports it, never fetches it —
-   * and is ignored for a built-in `type`.
+   * The provider package's fully-qualified name — `"@penvhq/provider-vault"`.
+   * The name is the import specifier: penv resolves it from the project's own
+   * `node_modules`, so declaring a provider and installing its package are the
+   * same decision stated twice, and the config never needs a second field to
+   * say where the implementation lives.
    */
-  readonly module?: string;
+  readonly type: KnownProviderType | (string & {});
+  /**
+   * The place inside the provider that penv maps the tree onto. The format is
+   * the provider's own — a Vault KV base path, a Kubernetes
+   * `namespace/secretName` — and its package's config type documents it; the
+   * field name never changes between providers.
+   */
+  readonly location?: string;
+  /** Fields beyond `location` belong to the provider's own config type. */
+  readonly [key: string]: unknown;
 }
+
+/**
+ * What penv hands a provider package's `penvProviderFactory` to build a provider
+ * rooted at one project's `.penv`. Declared here because it is the seam every
+ * provider package builds against — the CLI supplies it, the package consumes
+ * it, and neither imports the other's internals.
+ */
+export interface ProviderFactoryContext {
+  /** The `.penv/` directory, absolute. */
+  readonly root: string;
+  /**
+   * Required because a provider parses environment segments, and a segment is an
+   * environment only if the config declares it — never inferred from the store.
+   */
+  readonly config: PenvConfig;
+  /**
+   * The one environment's own `providers.*` entry, when building its declared
+   * source of truth. Carries provider-side settings — the `location` above all —
+   * that the config authored, never inferred.
+   */
+  readonly providerConfig?: ProviderConfig;
+  /**
+   * The environment this provider is the source of truth *for*, when that is
+   * what is being built.
+   */
+  readonly environment?: string;
+}
+
+/** The fields a provider entry carries that its declared config type does not. */
+type UnknownProviderFields<E, T extends KnownProviderType> = Exclude<
+  keyof E,
+  keyof ProviderConfigMap[T] | "type"
+>;
+
+/**
+ * What `defineConfig` holds one `providers.<env>` entry to. A `type` that names
+ * an installed provider package is checked against that package's own config
+ * declaration — wrong field types fail, and a field the provider never declared
+ * maps to `never` so the config cannot carry it. A `type` core has no
+ * declaration for (a provider penv has not seen installed, or a third-party
+ * package) keeps the open base shape: the compile-time answer and the runtime
+ * `UNKNOWN_PROVIDER` answer are the same — install the package.
+ */
+export type ValidatedProviderEntry<E> = E extends { readonly type: infer T extends string }
+  ? T extends KnownProviderType
+    ? UnknownProviderFields<E, T> extends never
+      ? ProviderConfigMap[T] & { readonly type: T }
+      : { readonly [K in UnknownProviderFields<E, T>]: never }
+    : E
+  : E;
+
+/** The `providers` block with every entry validated — see {@link ValidatedProviderEntry}. */
+export type ValidatedProviders<P> = {
+  readonly [E in keyof P]: ValidatedProviderEntry<P[E]>;
+};
 
 /**
  * A destination penv pushes values *to* and cannot read back. Declared under

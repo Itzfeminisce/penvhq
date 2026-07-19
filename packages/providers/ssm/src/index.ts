@@ -11,6 +11,7 @@
 
 export type { SsmUnavailableReason } from "./errors.js";
 export { SsmUnavailableError } from "./errors.js";
+export { penvProviderFactory } from "./factory.js";
 export type { SsmProviderOptions, SsmTransport, SsmValue } from "./ssm.js";
 export { createSsmProvider, SsmProvider } from "./ssm.js";
 export type { AwsRunner, DefaultSsmTransportOptions } from "./transport.js";

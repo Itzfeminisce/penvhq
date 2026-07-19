@@ -99,7 +99,7 @@ function emptyStore(): PersistedStore {
 }
 
 export class MockProvider implements RetainingProvider {
-  readonly type = "mock";
+  readonly type = "@penvhq/provider-mock";
 
   readonly #storePath: string;
 

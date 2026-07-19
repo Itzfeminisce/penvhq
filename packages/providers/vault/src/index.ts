@@ -11,6 +11,7 @@
 
 export type { VaultUnavailableReason } from "./errors.js";
 export { VaultKvVersionError, VaultUnavailableError } from "./errors.js";
+export { penvProviderFactory } from "./factory.js";
 export type { DefaultVaultTransportOptions, VaultRunner } from "./transport.js";
 export { defaultVaultRunner, defaultVaultTransport, VaultInvocationError } from "./transport.js";
 export type { VaultProviderOptions, VaultTransport } from "./vault.js";

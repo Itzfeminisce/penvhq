@@ -4,11 +4,11 @@
  * refuses a type this build does not carry.
  *
  * The refusal must land at `openProject` — config-open time — not at whichever
- * command first reaches the provider. A config naming a provider no build carries
- * — `consul` here, a type this build has never registered — should fail loudly
- * and immediately, naming the environment, rather than crash halfway through a
- * write. The registered set (`filesystem`, `vault`, `mock`) opens; anything
- * outside it is refused at the seam.
+ * command first reaches the provider. A config naming a provider this project
+ * has not installed should fail loudly and immediately, naming the environment
+ * and the package to install, rather than crash halfway through a write. The
+ * pre-installed pair (the filesystem tree, the mock) opens everywhere; anything
+ * else opens only if its package resolves from the project.
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -74,23 +74,24 @@ afterEach(() => {
 });
 
 describe("the provider registry", () => {
-  it("registers the built-in providers and nothing that does not exist", () => {
-    expect(isProviderRegistered("filesystem")).toBe(true);
-    expect(isProviderRegistered("vault")).toBe(true);
-    expect(isProviderRegistered("mock")).toBe(true);
+  it("pre-installs the local tree and the mock, and nothing else", () => {
+    expect(isProviderRegistered("@penvhq/provider-filesystem")).toBe(true);
+    expect(isProviderRegistered("@penvhq/provider-mock")).toBe(true);
+    // Every other provider — vault included — is a package the project installs.
+    expect(isProviderRegistered("@penvhq/provider-vault")).toBe(false);
     expect(isProviderRegistered("consul")).toBe(false);
   });
 
   it("builds the filesystem provider through the registry", () => {
-    const provider = createProvider("filesystem", {
+    const provider = createProvider("@penvhq/provider-filesystem", {
       root: FIXTURE_PARENT,
       config: { environments: [], providers: {} },
     });
     expect(provider).toBeInstanceOf(FilesystemProvider);
-    expect(provider.type).toBe("filesystem");
+    expect(provider.type).toBe("@penvhq/provider-filesystem");
   });
 
-  it("refuses an unregistered type, naming what this build carries", () => {
+  it("refuses a type that is not pre-installed, naming the package to install", () => {
     let thrown: unknown;
     try {
       createProvider("consul", {
@@ -104,7 +105,7 @@ describe("the provider registry", () => {
     const error = thrown as PenvError;
     expect(error.code).toBe("UNKNOWN_PROVIDER");
     expect(error.message).toContain("consul");
-    expect(error.message).toContain("filesystem");
+    expect(error.remedy ?? "").toContain("npm i consul");
   });
 
   it("accepts a config naming the registered providers", () => {
@@ -114,8 +115,8 @@ describe("the provider registry", () => {
         {
           environments: ["development", "production"],
           providers: {
-            development: { type: "mock" },
-            production: { type: "vault", path: "secret/app" },
+            development: { type: "@penvhq/provider-mock" },
+            production: { type: "@penvhq/provider-vault", location: "secret/app" },
           },
         },
         root,
@@ -130,7 +131,7 @@ describe("the provider registry", () => {
       assertProvidersRegistered(
         {
           environments: ["production"],
-          providers: { production: { type: "consul", path: "secret/app" } },
+          providers: { production: { type: "consul", location: "secret/app" } },
         },
         root,
       );
@@ -149,15 +150,15 @@ describe("openProject and the registry", () => {
   const FILESYSTEM_CONFIG: PenvConfig = {
     environments: ["development", "production"],
     providers: {
-      development: { type: "filesystem" },
-      production: { type: "filesystem" },
+      development: { type: "@penvhq/provider-filesystem" },
+      production: { type: "@penvhq/provider-filesystem" },
     },
   };
 
   it("opens a filesystem project and exposes the tree as the contract", () => {
     const root = makeProject(FILESYSTEM_CONFIG);
     const project = openProject(root);
-    expect(project.provider.type).toBe("filesystem");
+    expect(project.provider.type).toBe("@penvhq/provider-filesystem");
     // The contract is the static type; the local tree is reachable through
     // `localTree`, which is the only place the sync surface is named.
     expect(localTree(project)).toBeInstanceOf(FilesystemProvider);
@@ -167,8 +168,8 @@ describe("openProject and the registry", () => {
     const root = makeProject({
       environments: ["development", "production"],
       providers: {
-        development: { type: "filesystem" },
-        production: { type: "consul", path: "secret/app" },
+        development: { type: "@penvhq/provider-filesystem" },
+        production: { type: "consul", location: "secret/app" },
       },
     });
     expect(() => openProject(root)).toThrow(PenvError);
@@ -182,26 +183,26 @@ describe("openProject and the registry", () => {
 });
 
 /**
- * A `type` with no built-in entry is not an error — it is a provider that lives
- * outside this repo, resolved by convention to `@penvhq/provider-<type>` (or the
- * `module` the config names) and imported from the project. This is the seam a
- * private or third-party backend plugs into without ever being named in the CLI.
+ * A `type` with no pre-installed entry is not an error — it is a package the
+ * project depends on, imported by the very name the config declares. This is the
+ * seam a private or third-party backend plugs into without ever being named in
+ * the CLI.
  */
-describe("convention-resolved provider plugins", () => {
-  it("accepts, at open time, a plugin type whose package resolves from the project", () => {
+describe("package-resolved providers", () => {
+  it("accepts, at open time, a type whose package resolves from the project", () => {
     const root = makeProject({
       environments: ["production"],
-      providers: { production: { type: "faketype" } },
+      providers: { production: { type: "@penvhq/provider-faketype" } },
     });
     installFakeProvider(root, "@penvhq/provider-faketype", VALID_PLUGIN);
 
     expect(() => openProject(root)).not.toThrow();
   });
 
-  it("refuses at open time a plugin type whose package is not installed, with an install hint", () => {
+  it("refuses at open time a type whose package is not installed, with an install hint", () => {
     const root = makeProject({
       environments: ["production"],
-      providers: { production: { type: "penv-cloud" } },
+      providers: { production: { type: "@penvhq/provider-penv-cloud" } },
     });
 
     let thrown: unknown;
@@ -213,15 +214,15 @@ describe("convention-resolved provider plugins", () => {
     expect(thrown).toBeInstanceOf(PenvError);
     const error = thrown as PenvError;
     expect(error.code).toBe("UNKNOWN_PROVIDER");
-    expect(error.message).toContain("penv-cloud");
-    // The convention names the package to install, so the remedy is actionable.
-    expect(error.remedy ?? "").toContain("@penvhq/provider-penv-cloud");
+    expect(error.message).toContain("@penvhq/provider-penv-cloud");
+    // The type is the package, so the remedy is actionable verbatim.
+    expect(error.remedy ?? "").toContain("npm i @penvhq/provider-penv-cloud");
   });
 
-  it("builds a plugin provider through the source-of-truth path", async () => {
+  it("builds a package provider through the source-of-truth path", async () => {
     const root = makeProject({
       environments: ["production"],
-      providers: { production: { type: "faketype" } },
+      providers: { production: { type: "@penvhq/provider-faketype" } },
     });
     installFakeProvider(root, "@penvhq/provider-faketype", VALID_PLUGIN);
     const project = openProject(root);
@@ -231,10 +232,10 @@ describe("convention-resolved provider plugins", () => {
     expect(source.type).toBe("faketype");
   });
 
-  it("honours a `module` override for a non-conventional package name", async () => {
+  it("imports a provider from any package name the config declares", async () => {
     const root = makeProject({
       environments: ["production"],
-      providers: { production: { type: "penv-cloud", module: "@acme/custom-provider" } },
+      providers: { production: { type: "@acme/custom-provider" } },
     });
     installFakeProvider(root, "@acme/custom-provider", VALID_PLUGIN);
     const project = openProject(root);
@@ -244,10 +245,10 @@ describe("convention-resolved provider plugins", () => {
     expect(source.type).toBe("faketype");
   });
 
-  it("refuses a resolved plugin that does not export penvProviderFactory", async () => {
+  it("refuses a resolved package that does not export penvProviderFactory", async () => {
     const root = makeProject({
       environments: ["production"],
-      providers: { production: { type: "faketype" } },
+      providers: { production: { type: "@penvhq/provider-faketype" } },
     });
     installFakeProvider(root, "@penvhq/provider-faketype", "export const notTheFactory = 1;\n");
     const project = openProject(root);
