@@ -360,6 +360,27 @@ export function assertEnvironment(environment: string, config: PenvConfig): void
   }
 }
 
+/**
+ * The channel the CLI uses to tell `load()` that it is only harvesting the
+ * `schema` export of `.penv/env.ts`, not running the application.
+ *
+ * The scaffolded schema module ends in an eager `export const env = load(schema)`.
+ * Evaluated by the app that is correct fail-fast behavior; evaluated by the CLI
+ * against a tree with no values yet it is a catch-22 — the throw makes the whole
+ * module namespace unreachable, so the `schema` export the CLI came for is lost,
+ * and `penv fill` cannot see the very gap it exists to close. While this variable
+ * is pinned (only by the CLI, only for the one schema import, under the same
+ * exclusivity lock as `PENV_ENV`), `load()` defers: it returns a lazy stand-in and
+ * performs the real load — including the same eager error — on first property
+ * access instead of at module evaluation.
+ */
+export const SCHEMA_HARVEST_ENV = "PENV_SCHEMA_HARVEST";
+
+/** True while the CLI is importing the schema module to read its `schema` export. */
+export function schemaHarvestActive(): boolean {
+  return process.env[SCHEMA_HARVEST_ENV] === "1";
+}
+
 function fromProcessEnv(name: "PENV_ENV" | "NODE_ENV"): string | undefined {
   const value = process.env[name];
   if (value === undefined) {

@@ -50,6 +50,9 @@ interface Fixture {
   readonly tree?: Readonly<Record<string, string>>;
   /** The inner object body of the schema, e.g. `databaseUrl: z.url()`. */
   readonly schema?: string;
+  /** The whole schema module, verbatim — overrides `schema` when a fixture needs
+   * its own imports (e.g. the scaffolded eager `load`). */
+  readonly schemaModule?: string;
 }
 
 function makeProject(fixture: Fixture): string {
@@ -65,7 +68,8 @@ function makeProject(fixture: Fixture): string {
   mkdirSync(join(root, ".penv"), { recursive: true });
   writeFileSync(
     join(root, ".penv", "env.ts"),
-    `import { z } from "zod";\nexport const schema = z.object({${fixture.schema ?? ""}});\n`,
+    fixture.schemaModule ??
+      `import { z } from "zod";\nexport const schema = z.object({${fixture.schema ?? ""}});\n`,
     "utf8",
   );
 
@@ -115,6 +119,36 @@ afterEach(() => {
 });
 
 describe("penv fill", () => {
+  /**
+   * The scaffolded module ends in an eager `export const env = load(schema)`. In
+   * a project with no values yet that load used to throw during the schema read,
+   * the module namespace vanished with it, and `fill` reported "nothing to fill"
+   * against an empty drift — the exact gap it exists to close, invisible. The
+   * schema-harvest pin makes `load` defer during the read, so the schema is
+   * reachable and every declared parameter is prompted for.
+   */
+  it("prompts for every missing parameter even when the module loads eagerly", async () => {
+    const root = makeProject({
+      schemaModule:
+        'import { z } from "zod";\n' +
+        'import { load } from "@penvhq/runtime";\n' +
+        "export const schema = z.object({ databaseUrl: z.url(), apiKey: z.string() });\n" +
+        "export const env = load(schema);\n",
+    });
+    const { ask, prompted } = scriptedAsk({
+      "database-url": "postgres://localhost/app",
+      "api-key": "k-123",
+    });
+
+    const result = await runFill({ cwd: root, environment: "production", ask });
+
+    expect(prompted.map((prompt) => prompt.parameter)).toEqual(["database-url", "api-key"]);
+    expect(result.written.map((entry) => entry.parameter)).toEqual(["database-url", "api-key"]);
+    await expect(
+      runGet({ cwd: root, key: "database-url", environment: "production" }),
+    ).resolves.toBe("postgres://localhost/app");
+  });
+
   /**
    * The whole point: the schema says `databaseUrl`, the file is `database-url`,
    * and the user is asked for the derived key — never the schema one. The written

@@ -20,6 +20,7 @@ const created: string[] = [];
 const originalPenvEnv = process.env.PENV_ENV;
 const originalNodeEnv = process.env.NODE_ENV;
 const originalKey = process.env.PENV_KEY_DEV;
+const originalHarvest = process.env.PENV_SCHEMA_HARVEST;
 
 function setEnv(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -117,9 +118,62 @@ afterEach(() => {
   setEnv("PENV_ENV", originalPenvEnv);
   setEnv("NODE_ENV", originalNodeEnv);
   setEnv("PENV_KEY_DEV", originalKey);
+  setEnv("PENV_SCHEMA_HARVEST", originalHarvest);
   for (const dir of created.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+/**
+ * The schema-harvest window (see `SCHEMA_HARVEST_ENV` in core): while the CLI
+ * imports `.penv/env.ts` to read its `schema` export, the module's own eager
+ * `export const env = load(schema)` must not stop the module from evaluating.
+ * Under the pin, `load` defers — and the deferred value still behaves like the
+ * eager one on first real use, error and all.
+ */
+describe("load under the schema-harvest pin", () => {
+  it("defers instead of throwing, then raises the same error on first access", () => {
+    const cwd = makeProject({}); // no values at all — the state `penv fill` exists to fix
+    setEnv("PENV_SCHEMA_HARVEST", "1");
+
+    const deferred = load(schema, { cwd, environment: "development" });
+
+    // The harvest window closes (the CLI restores the pin), and the first real
+    // read performs the eager load — which fails exactly as it would have.
+    setEnv("PENV_SCHEMA_HARVEST", undefined);
+    expect(() => deferred.databaseUrl).toThrow(ValidationError);
+  });
+
+  it("resolves real values on access when the tree can satisfy the schema", () => {
+    const cwd = makeProject({
+      "database-url": "postgres://default/app",
+      "redis/host": "127.0.0.1",
+    });
+    setEnv("PENV_SCHEMA_HARVEST", "1");
+
+    const deferred = load(schema, { cwd, environment: "development" });
+
+    setEnv("PENV_SCHEMA_HARVEST", undefined);
+    expect(deferred.databaseUrl).toBe("postgres://default/app");
+    expect(deferred.redis.host).toBe("127.0.0.1");
+  });
+
+  it("stays inert against loader probes while the window is still open", () => {
+    const cwd = makeProject({}); // resolving would throw — the probes must not resolve
+    setEnv("PENV_SCHEMA_HARVEST", "1");
+
+    const deferred = load(schema, { cwd, environment: "development" });
+
+    // `then` and well-known symbols are what module machinery pokes at exported
+    // values; during the window they answer undefined without forcing the load.
+    expect((deferred as { then?: unknown }).then).toBeUndefined();
+    expect((deferred as Record<PropertyKey, unknown>)[Symbol.toStringTag]).toBeUndefined();
+  });
+
+  it("is untouched when the pin is not set — eager, fail-fast", () => {
+    const cwd = makeProject({});
+    expect(() => load(schema, { cwd, environment: "development" })).toThrow(ValidationError);
+  });
 });
 
 describe("load", () => {
