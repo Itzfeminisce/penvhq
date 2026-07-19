@@ -11,6 +11,7 @@
 
 import { existsSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import {
   ConfigError,
@@ -27,6 +28,34 @@ import type { PenvConfig } from "./types.js";
 const CONFIG_FILENAMES = ["penv.config.ts", "penv.config.js", "penv.config.mjs"] as const;
 
 /**
+ * A schema that guards itself with `import "server-only"` — the standard Next.js
+ * pattern for a module that must never reach a client bundle — imports a package
+ * whose default export throws outside a React Server bundle. penv's CLI runs in
+ * plain Node, so left alone it cannot even read the `schema` export of a schema
+ * the app legitimately marks server-only.
+ *
+ * The package itself ships the answer: under the `react-server` resolution
+ * condition, `server-only` resolves to an empty, no-throw module. jiti only
+ * accepts custom conditions per `esmResolve` call, not per instance, so this
+ * probes for that variant from the user's own dependencies and returns an alias
+ * pinning `server-only` to it. When the project does not depend on `server-only`
+ * the probe misses and resolution is left exactly as it was.
+ */
+function serverOnlyAlias(file: string): Record<string, string> | undefined {
+  const probe = createJiti(file, { moduleCache: false });
+  const resolved = probe.esmResolve("server-only", {
+    try: true,
+    conditions: ["node", "react-server", "import", "require", "default"],
+  });
+  if (resolved === undefined) {
+    return undefined;
+  }
+  // The alias value is joined with path segments during resolution, so it must be
+  // a plain absolute path, not a file:// URL.
+  return { "server-only": resolved.startsWith("file://") ? fileURLToPath(resolved) : resolved };
+}
+
+/**
  * jiti resolves a module's relative imports against the parent it is given, so
  * the parent must be the config file itself — a `penv.config.ts` importing
  * `./shared.ts` means a file next to the config, not one next to penv. Passing
@@ -35,10 +64,17 @@ const CONFIG_FILENAMES = ["penv.config.ts", "penv.config.js", "penv.config.mjs"]
  *
  * `interopDefault` is off so a missing default export stays observable rather
  * than being papered over with the module namespace. `moduleCache` is off so an
- * edited config on the next call is the config penv reads.
+ * edited config on the next call is the config penv reads. Shared with the CLI's
+ * schema loader so both evaluate user modules identically — including the
+ * `server-only` neutralisation (see {@link serverOnlyAlias}).
  */
-function jitiFor(file: string) {
-  return createJiti(file, { interopDefault: false, moduleCache: false });
+export function jitiFor(file: string) {
+  const alias = serverOnlyAlias(file);
+  return createJiti(file, {
+    interopDefault: false,
+    moduleCache: false,
+    ...(alias === undefined ? {} : { alias }),
+  });
 }
 
 const EXPORT_REMEDY =

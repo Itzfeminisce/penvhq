@@ -37,6 +37,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "server-only": "0.0.1",
     "zod": "4.4.3"
   }
 }

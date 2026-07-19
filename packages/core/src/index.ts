@@ -11,6 +11,7 @@ export {
   assertEnvironment,
   defineConfig,
   findConfigFile,
+  jitiFor,
   loadConfig,
   loadConfigFrom,
   lookupEnvironment,
