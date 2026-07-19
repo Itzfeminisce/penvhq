@@ -180,6 +180,34 @@ describe("a schema guarded with server-only", () => {
   });
 });
 
+describe("a schema module with the scaffolded eager load", () => {
+  /**
+   * `export const env = load(schema)` used to throw during the schema read when
+   * the tree had no values, taking the `schema` export down with it — so drift
+   * stayed EMPTY and `fill` saw nothing to fill in the exact state it exists to
+   * fix. Under the harvest pin the module evaluates, the schema is reachable,
+   * and the drift names every declared-but-missing parameter.
+   */
+  it("yields the schema and a measured drift against an empty tree", async () => {
+    const root = makeProject({
+      schemaModule:
+        'import { z } from "zod";\n' +
+        'import { load } from "@penvhq/runtime";\n' +
+        "export const schema = z.object({ databaseUrl: z.url() });\n" +
+        "export const env = load(schema);\n",
+    });
+    const project = openProject(root);
+
+    const { schema, issues } = await loadSchema(project, "development");
+    expect(issues).toEqual([]);
+    expect(schema).toBeDefined();
+
+    const result = await runValidate({ cwd: root, environment: "development" });
+    expect(result.ok).toBe(false); // the value genuinely is missing
+    expect(result.drift.declared.map((entry) => entry.subject)).toEqual(["database-url"]);
+  });
+});
+
 describe("a configuration the schema accepts", () => {
   it("passes, and exits zero", async () => {
     const root = makeProject({

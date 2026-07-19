@@ -296,6 +296,10 @@ env.app.jwtSecret;
 
 Importing `env` loads configuration eagerly and validates it, so invalid configuration fails at startup with a clear, parameter-named error — not later at first use. A required parameter that is missing or invalid throws then, naming the parameter and environment, so there is no separate assertion step to call at the point of use. Code that only needs the *type* imports `schema` (or `z.infer<typeof schema>`) instead, which does not trigger loading.
 
+The eager export never gets between the CLI and your schema. `penv validate` / `fill` / `doctor` evaluate `.penv/env.ts` only to read its `schema` export, and while they do, `load()` defers instead of resolving — so in a fresh project with no values yet, the module's own `export const env = load(schema)` cannot throw the schema out of reach, and `penv fill` sees exactly the parameters it should prompt for. The deferral exists only inside that one CLI read; application imports of `@env` are eager and fail-fast, always.
+
+The schema module may also guard itself with `import "server-only"` — the Next.js pattern for a module that must never reach a client bundle. The CLI resolves that import the way a React Server environment would (its empty, no-throw variant), so the guard protects your app without blinding penv's own tooling.
+
 A `process.env`-populating compatibility form exists for adopting penv without changing existing code:
 
 ```ts

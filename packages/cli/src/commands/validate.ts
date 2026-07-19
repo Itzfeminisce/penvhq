@@ -21,6 +21,7 @@ import {
   PenvError,
   ReservedTokenError,
   resolveAll,
+  SCHEMA_HARVEST_ENV,
   schemaFileOf,
   validateConfig,
 } from "@penvhq/core";
@@ -194,16 +195,19 @@ function exclusively<T>(work: () => Promise<T>): Promise<T> {
  * the docs tell type-only consumers to import `schema`: a type-only import is
  * erased and never evaluates the module at all.
  *
- * A *runtime* read cannot have that guarantee. Evaluating the module runs its
- * top level, so a scaffolded `export const env = load(schema)` loads eagerly
- * here too, and if that load throws, the schema is unreachable — ESM produces no
- * namespace for a module that threw. Two things make that honest rather than
- * silent: `PENV_ENV` is pinned so the eager load targets the environment being
- * reported on, and a load that fails validation is unwrapped back into the
- * per-parameter issues it was built from, so the report still names parameters
- * instead of blaming the file.
+ * A *runtime* read cannot have that guarantee: evaluating the module runs its
+ * top level, and the scaffolded module ends in an eager
+ * `export const env = load(schema)`. Against a tree with no values yet that load
+ * would throw and take the whole namespace — including the `schema` export —
+ * down with it, leaving `fill` blind to the very gap it exists to close. So the
+ * schema-harvest flag is pinned alongside `PENV_ENV` for this one import:
+ * `load()` defers under it (see `SCHEMA_HARVEST_ENV` in core), the module
+ * evaluates, and the schema is always reachable. A module that fails for its own
+ * reasons still reports honestly — a penv validation error raised at its top
+ * level is unwrapped back into per-parameter issues, and anything else is a
+ * config issue naming the file.
  *
- * The pin is a process global, so only one load may hold it at a time — see
+ * The pins are process globals, so only one load may hold them at a time — see
  * {@link exclusively}. Loads queue rather than overlap.
  */
 export function loadSchema(project: Project, environment: string): Promise<SchemaLoad> {
@@ -214,7 +218,7 @@ export function loadSchema(project: Project, environment: string): Promise<Schem
   return exclusively(() => loadSchemaExclusively(file, schemaPath, environment));
 }
 
-/** {@link loadSchema}'s body, run only while it holds the `PENV_ENV` pin. */
+/** {@link loadSchema}'s body, run only while it holds the `PENV_ENV` + harvest pins. */
 async function loadSchemaExclusively(
   file: string,
   schemaPath: string,
@@ -226,8 +230,15 @@ async function loadSchemaExclusively(
   // server-guarded `.penv/env.ts` still yields its `schema` export.
   const jiti = jitiFor(file);
 
+  // Two pins, one window: `PENV_ENV` so anything the module resolves targets the
+  // environment being validated, and the schema-harvest flag so the scaffolded
+  // eager `export const env = load(schema)` defers instead of throwing — a tree
+  // with no values yet would otherwise take the `schema` export down with it,
+  // and `fill` could never see the gap it exists to close.
   const previous = process.env.PENV_ENV;
+  const previousHarvest = process.env[SCHEMA_HARVEST_ENV];
   process.env.PENV_ENV = environment;
+  process.env[SCHEMA_HARVEST_ENV] = "1";
   let loaded: unknown;
   try {
     loaded = await jiti.import(file);
@@ -252,6 +263,11 @@ async function loadSchemaExclusively(
       delete process.env.PENV_ENV;
     } else {
       process.env.PENV_ENV = previous;
+    }
+    if (previousHarvest === undefined) {
+      delete process.env[SCHEMA_HARVEST_ENV];
+    } else {
+      process.env[SCHEMA_HARVEST_ENV] = previousHarvest;
     }
   }
 

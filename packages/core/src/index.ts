@@ -16,6 +16,8 @@ export {
   loadConfigFrom,
   lookupEnvironment,
   resolveEnvironment,
+  SCHEMA_HARVEST_ENV,
+  schemaHarvestActive,
   validateConfig,
 } from "./config.js";
 export type { DecryptResult } from "./crypto.js";
