@@ -10,11 +10,13 @@
  * deliberately not visible under the `penv` specifier.
  */
 
-export type { LoadOptions } from "@penvhq/runtime";
+export type { InjectResult, LoadOptions } from "@penvhq/runtime";
 export {
   ConfigError,
+  declaredRefs,
   defineConfig,
   FilenameGrammarError,
+  inject,
   load,
   MissingParameterError,
   NameCollisionError,

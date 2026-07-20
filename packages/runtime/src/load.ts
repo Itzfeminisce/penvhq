@@ -7,6 +7,7 @@
 
 import { accessPath, schemaHarvestActive, ValidationError } from "@penvhq/core";
 import type { z } from "zod";
+import { inject } from "./inject.js";
 import { resolveSync } from "./resolve.js";
 
 export interface LoadOptions {
@@ -14,6 +15,15 @@ export interface LoadOptions {
   readonly cwd?: string;
   /** Overrides `PENV_ENV` / `NODE_ENV`. Must be a declared environment. */
   readonly environment?: string;
+  /**
+   * Also inject the validated values into `process.env`, so an SDK that reads
+   * `process.env` directly finds them — the blessed ambient surface. Exclusive
+   * over the schema: a declared parameter is written when it resolves and
+   * deleted when it does not, and an undeclared variable is left alone. Off by
+   * default — a consumer who never asked for `process.env` writes gets none.
+   * See {@link inject}.
+   */
+  readonly inject?: boolean;
 }
 
 /**
@@ -63,7 +73,10 @@ export function load<T extends z.ZodType>(schema: T, options?: LoadOptions): z.i
 }
 
 function loadEagerly<T extends z.ZodType>(schema: T, options?: LoadOptions): z.infer<T> {
-  const { environment, values } = resolveSync(options?.cwd ?? process.cwd(), options?.environment);
+  const { config, environment, values } = resolveSync(
+    options?.cwd ?? process.cwd(),
+    options?.environment,
+  );
 
   const object: Record<string, unknown> = {};
   for (const { ref, value } of values) {
@@ -79,6 +92,17 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: LoadOptions): z.i
         message: issue.message,
       })),
     );
+  }
+
+  // Validate-first: the injection runs only after the schema has accepted every
+  // value, so an SDK reading `process.env` never sees a half-configured surface.
+  // Guarded against the harvest window — the CLI reading the `schema` export must
+  // never trigger a `process.env` mutation, even if the scaffolded module reads a
+  // concrete value at its top level. The raw `values` cross for tree-resolved
+  // parameters (`process.env` is strings); `result.data` is passed only so a
+  // schema default reaches the environment instead of being deleted.
+  if (options?.inject === true && !schemaHarvestActive()) {
+    inject({ schema, config, values, validated: result.data });
   }
   return result.data;
 }

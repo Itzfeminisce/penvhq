@@ -7,6 +7,7 @@ import {
   KEY_BYTES,
   type NameCollisionError,
   PenvError,
+  SCHEMA_HARVEST_ENV,
   sealValue,
   type UndecryptableValueError,
   ValidationError,
@@ -531,6 +532,95 @@ describe("load", () => {
       } finally {
         setEnv("DATABASE_URL", before.url);
         setEnv("REDIS_HOST", before.host);
+      }
+    });
+  });
+
+  describe("environment injection", () => {
+    // The blessed surface end to end: `load(schema, { inject: true })` returns
+    // the typed env *and* writes it onto process.env, after validation.
+    it("populates process.env from the validated tree when inject is set", () => {
+      const cwd = makeProject({
+        "database-url": "postgres://default/app",
+        "redis/host": "127.0.0.1",
+      });
+      const before = { url: process.env.DATABASE_URL, host: process.env.REDIS_HOST };
+
+      try {
+        const env = load(schema, { cwd, environment: "development", inject: true });
+        expect(env.databaseUrl).toBe("postgres://default/app");
+        expect(process.env.DATABASE_URL).toBe("postgres://default/app");
+        expect(process.env.REDIS_HOST).toBe("127.0.0.1");
+      } finally {
+        setEnv("DATABASE_URL", before.url);
+        setEnv("REDIS_HOST", before.host);
+      }
+    });
+
+    it("does not touch process.env without the flag", () => {
+      const cwd = makeProject({
+        "database-url": "postgres://default/app",
+        "redis/host": "127.0.0.1",
+      });
+      const before = process.env.DATABASE_URL;
+      try {
+        load(schema, { cwd, environment: "development" });
+        expect(process.env.DATABASE_URL).toBe(before);
+      } finally {
+        setEnv("DATABASE_URL", before);
+      }
+    });
+
+    it("validates first: a tree that fails the schema writes nothing", () => {
+      // `redis/host` is required by the schema and absent, so load throws — and
+      // must throw before the injection writes database-url.
+      const cwd = makeProject({ "database-url": "postgres://default/app" });
+      const before = process.env.DATABASE_URL;
+      try {
+        expect(() => load(schema, { cwd, environment: "development", inject: true })).toThrow(
+          ValidationError,
+        );
+        expect(process.env.DATABASE_URL).toBe(before);
+      } finally {
+        setEnv("DATABASE_URL", before);
+      }
+    });
+
+    it("injects a schema default the tree did not set", () => {
+      const withDefault = z.object({
+        databaseUrl: z.url(),
+        region: z.string().default("us-east-1"),
+      });
+      const cwd = makeProject({ "database-url": "postgres://default/app" });
+      const before = { url: process.env.DATABASE_URL, region: process.env.REGION };
+      try {
+        const env = load(withDefault, { cwd, environment: "development", inject: true });
+        expect(env.region).toBe("us-east-1");
+        // The default reaches process.env too — it must not be lost to the delete rule.
+        expect(process.env.REGION).toBe("us-east-1");
+      } finally {
+        setEnv("DATABASE_URL", before.url);
+        setEnv("REGION", before.region);
+      }
+    });
+
+    it("never mutates process.env during the schema-harvest window", () => {
+      // Under harvest the CLI reads the `schema` export; a concrete read that
+      // materialises the deferred load must not trigger a process.env write.
+      const cwd = makeProject({
+        "database-url": "postgres://default/app",
+        "redis/host": "127.0.0.1",
+      });
+      const before = process.env.DATABASE_URL;
+      setEnv(SCHEMA_HARVEST_ENV, "1");
+      try {
+        const deferred = load(schema, { cwd, environment: "development", inject: true });
+        // Force materialisation while harvest is still active.
+        expect(deferred.databaseUrl).toBe("postgres://default/app");
+        expect(process.env.DATABASE_URL).toBe(before);
+      } finally {
+        setEnv(SCHEMA_HARVEST_ENV, undefined);
+        setEnv("DATABASE_URL", before);
       }
     });
   });

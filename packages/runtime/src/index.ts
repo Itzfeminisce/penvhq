@@ -17,5 +17,7 @@ export {
   UnknownEnvironmentError,
   ValidationError,
 } from "@penvhq/core";
+export type { InjectResult } from "./inject.js";
+export { declaredRefs, inject } from "./inject.js";
 export type { LoadOptions } from "./load.js";
 export { load } from "./load.js";
