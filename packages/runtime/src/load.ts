@@ -96,9 +96,13 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: LoadOptions): z.i
 
   // Validate-first: the injection runs only after the schema has accepted every
   // value, so an SDK reading `process.env` never sees a half-configured surface.
-  // The raw `values` cross, not `result.data` — `process.env` is strings.
-  if (options?.inject === true) {
-    inject(schema, config, values);
+  // Guarded against the harvest window — the CLI reading the `schema` export must
+  // never trigger a `process.env` mutation, even if the scaffolded module reads a
+  // concrete value at its top level. The raw `values` cross for tree-resolved
+  // parameters (`process.env` is strings); `result.data` is passed only so a
+  // schema default reaches the environment instead of being deleted.
+  if (options?.inject === true && !schemaHarvestActive()) {
+    inject({ schema, config, values, validated: result.data });
   }
   return result.data;
 }

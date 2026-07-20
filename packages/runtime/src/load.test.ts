@@ -7,6 +7,7 @@ import {
   KEY_BYTES,
   type NameCollisionError,
   PenvError,
+  SCHEMA_HARVEST_ENV,
   sealValue,
   type UndecryptableValueError,
   ValidationError,
@@ -581,6 +582,44 @@ describe("load", () => {
         );
         expect(process.env.DATABASE_URL).toBe(before);
       } finally {
+        setEnv("DATABASE_URL", before);
+      }
+    });
+
+    it("injects a schema default the tree did not set", () => {
+      const withDefault = z.object({
+        databaseUrl: z.url(),
+        region: z.string().default("us-east-1"),
+      });
+      const cwd = makeProject({ "database-url": "postgres://default/app" });
+      const before = { url: process.env.DATABASE_URL, region: process.env.REGION };
+      try {
+        const env = load(withDefault, { cwd, environment: "development", inject: true });
+        expect(env.region).toBe("us-east-1");
+        // The default reaches process.env too — it must not be lost to the delete rule.
+        expect(process.env.REGION).toBe("us-east-1");
+      } finally {
+        setEnv("DATABASE_URL", before.url);
+        setEnv("REGION", before.region);
+      }
+    });
+
+    it("never mutates process.env during the schema-harvest window", () => {
+      // Under harvest the CLI reads the `schema` export; a concrete read that
+      // materialises the deferred load must not trigger a process.env write.
+      const cwd = makeProject({
+        "database-url": "postgres://default/app",
+        "redis/host": "127.0.0.1",
+      });
+      const before = process.env.DATABASE_URL;
+      setEnv(SCHEMA_HARVEST_ENV, "1");
+      try {
+        const deferred = load(schema, { cwd, environment: "development", inject: true });
+        // Force materialisation while harvest is still active.
+        expect(deferred.databaseUrl).toBe("postgres://default/app");
+        expect(process.env.DATABASE_URL).toBe(before);
+      } finally {
+        setEnv(SCHEMA_HARVEST_ENV, undefined);
         setEnv("DATABASE_URL", before);
       }
     });
