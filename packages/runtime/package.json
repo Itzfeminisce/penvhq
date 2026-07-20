@@ -1,6 +1,6 @@
 {
   "name": "@penvhq/runtime",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "penv's load() and the typed env surface. Ships into user apps — keep it light.",
   "license": "MIT",
   "type": "module",
