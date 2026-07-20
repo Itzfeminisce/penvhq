@@ -510,7 +510,7 @@ function plaintextSecretFindings(
  * so this contradiction is only visible from here.
  *
  * Read of the *generated* variable rather than the parameter name, because a
- * `names` override is what decides the string the framework sees, and it is the
+ * `override` entry is what decides the string the framework sees, and it is the
  * one place the prefix can appear with nothing in the tree hinting at it.
  * Absence of a value is deliberately not a reprieve: the name is already wrong,
  * and the next `penv set` is what ships it.

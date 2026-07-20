@@ -177,7 +177,7 @@ describe("watch mode", () => {
 
     writeFileSync(
       join(root, "penv.config.ts"),
-      `export default ${JSON.stringify({ ...CONFIG, names: { "database-url": "DB_URL" } })};\n`,
+      `export default ${JSON.stringify({ ...CONFIG, override: { "database-url": "DB_URL" } })};\n`,
       "utf8",
     );
 

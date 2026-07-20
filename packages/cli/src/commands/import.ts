@@ -185,7 +185,7 @@ function assertNotReserved(
  * application's `process.env["MY-VAR"]` reads `undefined` after a round trip. A
  * flat `.env` cannot tell `MY-VAR` from `MY_VAR` once both collapse to one
  * parameter, so no escape scheme rescues it — the honest move is to refuse. An
- * explicit `names` override is the exception the gate allows: it makes the
+ * explicit `override` entry is the exception the gate allows: it makes the
  * generated name a stated decision instead of an accident. Silence does not.
  */
 function assertRoundTrips(ref: ParameterRef, variable: string, config: PenvConfig): void {
@@ -204,7 +204,7 @@ function assertRoundTrips(ref: ParameterRef, variable: string, config: PenvConfi
     `The variable ${variable} becomes the parameter \`${ref.name}\`, which regenerates as ${generated}`,
     `\`penv generate\` would write ${generated}, so anything reading ` +
       `\`process.env["${variable}"]\` would read \`undefined\`. Declare the name you want in the ` +
-      `\`names\` block of penv.config.ts — \`names: { "${ref.name}": "${variable}" }\` — then ` +
+      `\`override\` block of penv.config.ts — \`override: { "${ref.name}": "${variable}" }\` — then ` +
       `import it again. Nothing was imported.`,
   );
 }
@@ -395,7 +395,7 @@ function assertEnvironmentAgrees(
  * Writing it *first* is what lets every name check run before a single value
  * file exists. It is safe to leave behind if a check then fails: it is byte for
  * byte the file `penv init` writes, it holds nothing read out of the `.env`, and
- * it is the file the reserved-token and `names` remedies both tell the user to
+ * it is the file the reserved-token and `override` remedies both tell the user to
  * go and edit.
  */
 /**
@@ -432,7 +432,7 @@ function environmentNamed(file: string, explicit: string | undefined): string | 
  * Writing it *first* is what lets every name check run before a single value
  * file exists. It is safe to leave behind if a check then fails: it holds
  * nothing read out of the `.env`, and it is the file the reserved-token and
- * `names` remedies both tell the user to go and edit.
+ * `override` remedies both tell the user to go and edit.
  *
  * The scaffold declares the environment this import names, and nothing else.
  * `penv init` refuses to invent environments because it cannot observe a

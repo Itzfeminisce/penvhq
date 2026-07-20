@@ -15,7 +15,7 @@ export type GithubNameReason = "reserved-prefix" | "leading-digit" | "charset" |
  * A generated variable the destination will not accept. Mirrors core's
  * `NameCollisionError`: the offending variable and the parameters that produce
  * it are public fields, the message names them, and the remedy points at the
- * `names` block — the one place any of these can be repaired.
+ * `override` block — the one place any of these can be repaired.
  */
 export class GithubNameError extends PenvError {
   override readonly name = "GithubNameError";

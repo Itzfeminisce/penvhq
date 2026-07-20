@@ -332,7 +332,7 @@ export default defineConfig({
   schemaFile: "src/env.ts",
   publicPrefixes: ["NEXT_PUBLIC_"],
 
-  names: {
+  override: {
     "database-url": "DATABASE_URL",
   },
 });
@@ -355,7 +355,7 @@ It will not invent `environments`. penv cannot observe your deployment topology 
 | `keys` | Per-environment encryption key source. An environment with no entry has no key source, which is not the same as having no key: penv reports that it was never told where to look, rather than that the key is missing. |
 | `keys.*.source` | `env` (read from `PENV_KEY_<ID>`, which is where a deploy exports the unwrapped KMS-derived key) or `keychain` (the OS keychain). A source penv does not recognise is an error, never a fallback to one it does. |
 | `keys.*.id` | Names the key. It is written into every value file sealed under it, so it outlives any one machine — and cannot contain `:`. |
-| `names` | Overrides the default name transform for generated `.env` output. Collision-checked. |
+| `override` | Overrides the generated variable for a parameter, when a consumer demands a name the default transform would not produce (`"workos/redirect-uri": "NEXT_PUBLIC_WORKOS_REDIRECT_URI"`). One override bends the name for every consumer — `generate`, `push`, the ambient mirror. Collision-checked. Keys autocomplete from your schema and a typo is a compile error, because the scaffolded `.penv/env.ts` registers the schema's shape (`declare module "@penvhq/core" { interface PenvSchemaShape { readonly shape: z.infer<typeof schema> } }`) — a type-only line penv writes for you; a project without it keeps plain string keys. |
 
 ## Providers
 

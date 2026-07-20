@@ -35,7 +35,7 @@ function camelSegment(segment: string): string {
 }
 
 /**
- * The generated `.env` variable for a parameter, before any `names` override.
+ * The generated `.env` variable for a parameter, before any `override`.
  * Both the namespace separator and the hyphen become an underscore.
  */
 export function defaultVariableName(ref: ParameterRef): string {
@@ -45,12 +45,12 @@ export function defaultVariableName(ref: ParameterRef): string {
 }
 
 /**
- * The generated `.env` variable for a parameter, honouring `config.names`.
+ * The generated `.env` variable for a parameter, honouring `config.override`.
  * An override may be keyed by the dotted parameter id (`redis.password`) or by
  * the slash path (`redis/password`); for a root parameter these coincide.
  */
 export function variableName(ref: ParameterRef, config: PenvConfig): string {
-  const overrides = config.names;
+  const overrides = config.override as Readonly<Record<string, string>> | undefined;
   if (overrides !== undefined) {
     const byId = overrides[parameterId(ref)];
     if (byId !== undefined) {
@@ -136,7 +136,7 @@ export function refFromVariable(variable: string): ParameterRef {
  * `undefined` after a round trip. A flat `.env` cannot distinguish `MY-VAR`
  * from `MY_VAR` once both collapse to the same parameter, so no escape scheme
  * can rescue them — the honest answer is to detect them and let the caller
- * refuse or demand an explicit `names` override.
+ * refuse or demand an explicit `override` entry.
  *
  * Composed from the real transform rather than re-derived as a regex, so it
  * cannot drift from what import and generate actually do.

@@ -46,7 +46,7 @@ const valid: PenvConfig = {
     staging: { type: "@penvhq/provider-vault", location: "secret/staging" },
     production: { type: "@penvhq/provider-ssm", location: "/prod/app" },
   },
-  names: { "database-url": "DATABASE_URL" },
+  override: { "database-url": "DATABASE_URL" },
 };
 
 const VALID_SOURCE = `export default ${JSON.stringify(valid, null, 2)};\n`;
@@ -145,7 +145,7 @@ describe("loadConfig", () => {
 
     expect(file).toBe(resolve(root, "penv.config.ts"));
     expect(config.environments).toEqual(["development", "staging", "production"]);
-    expect(config.names?.["database-url"]).toBe("DATABASE_URL");
+    expect(config.override?.["database-url"]).toBe("DATABASE_URL");
   });
 
   it("throws ConfigError telling the user to run penv init when no config is found", () => {
@@ -353,20 +353,38 @@ describe("validateConfig", () => {
     expect(legacy?.remedy).toContain("@penvhq/provider-github");
   });
 
-  it("rejects an empty name override", () => {
-    const config: PenvConfig = { ...valid, names: { "database-url": "" } };
+  it("refuses a config still carrying a `names` block, naming the rename", () => {
+    const config = {
+      environments: ["production"],
+      providers: { production: { type: "@penvhq/provider-filesystem" } },
+      names: { "database-url": "DATABASE_URL" },
+    } as unknown as PenvConfig;
 
-    expect(codesFor(config)).toContain("NAME_OVERRIDE_EMPTY");
+    const errors = validateConfig(config);
+    const renamed = errors.find((error) => error.code === "CONFIG_NAMES_RENAMED");
+
+    expect(renamed).toBeDefined();
+    expect(renamed?.remedy).toContain("override");
+  });
+
+  it("stays quiet about the rename for a config that uses `override`", () => {
+    expect(codesFor(valid)).not.toContain("CONFIG_NAMES_RENAMED");
+  });
+
+  it("rejects an empty name override", () => {
+    const config: PenvConfig = { ...valid, override: { "database-url": "" } };
+
+    expect(codesFor(config)).toContain("OVERRIDE_EMPTY");
   });
 
   it("rejects two overrides mapping to the same variable, naming both keys", () => {
     const config: PenvConfig = {
       ...valid,
-      names: { "database-url": "DATABASE_URL", "db/url": "DATABASE_URL" },
+      override: { "database-url": "DATABASE_URL", "db/url": "DATABASE_URL" },
     };
 
     const errors = validateConfig(config);
-    const duplicate = errors.find((error) => error.code === "NAME_OVERRIDE_DUPLICATE");
+    const duplicate = errors.find((error) => error.code === "OVERRIDE_DUPLICATE");
 
     expect(duplicate).toBeDefined();
     expect(duplicate?.message).toContain("database-url");

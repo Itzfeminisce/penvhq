@@ -11,7 +11,7 @@
       "@penvhq/provider-mock": ["./packages/providers/mock/src/index.ts"],
       "@penvhq/provider-vault": ["./packages/providers/vault/src/index.ts"],
       "@penvhq/provider-contract": ["./packages/providers/contract/src/index.ts"],
-      "@penvhq/sink-github": ["./packages/sinks/github/src/index.ts"],
+      "@penvhq/provider-github": ["./packages/providers/github/src/index.ts"],
       "@penvhq/cli": ["./packages/cli/src/index.ts"]
     }
   },

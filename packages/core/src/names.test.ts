@@ -26,7 +26,7 @@ const appJwtSecret: ParameterRef = { namespace: ["app"], name: "jwt-secret" };
 const redisPassword: ParameterRef = { namespace: ["redis"], name: "password" };
 
 function withNames(names: Record<string, string>): PenvConfig {
-  return { ...config, names };
+  return { ...config, override: names };
 }
 
 describe("the documented examples", () => {

@@ -105,7 +105,7 @@ This is a real cost, stated plainly: v0.3 no longer retires the rotation risk, a
 
 - The GitHub Actions Secrets **sink**: `penv push`, declared under a `sinks` key in `penv.config.ts`, never under `providers`.
 - Sink resolution skips both `.local` levels. CI receives what CI would read, never a developer's personal override.
-- Every name checked against the destination's grammar *before anything is pushed*: the reserved `GITHUB_` prefix, a leading digit, and the case collision a `names` override can express.
+- Every name checked against the destination's grammar *before anything is pushed*: the reserved `GITHUB_` prefix, a leading digit, and the case collision an `override` can express.
 - `penv doctor` against a sink: exact name-level drift, manual-edit detection by comparing GitHub's `updated_at` against penv's own last-push time, and value drift reported as `unknown` because it cannot be read.
 - `doctor`'s fourth verdict — `unknown`, a check that could not look — and the `publicPrefixes` line it retroactively fixes.
 - The OS keychain key source (`source: "keychain"`), so a local tree's key stops living in a dotfile.
@@ -174,7 +174,7 @@ Decided 2026-07-19; the [v0.8 plan](./v0.8-plan.md) owns *how*, the RFC's "The a
 
 - `import "@penvhq/penv/config"` is promoted from compat-only to blessed: it validates through `load()` before writing, writes generated (`override`-bent) names, and is exclusive over the schema — a declared parameter is written when it resolves and deleted when it does not, so nothing configures an SDK behind `@env`'s back.
 - `penv init` scaffolds the import at the detected framework's guaranteed pre-app seam (Next `instrumentation.ts`, Nitro plugin, SvelteKit `hooks.server.ts`, `node --import`), plus the build-time seam for client-inlined variables. Halves scaffolded only where they exist; unknown frameworks are asked, never guessed.
-- `names` becomes `override`, with schema-typed keys via an optional, type-only `defineConfig<typeof schema>` parameter. Breaking; rides the 0.5.0 release train.
+- `names` becomes `override`, with schema-typed keys: the scaffolded `env.ts` registers the schema's shape on `PenvSchemaShape` (a type-only `declare module`, erased at runtime), and `override` keys narrow to the parameters the schema declares. Breaking; rides the 0.5.0 release train.
 - `doctor` gains `ambient-shadow`.
 
 **Gate to advance:** penv-cloud deletes its WorkOS bridge files, declares the SDK's surface in its schema plus one `override` entry, and WorkOS authenticates with no penv-aware code in the app — including the exclusivity proof: a stray exported `WORKOS_API_HOSTNAME` never reaches the SDK.

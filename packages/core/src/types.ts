@@ -161,6 +161,73 @@ export interface ProviderFactoryContext {
   readonly environment?: string;
 }
 
+/**
+ * The schema's inferred shape, registered by the schema module so the config
+ * file can be typed against it. Empty here, deliberately — core must not depend
+ * on Zod or know any one project's schema. The scaffolded `.penv/env.ts`
+ * augments it with the *inferred* shape (computed where Zod lives):
+ *
+ * ```ts
+ * declare module "@penvhq/core" {
+ *   interface PenvSchemaShape {
+ *     readonly shape: z.infer<typeof schema>;
+ *   }
+ * }
+ * ```
+ *
+ * The augmentation is type-only and erased at runtime, so nothing cycles: the
+ * config never imports the schema module, yet `override` keys autocomplete from
+ * it whenever both files sit in one TypeScript program. A project that never
+ * registers a shape keeps the open `string` keys.
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: augmentation target — see docblock.
+export interface PenvSchemaShape {}
+
+/** camelCase → kebab-case at the type level, mirroring `kebabSegment` exactly. */
+type KebabCase<S extends string> = S extends `${infer Head}${infer Tail}`
+  ? Head extends Uppercase<Head>
+    ? Head extends Lowercase<Head>
+      ? `${Head}${KebabCase<Tail>}` // a digit — both cases at once, kept verbatim
+      : `-${Lowercase<Head>}${KebabCase<Tail>}`
+    : `${Head}${KebabCase<Tail>}`
+  : S;
+
+/**
+ * The parameter ids a shape implies, mirroring `refFromAccessPath`: a nested
+ * object is a namespace, everything else is a parameter, camelCase segments
+ * kebab-cased. `{ workos: { apiKey: string } }` yields `"workos/api-key"`.
+ *
+ * Exported so the mapping is testable — and usable directly, for a project that
+ * wants typed override keys without registering {@link PenvSchemaShape}:
+ * `Partial<Record<OverrideKeysOf<z.infer<typeof schema>>, string>>`.
+ */
+export type OverrideKeysOf<T> = ParameterIdsOf<T>;
+
+type ParameterIdsOf<T> = {
+  [K in keyof T & string]: NonNullable<T[K]> extends readonly unknown[]
+    ? KebabCase<K>
+    : NonNullable<T[K]> extends Date
+      ? KebabCase<K>
+      : NonNullable<T[K]> extends Record<string, unknown>
+        ? `${KebabCase<K>}/${ParameterIdsOf<NonNullable<T[K]>>}`
+        : KebabCase<K>;
+}[keyof T & string];
+
+/** The registered shape, or `never` when no schema module has registered one. */
+type RegisteredShape = PenvSchemaShape extends { readonly shape: infer S } ? S : never;
+
+/**
+ * The `override` block's key type: every parameter id the registered schema
+ * implies — so a typo is a compile error — or plain `string` when no shape is
+ * registered.
+ */
+export type OverrideKey = [RegisteredShape] extends [never]
+  ? string
+  : ParameterIdsOf<RegisteredShape>;
+
+/** The `override` block: parameter id → the exact variable a consumer expects. */
+export type OverrideBlock = Readonly<Partial<Record<OverrideKey, string>>>;
+
 /** The fields a provider entry carries that its declared config type does not. */
 type UnknownProviderFields<E, T extends KnownProviderType> = Exclude<
   keyof E,
@@ -257,8 +324,19 @@ export interface PenvConfig {
    * contradiction.
    */
   readonly publicPrefixes?: readonly string[];
-  /** Overrides the default name transform for generated `.env` output. */
-  readonly names?: Readonly<Record<string, string>>;
+  /**
+   * Overrides the generated variable for a parameter, when a consumer demands a
+   * name the default transform would not produce — the WorkOS SDK reading
+   * `NEXT_PUBLIC_WORKOS_REDIRECT_URI`, a deploy target expecting `DATABASE_URL`
+   * spelled its way. One override bends the name for every consumer at once:
+   * `generate`, `push`, and the ambient mirror all read it. Collision-checked.
+   *
+   * Keys are parameter ids (`workos/redirect-uri`). When the schema module
+   * registers its shape (see {@link PenvSchemaShape}), the keys narrow to the
+   * parameters the schema actually declares — a typo'd id becomes a compile
+   * error instead of an override that silently never applies.
+   */
+  readonly override?: OverrideBlock;
   /**
    * Where each environment's encryption key lives. An environment with no entry
    * has no key source, which is not the same as having no key — see `keys.ts`.
