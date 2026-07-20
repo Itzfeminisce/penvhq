@@ -5,7 +5,7 @@
  * This is the *schemaless* ambient path — it resolves the tree and writes every
  * value, but it never sees the Zod schema, so it cannot validate against it or
  * be exclusive over what the schema declares. The **blessed** ambient surface is
- * `load(schema, { mirror: true })` from `.penv/env.ts` (see `./mirror.ts`): it
+ * `load(schema, { inject: true })` from `.penv/env.ts` (see `./inject.ts`): it
  * validates first, writes only what the schema declares, and deletes what the
  * schema declares but the tree does not have — the guarantees this entry cannot
  * offer without a schema to hold. Reach for this one only to adopt penv before
@@ -16,7 +16,7 @@
  * module's body, but sibling imports evaluate in source order — so a module
  * imported above this one, and reading `process.env` at its top level, reads it
  * before penv has populated it. This is the same hazard `dotenv/config` carries.
- * The blessed mirror sidesteps it by running from the framework's guaranteed
+ * The blessed injection sidesteps it by running from the framework's guaranteed
  * pre-app seam; the typed `import { env } from "@env"` surface has no ordering
  * hazard either.
  */

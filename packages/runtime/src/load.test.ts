@@ -535,10 +535,10 @@ describe("load", () => {
     });
   });
 
-  describe("the ambient mirror", () => {
-    // The blessed surface end to end: `load(schema, { mirror: true })` returns
+  describe("environment injection", () => {
+    // The blessed surface end to end: `load(schema, { inject: true })` returns
     // the typed env *and* writes it onto process.env, after validation.
-    it("populates process.env from the validated tree when mirror is set", () => {
+    it("populates process.env from the validated tree when inject is set", () => {
       const cwd = makeProject({
         "database-url": "postgres://default/app",
         "redis/host": "127.0.0.1",
@@ -546,7 +546,7 @@ describe("load", () => {
       const before = { url: process.env.DATABASE_URL, host: process.env.REDIS_HOST };
 
       try {
-        const env = load(schema, { cwd, environment: "development", mirror: true });
+        const env = load(schema, { cwd, environment: "development", inject: true });
         expect(env.databaseUrl).toBe("postgres://default/app");
         expect(process.env.DATABASE_URL).toBe("postgres://default/app");
         expect(process.env.REDIS_HOST).toBe("127.0.0.1");
@@ -572,11 +572,11 @@ describe("load", () => {
 
     it("validates first: a tree that fails the schema writes nothing", () => {
       // `redis/host` is required by the schema and absent, so load throws — and
-      // must throw before the mirror writes database-url.
+      // must throw before the injection writes database-url.
       const cwd = makeProject({ "database-url": "postgres://default/app" });
       const before = process.env.DATABASE_URL;
       try {
-        expect(() => load(schema, { cwd, environment: "development", mirror: true })).toThrow(
+        expect(() => load(schema, { cwd, environment: "development", inject: true })).toThrow(
           ValidationError,
         );
         expect(process.env.DATABASE_URL).toBe(before);

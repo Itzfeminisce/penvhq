@@ -7,7 +7,7 @@
 
 import { accessPath, schemaHarvestActive, ValidationError } from "@penvhq/core";
 import type { z } from "zod";
-import { mirror } from "./mirror.js";
+import { inject } from "./inject.js";
 import { resolveSync } from "./resolve.js";
 
 export interface LoadOptions {
@@ -16,14 +16,14 @@ export interface LoadOptions {
   /** Overrides `PENV_ENV` / `NODE_ENV`. Must be a declared environment. */
   readonly environment?: string;
   /**
-   * Also write the validated values onto `process.env`, so an SDK that reads
+   * Also inject the validated values into `process.env`, so an SDK that reads
    * `process.env` directly finds them — the blessed ambient surface. Exclusive
    * over the schema: a declared parameter is written when it resolves and
    * deleted when it does not, and an undeclared variable is left alone. Off by
    * default — a consumer who never asked for `process.env` writes gets none.
-   * See {@link mirror}.
+   * See {@link inject}.
    */
-  readonly mirror?: boolean;
+  readonly inject?: boolean;
 }
 
 /**
@@ -94,11 +94,11 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: LoadOptions): z.i
     );
   }
 
-  // Validate-first: the mirror runs only after the schema has accepted every
+  // Validate-first: the injection runs only after the schema has accepted every
   // value, so an SDK reading `process.env` never sees a half-configured surface.
   // The raw `values` cross, not `result.data` — `process.env` is strings.
-  if (options?.mirror === true) {
-    mirror(schema, config, values);
+  if (options?.inject === true) {
+    inject(schema, config, values);
   }
   return result.data;
 }

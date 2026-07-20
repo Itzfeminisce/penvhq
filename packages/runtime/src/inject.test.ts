@@ -1,5 +1,5 @@
 /**
- * The ambient mirror's contract, each property with its firing and its quiet
+ * The env-injection contract, each property with its firing and its quiet
  * case: it writes what the schema declares and resolves, deletes what the schema
  * declares but the tree does not have, leaves what the schema never declared
  * untouched, bends names through `override`, writes raw bytes rather than the
@@ -9,7 +9,7 @@
 import type { PenvConfig } from "@penvhq/core";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { declaredRefs, mirror } from "./mirror.js";
+import { declaredRefs, inject } from "./inject.js";
 
 const CONFIG: PenvConfig = {
   environments: ["production"],
@@ -43,10 +43,10 @@ describe("declaredRefs", () => {
   });
 });
 
-describe("mirror", () => {
+describe("inject", () => {
   it("writes each declared, resolved parameter under its generated variable", () => {
     const env = target();
-    const result = mirror(
+    const result = inject(
       SCHEMA,
       CONFIG,
       [
@@ -65,7 +65,7 @@ describe("mirror", () => {
     // The exclusivity property: WORKOS_API_HOSTNAME is declared (optional) and
     // has no value, so a stray ambient one is removed.
     const env = target({ WORKOS_API_HOSTNAME: "https://evil.example" });
-    const result = mirror(
+    const result = inject(
       SCHEMA,
       CONFIG,
       [
@@ -81,7 +81,7 @@ describe("mirror", () => {
 
   it("leaves a variable the schema never declared untouched", () => {
     const env = target({ SOME_OTHER_TOOL: "keep-me" });
-    mirror(
+    inject(
       SCHEMA,
       CONFIG,
       [{ ref: { namespace: ["workos"], name: "api-key" }, value: "sk_live" }],
@@ -92,7 +92,7 @@ describe("mirror", () => {
 
   it("overwrites a declared variable already present — the schema is authoritative over what it names", () => {
     const env = target({ WORKOS_API_KEY: "sk_stale" });
-    mirror(
+    inject(
       SCHEMA,
       CONFIG,
       [{ ref: { namespace: ["workos"], name: "api-key" }, value: "sk_fresh" }],
@@ -107,7 +107,7 @@ describe("mirror", () => {
       override: { "workos/api-key": "NEXT_PUBLIC_WORKOS_KEY" },
     };
     const env = target();
-    mirror(
+    inject(
       SCHEMA,
       config,
       [{ ref: { namespace: ["workos"], name: "api-key" }, value: "sk_live" }],
@@ -120,14 +120,14 @@ describe("mirror", () => {
   it("writes the raw bytes, never the schema-coerced value", () => {
     const schema = z.object({ port: z.coerce.number() });
     const env = target();
-    mirror(schema, CONFIG, [{ ref: { namespace: [], name: "port" }, value: "5432" }], env);
+    inject(schema, CONFIG, [{ ref: { namespace: [], name: "port" }, value: "5432" }], env);
     // process.env is strings; the SDK re-parses. A coerced `5432` here would be a bug.
     expect(env.PORT).toBe("5432");
   });
 
   it("refuses a collision before touching the target", () => {
     // Two declared parameters that generate one variable — first-write-wins would
-    // drop one silently, so the mirror throws before writing anything.
+    // drop one silently, so it throws before writing anything.
     const schema = z.object({ apiKey: z.string(), api: z.object({ key: z.string() }) });
     const config: PenvConfig = {
       ...CONFIG,
@@ -135,7 +135,7 @@ describe("mirror", () => {
     };
     const env = target();
     expect(() =>
-      mirror(
+      inject(
         schema,
         config,
         [
@@ -150,7 +150,7 @@ describe("mirror", () => {
 
   it("reports counts for a report to render", () => {
     const env = target({ WORKOS_API_HOSTNAME: "stale" });
-    const result = mirror(
+    const result = inject(
       SCHEMA,
       CONFIG,
       [

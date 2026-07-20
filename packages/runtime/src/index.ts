@@ -19,5 +19,5 @@ export {
 } from "@penvhq/core";
 export type { LoadOptions } from "./load.js";
 export { load } from "./load.js";
-export type { MirrorResult } from "./mirror.js";
-export { declaredRefs, mirror } from "./mirror.js";
+export type { InjectResult } from "./inject.js";
+export { declaredRefs, inject } from "./inject.js";

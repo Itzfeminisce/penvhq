@@ -1,12 +1,12 @@
 /**
- * The ambient mirror: writing an environment's resolved values onto
- * `process.env`, so a third-party SDK that reads `process.env.ITS_EXACT_NAME`
- * at module load finds a validated value with no per-SDK bridge code.
+ * Injecting an environment's resolved values into `process.env`, so a
+ * third-party SDK that reads `process.env.ITS_EXACT_NAME` at module load finds a
+ * validated value with no per-SDK bridge code.
  *
  * This is v0.7's *projection* concept delivered into the local process instead
  * of into GitHub Actions: resolved values, under their generated (`override`-bent)
  * variable names, placed where something downstream reads them. It runs only
- * from {@link load} with `{ mirror: true }` — never on a bare import — because a
+ * from {@link load} with `{ inject: true }` — never on a bare import — because a
  * consumer who never asked for `process.env` writes must not get them.
  *
  * Two properties make it safe to hand an SDK, and both come from the schema:
@@ -70,8 +70,8 @@ function walk(node: JsonSchemaNode, path: readonly string[], out: ParameterRef[]
   }
 }
 
-/** What a mirror run did, for the caller and for a report. */
-export interface MirrorResult {
+/** What an inject run did, for the caller and for a report. */
+export interface InjectResult {
   /** Variables written from a resolved value. */
   readonly written: number;
   /** Declared-but-unresolved variables deleted from `process.env`. */
@@ -79,11 +79,11 @@ export interface MirrorResult {
 }
 
 /**
- * Writes the schema's declared parameters onto `target` (`process.env` in
+ * Injects the schema's declared parameters into `target` (`process.env` in
  * production), and deletes the declared ones that did not resolve. The value
  * written is the **raw** string the tree holds — never the schema-coerced value,
  * because `process.env` is strings and the SDK re-parses; a `z.coerce.number()`
- * parameter mirrors the bytes `"5432"`, not the number `5432`.
+ * parameter injects the bytes `"5432"`, not the number `5432`.
  *
  * Authoritative over what it declares: a declared variable already present is
  * overwritten, because the schema is the source of truth for the values it
@@ -91,17 +91,17 @@ export interface MirrorResult {
  * never clobbers. That authority is exactly what makes exclusivity mean
  * something.
  */
-export function mirror(
+export function inject(
   schema: z.ZodType,
   config: PenvConfig,
   values: readonly { readonly ref: ParameterRef; readonly value: string }[],
   target: Record<string, string | undefined> = process.env,
-): MirrorResult {
+): InjectResult {
   const declared = declaredRefs(schema);
 
   // Invariant 12, at the ambient boundary too: two parameters mapping to one
   // variable would write first-wins and drop the other silently. Refuse before
-  // touching `target` — a half-mirrored environment is worse than none.
+  // touching `target` — a half-injected environment is worse than none.
   const collision = checkNameCollisions(declared, config)[0];
   if (collision !== undefined) {
     throw collision;
