@@ -31,7 +31,13 @@ import {
   validateSchemaFile,
 } from "@penvhq/core";
 import { defineCommand } from "citty";
-import { DEFAULT_ALIAS, type Detected, detectAlias, detectFramework } from "../detect.js";
+import {
+  DEFAULT_ALIAS,
+  type Detected,
+  detectAlias,
+  detectFramework,
+  srcPrefix,
+} from "../detect.js";
 import { type Seam, seamFor } from "../seams.js";
 import { out } from "../style.js";
 import { CHECK, columns, formatSteps, guard, prompt, type Step, tip, WARN, write } from "../ui.js";
@@ -128,6 +134,8 @@ export interface InitOptions {
   readonly cwd: string;
   /** What to write. Omitted means the plan's defaults, as `--yes` takes them. */
   readonly decisions?: InitDecisions;
+  /** The detected framework name, passed by the command so the seam step need not re-detect it. */
+  readonly framework?: string;
 }
 
 /*
@@ -470,15 +478,16 @@ export async function promptForDecisions(
     io.write("");
   }
 
-  // Injection is off unless the developer asks — and there is no point asking on a
-  // runtime that reads nothing from process.env (a pure client SPA), so the
-  // question appears only when the framework has a seam to place.
-  const inject = seamKindFor(plan) === "none" ? false : await askInject(io);
-
+  // `Proceed?` is asked FIRST, so the confirmation muscle-memory — Enter, then a
+  // decline — still declines: a new question inserted above it would otherwise
+  // eat the "n" and default Proceed to yes, scaffolding a project someone meant to
+  // refuse. Injection is a refinement of a scaffold already agreed to, so it is
+  // asked only after that yes — and never on a runtime injection cannot serve.
   const proceed = (await io.ask(prompt("Proceed?", "Y/n"))).trim().toLowerCase();
   if (proceed.length > 0 && proceed !== "y" && proceed !== "yes") {
     return undefined;
   }
+  const inject = seamKindFor(plan) === "none" ? false : await askInject(io);
   return { ...plan.decisions, environments, inject };
 }
 
@@ -487,6 +496,7 @@ function seamKindFor(plan: InitPlan): Seam["kind"] {
   return seamFor(plan.detected?.name, {
     alias: plan.decisions.alias,
     srcDir: plan.decisions.schemaFile.startsWith("src/") ? "src/" : "",
+    schemaFile: plan.decisions.schemaFile,
   }).kind;
 }
 
@@ -1063,9 +1073,51 @@ export function writeGitignore(
   };
 }
 
-/** `"src/"` when the project keeps its modules under `src/`, else `""` — the layout the seams key off. */
-function srcDirOf(root: string): string {
-  return existsSync(join(root, "src")) ? "src/" : "";
+/** The first `@penvhq/penv` release whose `load` honours `{ inject: true }`. */
+const INJECT_MIN_VERSION = "0.6.0";
+
+/**
+ * A warning when the project's installed runtime is too old to honour
+ * `{ inject: true }` — the option is ignored on an older `@penvhq/penv`, so the
+ * seam would run and `process.env` would stay empty while init reported success.
+ * `undefined` when the runtime is new enough, or absent (init may run before an
+ * install, and penv does not warn about what it cannot see).
+ */
+function outdatedRuntimeWarning(root: string): string | undefined {
+  const version = installedPenvVersion(root);
+  if (version === undefined || !isBelow(version, INJECT_MIN_VERSION)) {
+    return undefined;
+  }
+  return `Injection needs @penvhq/penv ${INJECT_MIN_VERSION}+ — this project has ${version}, whose \`load\` ignores \`{ inject: true }\`. Upgrade, or process.env stays empty.`;
+}
+
+function installedPenvVersion(root: string): string | undefined {
+  const file = join(root, "node_modules", "@penvhq", "penv", "package.json");
+  if (!existsSync(file)) {
+    return undefined;
+  }
+  try {
+    const version = JSON.parse(readFileSync(file, "utf8")).version;
+    return typeof version === "string" ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The `[major, minor, patch]` of a semver, pre-release tag ignored, missing parts zero. */
+function releaseTriple(version: string): [number, number, number] {
+  const parts = (version.split("-")[0] ?? "").split(".");
+  const at = (i: number) => Number.parseInt(parts[i] ?? "0", 10) || 0;
+  return [at(0), at(1), at(2)];
+}
+
+/** True when semver `a` is strictly below `b`, comparing the release triple. */
+function isBelow(a: string, b: string): boolean {
+  const [am, an, ap] = releaseTriple(a);
+  const [bm, bn, bp] = releaseTriple(b);
+  if (am !== bm) return am < bm;
+  if (an !== bn) return an < bn;
+  return ap < bp;
 }
 
 /**
@@ -1074,17 +1126,26 @@ function srcDirOf(root: string): string {
  * before a library reads it. penv scaffolds a fresh seam file, but never edits a
  * hook the user already owns: an existing file, or a framework with no file penv
  * can safely own, becomes a printed instruction instead. Returns nothing when
- * injection was not chosen.
+ * injection was not chosen. `framework` is passed by the command (which already
+ * detected it) to avoid re-reading `package.json`; it falls back to detecting.
  */
 export function writeSeam(
   root: string,
   decisions: InitDecisions = DEFAULT_DECISIONS,
+  framework: string | undefined = detectFramework(root)?.name,
 ): InitStep | undefined {
   if (!decisions.inject) {
     return undefined;
   }
-  const framework = detectFramework(root)?.name;
-  const seam = seamFor(framework, { alias: decisions.alias, srcDir: srcDirOf(root) });
+  const seam = seamFor(framework, {
+    alias: decisions.alias,
+    srcDir: srcPrefix(root),
+    schemaFile: decisions.schemaFile,
+  });
+
+  // Regardless of the seam's shape, `env.ts` now carries `{ inject: true }`, so an
+  // outdated runtime is the same silent no-op everywhere — warn once, here.
+  const outdated = outdatedRuntimeWarning(root);
 
   if (seam.kind === "none") {
     return { target: "seam", action: "info", text: "No injection seam needed", note: seam.reason };
@@ -1094,7 +1155,7 @@ export function writeSeam(
       target: "seam",
       action: "info",
       text: "Place the injection seam",
-      note: seam.instruction,
+      note: withWarning(seam.instruction, outdated),
     };
   }
 
@@ -1105,17 +1166,27 @@ export function writeSeam(
       target: "seam",
       action: "info",
       text: `Add the injection seam to ${seam.file}`,
-      note: `${seam.ifPresent}${notes}`,
+      note: withWarning(`${seam.ifPresent}${notes}`, outdated),
     };
   }
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, seam.content, "utf8");
   return {
     target: "seam",
-    action: "created",
+    action: outdated === undefined ? "created" : "info",
     text: `Wrote ${seam.file} (runs the injection before your app)`,
-    ...(notes === "" ? {} : { note: notes.trimStart() }),
+    ...(notes === "" && outdated === undefined
+      ? {}
+      : { note: withWarning(notes.trimStart(), outdated) }),
   };
+}
+
+/** Appends a runtime warning to a seam note, when there is one. */
+function withWarning(note: string, warning: string | undefined): string {
+  if (warning === undefined) {
+    return note;
+  }
+  return note === "" ? warning : `${note}\n  ⚠ ${warning}`;
 }
 
 /** Everything `init` scaffolds, in the order it is reported. */
@@ -1124,6 +1195,7 @@ export function scaffold(
   fields: readonly SchemaField[],
   draft: boolean,
   decisions: InitDecisions = DEFAULT_DECISIONS,
+  framework: string | undefined = detectFramework(root)?.name,
 ): InitStep[] {
   const steps = [
     ensurePenvDir(root),
@@ -1132,14 +1204,16 @@ export function scaffold(
     writeTsconfigAlias(root, decisions),
     writeGitignore(root, decisions),
   ];
-  const seam = writeSeam(root, decisions);
+  const seam = writeSeam(root, decisions, framework);
   return seam === undefined ? steps : [...steps, seam];
 }
 
 export function runInit(options: InitOptions): InitResult {
   const root = resolve(options.cwd);
   const decisions = options.decisions ?? planInit(root).decisions;
-  return { root, decisions, steps: scaffold(root, [], false, decisions) };
+  // `options.framework` is the name the command already detected; passing it (or
+  // `undefined`, which lets `scaffold` detect) avoids a second `package.json` read.
+  return { root, decisions, steps: scaffold(root, [], false, decisions, options.framework) };
 }
 
 export function renderInit(result: InitResult): string[] {
@@ -1226,7 +1300,15 @@ export const initCommand = defineCommand({
       if (!asked) {
         write([...plan.notes, ""]);
       }
-      write(renderInit(runInit({ cwd: root, decisions })));
+      write(
+        renderInit(
+          runInit({
+            cwd: root,
+            decisions,
+            ...(plan.detected && { framework: plan.detected.name }),
+          }),
+        ),
+      );
     });
   },
 });
