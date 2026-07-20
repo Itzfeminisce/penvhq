@@ -6,7 +6,7 @@
 
 import { describe, it } from "vitest";
 import { z } from "zod";
-import { load, type LoadOptions } from "./load.js";
+import { type LoadOptions, load } from "./load.js";
 
 const schema = z.object({
   databaseUrl: z.url(),
