@@ -32,6 +32,7 @@ import {
 } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { DEFAULT_ALIAS, type Detected, detectAlias, detectFramework } from "../detect.js";
+import { type Seam, seamFor } from "../seams.js";
 import { out } from "../style.js";
 import { CHECK, columns, formatSteps, guard, prompt, type Step, tip, WARN, write } from "../ui.js";
 
@@ -54,14 +55,18 @@ const IMPORTS_PREFIX = "#";
 const PACKAGE_FILE = "package.json";
 
 /** What init touched, so a caller can report it and a test can assert it. */
-export type InitTarget = "penv-dir" | "schema" | "config" | "tsconfig" | "gitignore";
+export type InitTarget = "penv-dir" | "schema" | "config" | "tsconfig" | "gitignore" | "seam";
 /**
  * `conflicted` is the one that is not a success. penv wanted to write something,
  * found the user's file already saying something else about the same thing, and
  * left it alone — so the step is reported with a warning rather than a ✓, and the
  * text says what will not work until the user decides.
+ *
+ * `info` is a step penv did not perform automatically — a manual instruction (the
+ * injection seam for a framework penv cannot scaffold), reported so the user
+ * knows the one thing left to do.
  */
-export type InitAction = "created" | "kept" | "updated" | "conflicted";
+export type InitAction = "created" | "kept" | "updated" | "conflicted" | "info";
 
 export interface InitStep {
   readonly target: InitTarget;
@@ -95,11 +100,19 @@ export interface InitDecisions {
    * offers that.
    */
   readonly alias: string;
+  /**
+   * Whether to inject the validated config into `process.env` for libraries that
+   * read it directly, so `env.ts` loads with `{ inject: true }` and penv places
+   * the framework's pre-app seam. Off by default and only ever turned on by an
+   * explicit yes — a project that reads config only through `@env` gets none.
+   */
+  readonly inject: boolean;
 }
 
 /** What init would write with no further input: the defaults, and nothing invented. */
 export const DEFAULT_DECISIONS: InitDecisions = {
   environments: [],
+  inject: false,
   schemaFile: DEFAULT_SCHEMA_FILE,
   publicPrefixes: [],
   alias: DEFAULT_ALIAS,
@@ -357,6 +370,9 @@ export function planInit(root: string, flags: InitFlags = {}): InitPlan {
     detected,
     decisions: {
       environments,
+      // Injection is a choice about the app's needs, not something on disk — so
+      // the plan defaults it off, and only the interactive prompt turns it on.
+      inject: false,
       schemaFile,
       publicPrefixes: declared?.publicPrefixes ?? detected?.publicPrefixes ?? [],
       alias,
@@ -454,11 +470,37 @@ export async function promptForDecisions(
     io.write("");
   }
 
+  // Injection is off unless the developer asks — and there is no point asking on a
+  // runtime that reads nothing from process.env (a pure client SPA), so the
+  // question appears only when the framework has a seam to place.
+  const inject = seamKindFor(plan) === "none" ? false : await askInject(io);
+
   const proceed = (await io.ask(prompt("Proceed?", "Y/n"))).trim().toLowerCase();
   if (proceed.length > 0 && proceed !== "y" && proceed !== "yes") {
     return undefined;
   }
-  return { ...plan.decisions, environments };
+  return { ...plan.decisions, environments, inject };
+}
+
+/** The seam kind for the plan's framework, so the prompt can skip a runtime injection cannot serve. */
+function seamKindFor(plan: InitPlan): Seam["kind"] {
+  return seamFor(plan.detected?.name, {
+    alias: plan.decisions.alias,
+    srcDir: plan.decisions.schemaFile.startsWith("src/") ? "src/" : "",
+  }).kind;
+}
+
+/**
+ * The injection question, implication-first: the developer reads what yes and no
+ * each *do*, not a premise about libraries. Default is no.
+ */
+async function askInject(io: PromptIo): Promise<boolean> {
+  io.write("");
+  io.write("Also inject your validated config into process.env?");
+  io.write("  y  libraries that read process.env directly (WorkOS, Prisma…) just work");
+  io.write('  n  config stays available only through  import { env } from "@env"');
+  const answer = (await io.ask(prompt("inject", "y/N"))).trim().toLowerCase();
+  return answer === "y" || answer === "yes";
 }
 
 /*
@@ -482,11 +524,26 @@ const DRAFT_HEADER =
   "// must also accept `1`/`0`, or that a string is really a URL. penv scaffolds\n" +
   "// this file once and never regenerates it, so edits here are safe.\n";
 
-export function renderSchemaModule(fields: readonly SchemaField[], draft: boolean): string {
+export function renderSchemaModule(
+  fields: readonly SchemaField[],
+  draft: boolean,
+  inject = false,
+): string {
   const body =
     fields.length === 0
       ? EMPTY_SCHEMA_BODY
       : fields.map((field) => `  ${field.key}: ${field.type},`).join("\n");
+
+  const loadComment = inject
+    ? "// The loaded, validated values for the current environment. Import this in app\n" +
+      "// code. `inject: true` also copies the values into process.env, for libraries\n" +
+      "// that read process.env directly (WorkOS, Prisma) instead of importing @env.\n"
+    : "// The loaded, validated values for the current environment. Import this in app\n" +
+      "// code. Importing it loads configuration and throws (naming the parameter and\n" +
+      "// environment) if anything required is missing or invalid.\n";
+  const loadCall = inject
+    ? "export const env = load(schema, { inject: true });\n"
+    : "export const env = load(schema);\n";
 
   return (
     `${draft ? DRAFT_HEADER : ""}import { z } from "zod";\n` +
@@ -496,10 +553,8 @@ export function renderSchemaModule(fields: readonly SchemaField[], draft: boolea
     `// type — tests, tooling — so you don't trigger config loading.\n` +
     `export const schema = z.object({\n${body}\n});\n` +
     `\n` +
-    `// The loaded, validated values for the current environment. Import this in app\n` +
-    `// code. Importing it loads configuration and throws (naming the parameter and\n` +
-    `// environment) if anything required is missing or invalid.\n` +
-    `export const env = load(schema);\n` +
+    loadComment +
+    loadCall +
     `\n` +
     `// Registers the schema's shape with penv's types (erased at runtime, so\n` +
     `// nothing cycles). This is what makes \`override\` keys in penv.config.ts\n` +
@@ -901,7 +956,7 @@ export function writeSchemaFile(
     };
   }
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, renderSchemaModule(fields, draft), "utf8");
+  writeFileSync(file, renderSchemaModule(fields, draft, decisions.inject), "utf8");
   return {
     target: "schema",
     action: "created",
@@ -1008,6 +1063,61 @@ export function writeGitignore(
   };
 }
 
+/** `"src/"` when the project keeps its modules under `src/`, else `""` — the layout the seams key off. */
+function srcDirOf(root: string): string {
+  return existsSync(join(root, "src")) ? "src/" : "";
+}
+
+/**
+ * Places the injection seam for the detected framework — the file whose one
+ * `import "@env"` runs before app code, so an injected `process.env` is populated
+ * before a library reads it. penv scaffolds a fresh seam file, but never edits a
+ * hook the user already owns: an existing file, or a framework with no file penv
+ * can safely own, becomes a printed instruction instead. Returns nothing when
+ * injection was not chosen.
+ */
+export function writeSeam(
+  root: string,
+  decisions: InitDecisions = DEFAULT_DECISIONS,
+): InitStep | undefined {
+  if (!decisions.inject) {
+    return undefined;
+  }
+  const framework = detectFramework(root)?.name;
+  const seam = seamFor(framework, { alias: decisions.alias, srcDir: srcDirOf(root) });
+
+  if (seam.kind === "none") {
+    return { target: "seam", action: "info", text: "No injection seam needed", note: seam.reason };
+  }
+  if (seam.kind === "instruct") {
+    return {
+      target: "seam",
+      action: "info",
+      text: "Place the injection seam",
+      note: seam.instruction,
+    };
+  }
+
+  const file = join(root, ...seam.file.split("/"));
+  const notes = seam.notes.length === 0 ? "" : `\n${seam.notes.map((n) => `  ${n}`).join("\n")}`;
+  if (existsSync(file)) {
+    return {
+      target: "seam",
+      action: "info",
+      text: `Add the injection seam to ${seam.file}`,
+      note: `${seam.ifPresent}${notes}`,
+    };
+  }
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, seam.content, "utf8");
+  return {
+    target: "seam",
+    action: "created",
+    text: `Wrote ${seam.file} (runs the injection before your app)`,
+    ...(notes === "" ? {} : { note: notes.trimStart() }),
+  };
+}
+
 /** Everything `init` scaffolds, in the order it is reported. */
 export function scaffold(
   root: string,
@@ -1015,13 +1125,15 @@ export function scaffold(
   draft: boolean,
   decisions: InitDecisions = DEFAULT_DECISIONS,
 ): InitStep[] {
-  return [
+  const steps = [
     ensurePenvDir(root),
     writeSchemaFile(root, fields, draft, decisions),
     writeConfigFile(root, decisions),
     writeTsconfigAlias(root, decisions),
     writeGitignore(root, decisions),
   ];
+  const seam = writeSeam(root, decisions);
+  return seam === undefined ? steps : [...steps, seam];
 }
 
 export function runInit(options: InitOptions): InitResult {
@@ -1034,8 +1146,9 @@ export function renderInit(result: InitResult): string[] {
   const steps: Step[] = result.steps.map((step) => {
     // A conflict is the one step that is not a success, so it must not wear the
     // glyph every success wears: a ✓ beside "penv could not wire your alias" is
-    // the line a reader skims past.
-    const glyph = step.action === "conflicted" ? WARN : CHECK;
+    // the line a reader skims past. An `info` step is a thing left for the user
+    // to do, so it wears the tip arrow rather than a ✓ it did not earn.
+    const glyph = step.action === "conflicted" ? WARN : step.action === "info" ? "→" : CHECK;
     return step.note === undefined
       ? { glyph, text: step.text }
       : { glyph, text: step.text, note: step.note };
