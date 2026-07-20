@@ -122,7 +122,7 @@ function occupied(cwd: string, relative: string): boolean {
  * a wrong answer is visible in the plan and writes nothing over anything.
  */
 export function schemaFileFor(cwd: string): { file: string; displaced?: string } {
-  const dir = existsSync(join(cwd, "src")) ? "src/" : "";
+  const dir = srcPrefix(cwd);
   const preferred = `${dir}env.ts`;
   if (!occupied(cwd, preferred)) {
     return { file: preferred };
@@ -144,6 +144,15 @@ export function schemaFileFor(cwd: string): { file: string; displaced?: string }
  * and reported, while a parse error thrown from a suggestion would fail a
  * command that had not yet asked the user anything.
  */
+/**
+ * `"src/"` when the project keeps its modules under `src/`, else `""` — the one
+ * fact both the schema location and a framework's seam file key off, read in one
+ * place so the two cannot disagree about whether a project uses `src/`.
+ */
+export function srcPrefix(cwd: string): string {
+  return existsSync(join(cwd, "src")) ? "src/" : "";
+}
+
 function dependenciesOf(cwd: string): ReadonlySet<string> | undefined {
   const manifest = manifestOf(cwd);
   if (manifest === undefined) {

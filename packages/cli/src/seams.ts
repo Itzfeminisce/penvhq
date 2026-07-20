@@ -28,12 +28,14 @@
  * the seam only carries it through.
  */
 
-/** What init knows when it builds a seam: the project's alias and whether it uses `src/`. */
+/** What init knows when it builds a seam: the project's alias, layout, and schema module. */
 export interface SeamContext {
   /** The import specifier the project resolves the schema module by — `@env` or `#env`. */
   readonly alias: string;
   /** `"src/"` when the project keeps modules under `src/`, else `""`. */
   readonly srcDir: string;
+  /** The schema module path, relative to the project root, POSIX — e.g. `.penv/env.ts` or `src/env.ts`. */
+  readonly schemaFile: string;
 }
 
 /** A seam penv can write to a file, created only when the file is absent. */
@@ -150,11 +152,15 @@ function bun({ alias }: SeamContext): Seam {
   };
 }
 
-function node({ alias, srcDir }: SeamContext): Seam {
+function node({ alias, schemaFile }: SeamContext): Seam {
   // Plain Node owns no pre-app file, and `@env` (a tsconfig alias) does not
   // resolve at raw-Node runtime — so steer to `#env` (a package.json imports
-  // alias Node resolves itself), or a direct path when the project is on `@env`.
-  const runtimeSpecifier = alias.startsWith("#") ? alias : `./${srcDir}.penv/env.js`;
+  // alias Node resolves itself), or the built schema module by path when the
+  // project is on `@env`. The path is the schema module's own location (`.penv/`
+  // is at the repo root, never under `src/`), with `.ts` swapped for the emitted
+  // `.js`.
+  const builtSchema = `./${schemaFile.replace(/\.ts$/, ".js")}`;
+  const runtimeSpecifier = alias.startsWith("#") ? alias : builtSchema;
   return {
     kind: "instruct",
     instruction:
@@ -181,7 +187,7 @@ function tanstack({ alias, srcDir }: SeamContext): Seam {
   };
 }
 
-function astro(_context: SeamContext): Seam {
+function astro({ alias }: SeamContext): Seam {
   return {
     kind: "instruct",
     instruction:
@@ -189,8 +195,8 @@ function astro(_context: SeamContext): Seam {
       "injects the import into every SSR page, then cover the routes it cannot reach:\n" +
       "  • In astro.config integrations, add:\n" +
       '      { name: "penv", hooks: { "astro:config:setup": ({ injectScript }) =>\n' +
-      '          injectScript("page-ssr", \'import "@env";\') } }\n' +
-      '  • Also add `import "@env";` as the first line of src/middleware.ts and of any\n' +
+      `          injectScript("page-ssr", 'import "${alias}";') } }\n` +
+      `  • Also add \`import "${alias}";\` as the first line of src/middleware.ts and of any\n` +
       "    endpoint route (src/pages/*.ts) that imports a library reading process.env.\n" +
       "Injection only applies under a server (on-demand) adapter, not a static build.",
   };

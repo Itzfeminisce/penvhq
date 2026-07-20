@@ -158,6 +158,35 @@ describe("scaffolding", () => {
       expect(step?.action).toBe("info");
       expect(step?.note).toContain("--import");
     });
+
+    it("warns, and does not report success, when the installed runtime is too old for inject", () => {
+      const root = makeProject(NEXT, { src: true });
+      // A runtime whose `load` ignores `{ inject: true }` — the seam would be a no-op.
+      const pkgDir = join(root, "node_modules", "@penvhq", "penv");
+      mkdirSync(pkgDir, { recursive: true });
+      writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ version: "0.5.0" }), "utf8");
+
+      const result = runInit({ cwd: root, decisions: withInject(root) });
+      const step = result.steps.find((s) => s.target === "seam");
+
+      // The seam file is still written, but the step is not a ✓ — it carries the warning.
+      expect(step?.action).toBe("info");
+      expect(step?.note).toContain("0.6.0");
+      expect(step?.note).toContain("process.env stays empty");
+    });
+
+    it("does not warn when the installed runtime is new enough", () => {
+      const root = makeProject(NEXT, { src: true });
+      const pkgDir = join(root, "node_modules", "@penvhq", "penv");
+      mkdirSync(pkgDir, { recursive: true });
+      writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ version: "0.6.0" }), "utf8");
+
+      const result = runInit({ cwd: root, decisions: withInject(root) });
+      const step = result.steps.find((s) => s.target === "seam");
+
+      expect(step?.action).toBe("created");
+      expect(step?.note ?? "").not.toContain("0.6.0");
+    });
   });
 
   /** Invariant 17: a value file that is not ignored is a secret waiting to be committed. */
@@ -527,8 +556,8 @@ describe("the prompt", () => {
   it("shows one screen and takes the suggested environments on Enter", async () => {
     const root = makeProject(NEXT, { src: true });
     writeFileSync(join(root, ".env.production"), "", "utf8");
-    // Three answers now: environments (Enter), inject (n), Proceed (y).
-    const io = fakeTerminal(["", "n", "y"]);
+    // Order: environments (Enter), Proceed (y), then inject (n).
+    const io = fakeTerminal(["", "y", "n"]);
 
     const decisions = await promptForDecisions(planFor(root), io);
 
@@ -547,15 +576,26 @@ describe("the prompt", () => {
   it("turns injection on when the developer says yes, and off by default", async () => {
     const root = makeProject(NEXT, { src: true });
 
+    // environments, Proceed (y), inject.
     const on = await promptForDecisions(planFor(root), fakeTerminal(["", "y", "y"]));
     expect(on?.inject).toBe(true);
 
-    const off = await promptForDecisions(planFor(root), fakeTerminal(["", "n", "y"]));
+    const off = await promptForDecisions(planFor(root), fakeTerminal(["", "y", "n"]));
     expect(off?.inject).toBe(false);
 
     // Enter (no answer) at the inject prompt is a No — injection is opt-in.
-    const blank = await promptForDecisions(planFor(root), fakeTerminal(["", "", "y"]));
+    const blank = await promptForDecisions(planFor(root), fakeTerminal(["", "y", ""]));
     expect(blank?.inject).toBe(false);
+  });
+
+  /** The confirmation muscle-memory: Enter then decline must decline, even with the inject prompt added. */
+  it("declines on [Enter, n] rather than letting inject eat the decline", async () => {
+    const root = makeProject(NEXT, { src: true });
+
+    // Only two answers: the decline lands on Proceed (asked first), never on inject.
+    const decisions = await promptForDecisions(planFor(root), fakeTerminal(["", "n"]));
+
+    expect(decisions).toBeUndefined();
   });
 
   /** Enter with nothing suggested is a valid answer: an empty whitelist, declared. */
@@ -591,8 +631,8 @@ describe("the prompt", () => {
   it("writes nothing when the plan is declined", async () => {
     const root = makeProject(NEXT, { src: true });
 
-    // environments (Enter), inject (n), Proceed (n) — the last declines.
-    const decisions = await promptForDecisions(planFor(root), fakeTerminal(["", "n", "n"]));
+    // Proceed is asked before inject, so the decline lands on Proceed.
+    const decisions = await promptForDecisions(planFor(root), fakeTerminal(["", "n"]));
 
     expect(decisions).toBeUndefined();
     expect(existsSync(join(root, "penv.config.ts"))).toBe(false);
@@ -603,7 +643,7 @@ describe("the prompt", () => {
     const root = makeProject(NEXT, { src: true });
 
     expect(
-      await promptForDecisions(planFor(root), fakeTerminal(["", "n", "maybe later"])),
+      await promptForDecisions(planFor(root), fakeTerminal(["", "maybe later"])),
     ).toBeUndefined();
   });
 });

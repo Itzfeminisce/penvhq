@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { type Seam, seamFor } from "./seams.js";
 
-const CTX = { alias: "@env", srcDir: "" };
+const CTX = { alias: "@env", srcDir: "", schemaFile: ".penv/env.ts" };
 
 function scaffold(seam: Seam) {
   if (seam.kind !== "scaffold") throw new Error(`expected a scaffold seam, got ${seam.kind}`);
@@ -27,9 +27,10 @@ describe("seamFor", () => {
     expect(seam.content).toContain("Next.js's own startup hook");
 
     // src/ layout moves the file, as Next requires.
-    expect(scaffold(seamFor("Next.js", { alias: "@env", srcDir: "src/" })).file).toBe(
-      "src/instrumentation.ts",
-    );
+    expect(
+      scaffold(seamFor("Next.js", { alias: "@env", srcDir: "src/", schemaFile: "src/env.ts" }))
+        .file,
+    ).toBe("src/instrumentation.ts");
   });
 
   it("SvelteKit: import as the first line of hooks.server.ts, with the kit.alias note", () => {
@@ -53,9 +54,10 @@ describe("seamFor", () => {
   });
 
   it("carries the project's own alias into the scaffold", () => {
-    expect(scaffold(seamFor("SvelteKit", { alias: "#env", srcDir: "" })).content).toContain(
-      'import "#env";',
-    );
+    expect(
+      scaffold(seamFor("SvelteKit", { alias: "#env", srcDir: "", schemaFile: ".penv/env.ts" }))
+        .content,
+    ).toContain('import "#env";');
   });
 
   it("TanStack Start: printed, because its server entry is version-shaped", () => {
@@ -78,14 +80,35 @@ describe("seamFor", () => {
     }
   });
 
-  it("Node: steers a tsconfig @env project to a runtime-resolvable path", () => {
+  it("Node: steers a tsconfig @env project to the built schema module, not @env", () => {
     // `@env` (tsconfig paths) does not resolve at raw-Node runtime — the instruction
-    // must point at the built module or #env instead.
-    const atEnv = seamFor(undefined, { alias: "@env", srcDir: "" });
-    if (atEnv.kind === "instruct") expect(atEnv.instruction).toContain(".penv/env.js");
+    // must point at the built module by path. And `.penv/` is at the repo root, so a
+    // src/ project must not get `./src/.penv/env.js`.
+    const atEnv = seamFor(undefined, { alias: "@env", srcDir: "src/", schemaFile: ".penv/env.ts" });
+    if (atEnv.kind === "instruct") {
+      expect(atEnv.instruction).toContain("./.penv/env.js");
+      expect(atEnv.instruction).not.toContain("src/.penv");
+      expect(atEnv.instruction).not.toContain('"@env"');
+    }
 
-    const hashEnv = seamFor(undefined, { alias: "#env", srcDir: "" });
+    // A schema kept at src/env.ts points there instead.
+    const srcSchema = seamFor(undefined, {
+      alias: "@env",
+      srcDir: "src/",
+      schemaFile: "src/env.ts",
+    });
+    if (srcSchema.kind === "instruct") expect(srcSchema.instruction).toContain("./src/env.js");
+
+    const hashEnv = seamFor(undefined, { alias: "#env", srcDir: "", schemaFile: ".penv/env.ts" });
     if (hashEnv.kind === "instruct") expect(hashEnv.instruction).toContain('"#env"');
+  });
+
+  it("Astro: honours the project's alias in its printed integration", () => {
+    const seam = seamFor("Astro", { alias: "#env", srcDir: "", schemaFile: ".penv/env.ts" });
+    if (seam.kind === "instruct") {
+      expect(seam.instruction).toContain('import "#env";');
+      expect(seam.instruction).not.toContain('"@env"');
+    }
   });
 
   it("Vite SPA: injection does not apply — no server reads process.env", () => {
