@@ -571,6 +571,45 @@ describe("load", () => {
       }
     });
 
+    it("with an allowlist, injects only the listed parameters", () => {
+      // The tree resolves both, but only redis/host is allowlisted — database-url,
+      // a secret, must not reach process.env.
+      const cwd = makeProject({
+        "database-url": "postgres://default/app",
+        "redis/host": "127.0.0.1",
+      });
+      const before = { url: process.env.DATABASE_URL, host: process.env.REDIS_HOST };
+      try {
+        load(schema, { cwd, environment: "development", inject: ["redis/host"] });
+        expect(process.env.REDIS_HOST).toBe("127.0.0.1");
+        // The allowlist omits database-url, so its ambient value is exactly what it
+        // was before the load — the secret never reached process.env.
+        expect(process.env.DATABASE_URL).toBe(before.url);
+      } finally {
+        setEnv("DATABASE_URL", before.url);
+        setEnv("REDIS_HOST", before.host);
+      }
+    });
+
+    it("fails closed: a truthy non-array inject value does not inject the whole schema", () => {
+      // Only `true` or an allowlist array injects. A JS caller (no compile check)
+      // passing a truthy non-array — "false" read from an env var, say — must not
+      // fall through to a whole-schema inject that would leak the secret database-url.
+      const cwd = makeProject({
+        "database-url": "postgres://default/app",
+        "redis/host": "127.0.0.1",
+      });
+      const before = { url: process.env.DATABASE_URL, host: process.env.REDIS_HOST };
+      try {
+        load(schema, { cwd, environment: "development", inject: "false" as unknown as boolean });
+        expect(process.env.DATABASE_URL).toBe(before.url);
+        expect(process.env.REDIS_HOST).toBe(before.host);
+      } finally {
+        setEnv("DATABASE_URL", before.url);
+        setEnv("REDIS_HOST", before.host);
+      }
+    });
+
     it("validates first: a tree that fails the schema writes nothing", () => {
       // `redis/host` is required by the schema and absent, so load throws — and
       // must throw before the injection writes database-url.

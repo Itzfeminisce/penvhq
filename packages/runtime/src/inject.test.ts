@@ -156,6 +156,82 @@ describe("inject", () => {
     expect(env.SOME_OTHER_TOOL).toBe("keep-me");
   });
 
+  describe("an allowlist", () => {
+    // A schema holding a secret that must NOT reach process.env, next to one that must.
+    const MIXED = z.object({
+      databaseUrl: z.url(),
+      workos: z.object({ apiKey: z.string(), apiHostname: z.string().optional() }),
+    });
+
+    it("injects only the listed parameters and leaves every other one alone", () => {
+      // DATABASE_URL is a declared secret the allowlist omits — it must never be written,
+      // even though the tree resolved it.
+      const env = target();
+      const result = inject({
+        schema: MIXED,
+        config: CONFIG,
+        only: ["workos/api-key"],
+        values: [
+          { ref: { namespace: [], name: "database-url" }, value: "postgres://prod" },
+          { ref: { namespace: ["workos"], name: "api-key" }, value: "sk_live" },
+        ],
+        target: env,
+      });
+
+      expect(env.WORKOS_API_KEY).toBe("sk_live");
+      expect("DATABASE_URL" in env).toBe(false);
+      expect(result.written).toBe(1);
+    });
+
+    it("does not delete an excluded parameter, even when it is declared and valueless", () => {
+      // A stray DATABASE_URL is left alone because the allowlist omits it — exclusivity
+      // is scoped to the allowlist, so inject never touches a parameter it was not asked to.
+      const env = target({ DATABASE_URL: "from-the-platform", WORKOS_API_HOSTNAME: "stray" });
+      inject({
+        schema: MIXED,
+        config: CONFIG,
+        only: ["workos/api-key", "workos/api-hostname"],
+        values: [{ ref: { namespace: ["workos"], name: "api-key" }, value: "sk_live" }],
+        target: env,
+      });
+
+      // The listed-but-valueless optional is deleted; the excluded secret is untouched.
+      expect("WORKOS_API_HOSTNAME" in env).toBe(false);
+      expect(env.DATABASE_URL).toBe("from-the-platform");
+    });
+
+    it("refuses a collision between two parameters it is asked to inject", () => {
+      // Both colliding parameters are in the allowlist, so first-write-wins would
+      // drop one silently — refuse, exactly as the whole-schema case does.
+      const schema = z.object({ apiKey: z.string(), api: z.object({ key: z.string() }) });
+      expect(() =>
+        inject({
+          schema,
+          config: { ...CONFIG, override: { "api-key": "API_KEY", "api/key": "API_KEY" } },
+          only: ["api-key", "api/key"],
+          values: [val("api-key", "a"), val("api/key", "b")],
+          target: target(),
+        }),
+      ).toThrow();
+    });
+
+    it("ignores a collision when the allowlist excludes one side — it drops nothing", () => {
+      // api-key is injected, api/key is excluded; both would map to API_KEY, but only
+      // api-key is ever written, so there is no silent drop and no reason to crash a
+      // valid selective inject. A schema-wide latent clash is doctor's to surface.
+      const schema = z.object({ apiKey: z.string(), api: z.object({ key: z.string() }) });
+      const env = target();
+      inject({
+        schema,
+        config: { ...CONFIG, override: { "api-key": "API_KEY", "api/key": "API_KEY" } },
+        only: ["api-key"],
+        values: [val("api-key", "a")],
+        target: env,
+      });
+      expect(env.API_KEY).toBe("a");
+    });
+  });
+
   it("overwrites a declared variable already present — the schema is authoritative over what it names", () => {
     const env = target({ WORKOS_API_KEY: "sk_stale" });
     inject({

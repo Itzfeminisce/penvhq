@@ -123,6 +123,18 @@ export interface InjectInput {
    * uses its raw string from `values`, never this coerced value.
    */
   readonly validated?: unknown;
+  /**
+   * An allowlist of parameter ids (`workos/api-key`). When set, only these are
+   * injected — written when they have a value, deleted when declared but
+   * valueless — and every other schema parameter is left entirely alone, never
+   * written and never deleted. Absent means the whole schema, the default.
+   *
+   * This is what lets a schema hold secrets that must *not* reach `process.env`
+   * (database URLs, cloud credentials) while still injecting the few an SDK reads
+   * directly. An id the schema does not declare is ignored; the collision check
+   * still runs over the full schema, so a name clash is caught regardless.
+   */
+  readonly only?: readonly string[];
   /** The target to write. Defaults to `process.env`. */
   readonly target?: Record<string, string | undefined>;
 }
@@ -142,14 +154,29 @@ export interface InjectInput {
  * something.
  */
 export function inject(input: InjectInput): InjectResult {
-  const { schema, config, values, validated } = input;
+  const { schema, config, values, validated, only } = input;
   const target = input.target ?? process.env;
   const declared = declaredRefs(schema);
 
-  // Invariant 12, at the ambient boundary too: two parameters mapping to one
-  // variable would write first-wins and drop the other silently. Refuse before
-  // touching the target — a half-injected environment is worse than none.
-  const collision = checkNameCollisions(declared, config)[0];
+  // The allowlist scopes *both* halves: an excluded parameter is neither written
+  // nor deleted, so a secret the schema declares but the list omits never reaches
+  // `process.env`. Absent means the whole schema. Ids are matched in either
+  // spelling — the slash form `workos/api-key` the types produce, or the dotted
+  // `workos.api-key` — mirroring how `override` keys accept both.
+  const allow = only === undefined ? undefined : new Set(only);
+  const injected =
+    allow === undefined
+      ? declared
+      : declared.filter((r) => allow.has(slashId(r)) || allow.has(parameterId(r)));
+
+  // Invariant 12, over the parameters this call actually injects: two of them
+  // mapping to one variable would write first-wins and drop the other silently.
+  // The check is scoped to `injected`, not the whole schema — a clash between
+  // parameters the allowlist excludes writes neither, so it cannot drop anything
+  // here and must not crash an otherwise-valid selective inject (a latent
+  // schema-wide clash is `doctor`'s to surface, not this delivery step's). Refuse
+  // before touching the target — a half-injected environment is worse than none.
+  const collision = checkNameCollisions(injected, config)[0];
   if (collision !== undefined) {
     throw collision;
   }
@@ -161,7 +188,7 @@ export function inject(input: InjectInput): InjectResult {
 
   let written = 0;
   let deleted = 0;
-  for (const ref of declared) {
+  for (const ref of injected) {
     const variable = variableName(ref, config);
 
     const raw = rawById.get(parameterId(ref));
@@ -186,6 +213,11 @@ export function inject(input: InjectInput): InjectResult {
     }
   }
   return { written, deleted };
+}
+
+/** A parameter's slash id — `workos/api-key` — the spelling {@link OverrideKeysOf} produces. */
+function slashId(ref: ParameterRef): string {
+  return [...ref.namespace, ref.name].join("/");
 }
 
 /** Reads a nested value by its camelCase access path, or `undefined` if any segment is absent. */
