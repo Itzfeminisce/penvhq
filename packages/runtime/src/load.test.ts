@@ -571,6 +571,28 @@ describe("load", () => {
       }
     });
 
+    it("with an allowlist, injects only the listed parameters", () => {
+      // The tree resolves both, but only redis/host is allowlisted — database-url,
+      // a secret, must not reach process.env.
+      const cwd = makeProject({
+        "database-url": "postgres://default/app",
+        "redis/host": "127.0.0.1",
+      });
+      const before = { url: process.env.DATABASE_URL, host: process.env.REDIS_HOST };
+      try {
+        load(schema, { cwd, environment: "development", inject: ["redis/host"] });
+        expect(process.env.REDIS_HOST).toBe("127.0.0.1");
+        expect("DATABASE_URL" in process.env && process.env.DATABASE_URL === before.url).toBe(
+          before.url !== undefined,
+        );
+        // Concretely: the allowlist did not write database-url.
+        expect(process.env.DATABASE_URL).toBe(before.url);
+      } finally {
+        setEnv("DATABASE_URL", before.url);
+        setEnv("REDIS_HOST", before.host);
+      }
+    });
+
     it("validates first: a tree that fails the schema writes nothing", () => {
       // `redis/host` is required by the schema and absent, so load throws — and
       // must throw before the injection writes database-url.

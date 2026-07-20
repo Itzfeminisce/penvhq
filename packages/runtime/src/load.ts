@@ -5,7 +5,12 @@
  * so the type you code against and the value you receive cannot diverge.
  */
 
-import { accessPath, schemaHarvestActive, ValidationError } from "@penvhq/core";
+import {
+  accessPath,
+  type OverrideKeysOf,
+  schemaHarvestActive,
+  ValidationError,
+} from "@penvhq/core";
 import type { z } from "zod";
 import { inject } from "./inject.js";
 import { resolveSync } from "./resolve.js";
@@ -17,14 +22,34 @@ export interface LoadOptions {
   readonly environment?: string;
   /**
    * Also inject the validated values into `process.env`, so an SDK that reads
-   * `process.env` directly finds them — the blessed ambient surface. Exclusive
-   * over the schema: a declared parameter is written when it resolves and
-   * deleted when it does not, and an undeclared variable is left alone. Off by
-   * default — a consumer who never asked for `process.env` writes gets none.
+   * `process.env` directly finds them — the blessed ambient surface. Off by
+   * default; a consumer who never asked for `process.env` writes gets none.
+   *
+   * - `true` injects the **whole schema**: every declared parameter, written when
+   *   it has a value and deleted when it does not. Use it when the schema holds
+   *   only what may safely be ambient.
+   * - An **allowlist** of parameter ids injects only those, and leaves every other
+   *   parameter untouched — never written, never deleted. Use it when the schema
+   *   also holds secrets that must *not* reach `process.env` (database URLs, cloud
+   *   credentials): `inject: ["workos/api-key", "workos/client-id"]`.
+   *
+   * At a `load(schema, …)` call the allowlist is typed to *that schema's*
+   * parameter ids — autocompleted, a typo a compile error — via {@link load}'s
+   * own signature; this base type keeps it a plain `readonly string[]`.
+   *
    * See {@link inject}.
    */
-  readonly inject?: boolean;
+  readonly inject?: boolean | readonly string[];
 }
+
+/**
+ * `load`'s options with the `inject` allowlist narrowed to `T`'s own parameter
+ * ids — so the ids autocomplete and a typo is a compile error, without making
+ * {@link LoadOptions} generic (which would recurse on the unbound default).
+ */
+export type LoadOptionsFor<T extends z.ZodType> = Omit<LoadOptions, "inject"> & {
+  readonly inject?: boolean | readonly OverrideKeysOf<z.infer<T>>[];
+};
 
 /**
  * Places a value at its access path, creating namespaces on the way.
@@ -65,7 +90,7 @@ function place(root: Record<string, unknown>, path: readonly string[], value: st
  * raises the same parameter-named error — on first property access. Application
  * runtime never sets the flag, so ordinary loads stay eager and fail-fast.
  */
-export function load<T extends z.ZodType>(schema: T, options?: LoadOptions): z.infer<T> {
+export function load<T extends z.ZodType>(schema: T, options?: LoadOptionsFor<T>): z.infer<T> {
   if (schemaHarvestActive()) {
     return deferLoad(schema, options);
   }
@@ -101,8 +126,16 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: LoadOptions): z.i
   // concrete value at its top level. The raw `values` cross for tree-resolved
   // parameters (`process.env` is strings); `result.data` is passed only so a
   // schema default reaches the environment instead of being deleted.
-  if (options?.inject === true && !schemaHarvestActive()) {
-    inject({ schema, config, values, validated: result.data });
+  // `inject` is truthy for both `true` and an allowlist array (empty or not); an
+  // array narrows the injected set through `only`, `true` injects the whole schema.
+  if (options?.inject && !schemaHarvestActive()) {
+    inject({
+      schema,
+      config,
+      values,
+      validated: result.data,
+      ...(Array.isArray(options.inject) ? { only: options.inject } : {}),
+    });
   }
   return result.data;
 }
