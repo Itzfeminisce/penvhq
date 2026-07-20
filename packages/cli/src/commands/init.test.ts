@@ -159,6 +159,31 @@ describe("scaffolding", () => {
       expect(step?.note).toContain("--import");
     });
 
+    const BUN = { devDependencies: { "bun-types": "1.0.0" } };
+
+    it("Bun: writes the preload file and the bunfig.toml that registers it", () => {
+      const root = makeProject(BUN);
+
+      const result = runInit({ cwd: root, decisions: withInject(root) });
+
+      expect(existsSync(join(root, ".penv", "preload.ts"))).toBe(true);
+      expect(read(root, "bunfig.toml")).toContain('preload = ["./.penv/preload.ts"]');
+      expect(read(root, "bunfig.toml")).toContain("[test]");
+      expect(result.steps.find((s) => s.target === "seam")?.action).toBe("created");
+    });
+
+    it("Bun: never overwrites an existing bunfig.toml — prints where to add the entry", () => {
+      const root = makeProject(BUN);
+      writeFileSync(join(root, "bunfig.toml"), 'preload = ["./other.ts"]\n', "utf8");
+
+      const result = runInit({ cwd: root, decisions: withInject(root) });
+
+      // The user's bunfig is untouched; the preload file is still written.
+      expect(read(root, "bunfig.toml")).toBe('preload = ["./other.ts"]\n');
+      expect(existsSync(join(root, ".penv", "preload.ts"))).toBe(true);
+      expect(result.steps.find((s) => s.target === "seam")?.note).toContain("bunfig.toml");
+    });
+
     it("warns, and does not report success, when the installed runtime is too old for inject", () => {
       const root = makeProject(NEXT, { src: true });
       // A runtime whose `load` ignores `{ inject: true }` — the seam would be a no-op.

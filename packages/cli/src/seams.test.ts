@@ -47,10 +47,13 @@ describe("seamFor", () => {
     expect(seam.content).toContain('import "@env";');
   });
 
-  it("Bun: a preload file, with the bunfig registration as a note", () => {
+  it("Bun: a preload file plus the bunfig.toml that registers it", () => {
     const seam = scaffold(seamFor("Bun", CTX));
     expect(seam.file).toBe(".penv/preload.ts");
-    expect(seam.notes.join(" ")).toContain("bunfig.toml");
+    // The registration is a companion file penv writes, not just a note.
+    expect(seam.also?.file).toBe("bunfig.toml");
+    expect(seam.also?.content).toContain('preload = ["./.penv/preload.ts"]');
+    expect(seam.also?.content).toContain("[test]");
   });
 
   it("carries the project's own alias into the scaffold", () => {

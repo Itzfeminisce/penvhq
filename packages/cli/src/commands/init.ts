@@ -38,7 +38,7 @@ import {
   detectFramework,
   srcPrefix,
 } from "../detect.js";
-import { type Seam, seamFor } from "../seams.js";
+import { type ScaffoldSeam, type Seam, seamFor } from "../seams.js";
 import { out } from "../style.js";
 import { CHECK, columns, formatSteps, guard, prompt, type Step, tip, WARN, write } from "../ui.js";
 
@@ -1159,8 +1159,14 @@ export function writeSeam(
     };
   }
 
+  // A companion file the seam also needs (Bun's bunfig.toml). Same rule: write it
+  // when absent, otherwise print where to add the entry. Its outcome joins the
+  // seam step's note, so the whole setup is one line to read.
+  const alsoNote = writeAlso(root, seam.also);
+
   const file = join(root, ...seam.file.split("/"));
-  const notes = seam.notes.length === 0 ? "" : `\n${seam.notes.map((n) => `  ${n}`).join("\n")}`;
+  const baseNotes = [...seam.notes, ...(alsoNote === undefined ? [] : [alsoNote])];
+  const notes = baseNotes.length === 0 ? "" : `\n${baseNotes.map((n) => `  ${n}`).join("\n")}`;
   if (existsSync(file)) {
     return {
       target: "seam",
@@ -1179,6 +1185,24 @@ export function writeSeam(
       ? {}
       : { note: withWarning(notes.trimStart(), outdated) }),
   };
+}
+
+/**
+ * The companion file (Bun's `bunfig.toml`), written when absent and reported as a
+ * note; when present it is the user's, so the note tells them where to add the
+ * entry rather than penv editing their config. `undefined` when there is none.
+ */
+function writeAlso(root: string, also: ScaffoldSeam["also"]): string | undefined {
+  if (also === undefined) {
+    return undefined;
+  }
+  const file = join(root, ...also.file.split("/"));
+  if (existsSync(file)) {
+    return also.ifPresent;
+  }
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, also.content, "utf8");
+  return `Wrote ${also.file} to register it.`;
 }
 
 /** Appends a runtime warning to a seam note, when there is one. */

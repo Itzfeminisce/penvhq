@@ -52,6 +52,17 @@ export interface ScaffoldSeam {
   readonly ifPresent: string;
   /** Extra one-line notes penv surfaces after scaffolding — an alias-wiring caveat, say. */
   readonly notes: readonly string[];
+  /**
+   * A second file the seam also needs, under the same create-if-absent rule — Bun's
+   * `bunfig.toml`, which must register the preload file or it never runs. penv
+   * creates it when absent; when present it is the user's, so penv prints where to
+   * add the entry rather than editing their config.
+   */
+  readonly also?: {
+    readonly file: string;
+    readonly content: string;
+    readonly ifPresent: string;
+  };
 }
 
 /** A seam penv cannot own; it prints the exact instruction instead. */
@@ -141,14 +152,20 @@ function bun({ alias }: SeamContext): Seam {
     file: ".penv/preload.ts",
     content:
       "// Bun evaluates this file before your entry point, because it is listed under\n" +
-      "// `preload` in bunfig.toml (see the note penv printed). Running it injects your\n" +
-      "// config into process.env before any library reads it.\n" +
+      "// `preload` in bunfig.toml. Running it injects your config into process.env\n" +
+      "// before any library reads it.\n" +
       `import "${alias}";\n`,
     ifPresent: `Keep .penv/preload.ts as \`import "${alias}";\`.`,
-    notes: [
-      'Register it in bunfig.toml so Bun runs it: `preload = ["./.penv/preload.ts"]` (and the same under `[test]`).',
-      `\`${alias}\` must be a tsconfig \`paths\` alias for Bun to resolve it.`,
-    ],
+    notes: [`\`${alias}\` must be a tsconfig \`paths\` alias for Bun to resolve it.`],
+    // The preload file is inert until bunfig.toml points at it — so penv writes
+    // that too, both for the runtime and for `bun test`. Only when there is no
+    // bunfig to overwrite; an existing one is the user's, and penv prints instead.
+    also: {
+      file: "bunfig.toml",
+      content: 'preload = ["./.penv/preload.ts"]\n\n[test]\npreload = ["./.penv/preload.ts"]\n',
+      ifPresent:
+        'Add "./.penv/preload.ts" to the `preload` array in bunfig.toml — and mirror it under `[test]` so `bun test` injects too.',
+    },
   };
 }
 
