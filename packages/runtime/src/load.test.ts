@@ -534,4 +534,55 @@ describe("load", () => {
       }
     });
   });
+
+  describe("the ambient mirror", () => {
+    // The blessed surface end to end: `load(schema, { mirror: true })` returns
+    // the typed env *and* writes it onto process.env, after validation.
+    it("populates process.env from the validated tree when mirror is set", () => {
+      const cwd = makeProject({
+        "database-url": "postgres://default/app",
+        "redis/host": "127.0.0.1",
+      });
+      const before = { url: process.env.DATABASE_URL, host: process.env.REDIS_HOST };
+
+      try {
+        const env = load(schema, { cwd, environment: "development", mirror: true });
+        expect(env.databaseUrl).toBe("postgres://default/app");
+        expect(process.env.DATABASE_URL).toBe("postgres://default/app");
+        expect(process.env.REDIS_HOST).toBe("127.0.0.1");
+      } finally {
+        setEnv("DATABASE_URL", before.url);
+        setEnv("REDIS_HOST", before.host);
+      }
+    });
+
+    it("does not touch process.env without the flag", () => {
+      const cwd = makeProject({
+        "database-url": "postgres://default/app",
+        "redis/host": "127.0.0.1",
+      });
+      const before = process.env.DATABASE_URL;
+      try {
+        load(schema, { cwd, environment: "development" });
+        expect(process.env.DATABASE_URL).toBe(before);
+      } finally {
+        setEnv("DATABASE_URL", before);
+      }
+    });
+
+    it("validates first: a tree that fails the schema writes nothing", () => {
+      // `redis/host` is required by the schema and absent, so load throws — and
+      // must throw before the mirror writes database-url.
+      const cwd = makeProject({ "database-url": "postgres://default/app" });
+      const before = process.env.DATABASE_URL;
+      try {
+        expect(() => load(schema, { cwd, environment: "development", mirror: true })).toThrow(
+          ValidationError,
+        );
+        expect(process.env.DATABASE_URL).toBe(before);
+      } finally {
+        setEnv("DATABASE_URL", before);
+      }
+    });
+  });
 });

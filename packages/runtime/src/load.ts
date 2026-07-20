@@ -7,6 +7,7 @@
 
 import { accessPath, schemaHarvestActive, ValidationError } from "@penvhq/core";
 import type { z } from "zod";
+import { mirror } from "./mirror.js";
 import { resolveSync } from "./resolve.js";
 
 export interface LoadOptions {
@@ -14,6 +15,15 @@ export interface LoadOptions {
   readonly cwd?: string;
   /** Overrides `PENV_ENV` / `NODE_ENV`. Must be a declared environment. */
   readonly environment?: string;
+  /**
+   * Also write the validated values onto `process.env`, so an SDK that reads
+   * `process.env` directly finds them — the blessed ambient surface. Exclusive
+   * over the schema: a declared parameter is written when it resolves and
+   * deleted when it does not, and an undeclared variable is left alone. Off by
+   * default — a consumer who never asked for `process.env` writes gets none.
+   * See {@link mirror}.
+   */
+  readonly mirror?: boolean;
 }
 
 /**
@@ -63,7 +73,10 @@ export function load<T extends z.ZodType>(schema: T, options?: LoadOptions): z.i
 }
 
 function loadEagerly<T extends z.ZodType>(schema: T, options?: LoadOptions): z.infer<T> {
-  const { environment, values } = resolveSync(options?.cwd ?? process.cwd(), options?.environment);
+  const { config, environment, values } = resolveSync(
+    options?.cwd ?? process.cwd(),
+    options?.environment,
+  );
 
   const object: Record<string, unknown> = {};
   for (const { ref, value } of values) {
@@ -79,6 +92,13 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: LoadOptions): z.i
         message: issue.message,
       })),
     );
+  }
+
+  // Validate-first: the mirror runs only after the schema has accepted every
+  // value, so an SDK reading `process.env` never sees a half-configured surface.
+  // The raw `values` cross, not `result.data` — `process.env` is strings.
+  if (options?.mirror === true) {
+    mirror(schema, config, values);
   }
   return result.data;
 }

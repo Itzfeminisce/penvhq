@@ -10,13 +10,15 @@
  * deliberately not visible under the `penv` specifier.
  */
 
-export type { LoadOptions } from "@penvhq/runtime";
+export type { LoadOptions, MirrorResult } from "@penvhq/runtime";
 export {
   ConfigError,
+  declaredRefs,
   defineConfig,
   FilenameGrammarError,
   load,
   MissingParameterError,
+  mirror,
   NameCollisionError,
   PenvError,
   ReservedTokenError,
