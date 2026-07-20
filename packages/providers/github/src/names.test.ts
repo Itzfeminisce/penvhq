@@ -8,7 +8,7 @@ const base: PenvConfig = {
 };
 
 function withNames(names: Record<string, string>): PenvConfig {
-  return { ...base, names };
+  return { ...base, override: names };
 }
 
 const ref = (name: string, namespace: readonly string[] = []): ParameterRef => ({

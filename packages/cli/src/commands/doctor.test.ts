@@ -36,7 +36,7 @@ interface Fixture {
   readonly tree?: Readonly<Record<string, string>>;
   /** The body of `z.object({ ... })` in `.penv/env.ts`. */
   readonly schema?: string;
-  /** Keys merged over {@link CONFIG} — `publicPrefixes`, `names`. */
+  /** Keys merged over {@link CONFIG} — `publicPrefixes`, `override`. */
   readonly config?: Readonly<Record<string, unknown>>;
 }
 
@@ -640,7 +640,7 @@ describe("public-secret", () => {
   });
 
   /**
-   * The variable the framework inlines is the generated one, and a `names`
+   * The variable the framework inlines is the generated one, and an `override`
    * override is the one place a public prefix can appear with nothing in the
    * tree hinting at it: the file is `stripe-key`, and it still ships.
    */
@@ -648,7 +648,7 @@ describe("public-secret", () => {
     const root = makeProject({
       config: {
         publicPrefixes: ["NEXT_PUBLIC_"],
-        names: { "stripe-key": "NEXT_PUBLIC_STRIPE_KEY" },
+        override: { "stripe-key": "NEXT_PUBLIC_STRIPE_KEY" },
       },
       schema: "stripeKey: z.string()",
       tree: {

@@ -29,7 +29,7 @@ function reservedPrefix(variable: string, parameter: string): GithubNameError {
     [parameter],
     `The parameter \`${parameter}\` generates the variable \`${variable}\`, which GitHub reserves — a secret name may not begin with \`${RESERVED_PREFIX}\``,
     "GitHub keeps the `GITHUB_` prefix for its own secrets. Rename the parameter, or map it to an " +
-      "allowed name in the `names` block of penv.config.ts.",
+      "allowed name in the `override` block of penv.config.ts.",
   );
 }
 
@@ -39,7 +39,7 @@ function leadingDigit(variable: string, parameter: string): GithubNameError {
     variable,
     [parameter],
     `The parameter \`${parameter}\` generates the variable \`${variable}\`, which GitHub rejects — a secret name may not begin with a digit`,
-    "Rename the parameter, or map it to a name that starts with a letter or `_` in the `names` " +
+    "Rename the parameter, or map it to a name that starts with a letter or `_` in the `override` " +
       "block of penv.config.ts.",
   );
 }
@@ -50,7 +50,7 @@ function charset(variable: string, parameter: string): GithubNameError {
     variable,
     [parameter],
     `The parameter \`${parameter}\` generates the variable \`${variable}\`, which GitHub rejects — a secret name may contain only letters, digits, and \`_\``,
-    "Rename the parameter, or map it to a name matching `[A-Za-z0-9_]` in the `names` block of " +
+    "Rename the parameter, or map it to a name matching `[A-Za-z0-9_]` in the `override` block of " +
       "penv.config.ts.",
   );
 }
@@ -61,7 +61,7 @@ function caseCollision(upper: string, parameters: readonly string[]): GithubName
     upper,
     parameters,
     `Parameters ${parameters.map((p) => `\`${p}\``).join(" and ")} generate variables that differ only in case, and GitHub secret names are case-insensitive — they would overwrite one another`,
-    "Give one of them a distinct name — not just a different case — in the `names` block of " +
+    "Give one of them a distinct name — not just a different case — in the `override` block of " +
       "penv.config.ts.",
   );
 }
@@ -100,7 +100,7 @@ export function checkGithubNames(
   );
   for (const { variable, parameter } of perName) {
     // Case-insensitively, because GitHub reserves the prefix case-insensitively:
-    // a `names` override of `github_token` reaches GitHub verbatim and is refused
+    // an `override` of `github_token` reaches GitHub verbatim and is refused
     // there, so it must be refused here — the same case-folding the collision
     // check below already applies.
     if (variable.toUpperCase().startsWith(RESERVED_PREFIX)) {

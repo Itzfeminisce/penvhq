@@ -362,31 +362,33 @@ export function validateConfig(config: PenvConfig): PenvError[] {
   errors.push(...validateSchemaFile(config));
   errors.push(...validatePublicPrefixes(config));
 
-  const names: unknown = config.names;
-  if (names === undefined) {
+  errors.push(...legacyNamesBlock(config));
+
+  const override: unknown = config.override;
+  if (override === undefined) {
     return errors;
   }
-  if (names === null || typeof names !== "object" || Array.isArray(names)) {
+  if (override === null || typeof override !== "object" || Array.isArray(override)) {
     errors.push(
       new PenvError(
-        "CONFIG_NAMES_INVALID",
-        "`names` in penv.config.ts is not an object",
-        'Map a parameter to the variable a deploy target expects, e.g. `names: { "database-url": "DATABASE_URL" }`, or remove the block.',
+        "CONFIG_OVERRIDE_INVALID",
+        "`override` in penv.config.ts is not an object",
+        'Map a parameter to the variable a consumer expects, e.g. `override: { "database-url": "DATABASE_URL" }`, or remove the block.',
       ),
     );
     return errors;
   }
 
-  const nameEntries = names as Readonly<Record<string, unknown>>;
+  const overrideEntries = override as Readonly<Record<string, unknown>>;
   const byVariable = new Map<string, string[]>();
-  for (const key of Object.keys(nameEntries)) {
-    const variable = nameEntries[key];
+  for (const key of Object.keys(overrideEntries)) {
+    const variable = overrideEntries[key];
     if (typeof variable !== "string" || variable.trim().length === 0) {
       errors.push(
         new PenvError(
-          "NAME_OVERRIDE_EMPTY",
-          `The \`names\` override for \`${key}\` in penv.config.ts is not a non-empty variable name`,
-          `Map it to the variable the deploy target expects, e.g. \`"${key}": "DATABASE_URL"\`, or remove the override.`,
+          "OVERRIDE_EMPTY",
+          `The \`override\` for \`${key}\` in penv.config.ts is not a non-empty variable name`,
+          `Map it to the variable the consumer expects, e.g. \`"${key}": "DATABASE_URL"\`, or remove the override.`,
         ),
       );
       continue;
@@ -407,15 +409,35 @@ export function validateConfig(config: PenvConfig): PenvError[] {
     const listed = [...keys].sort().map((key) => `\`${key}\``);
     errors.push(
       new PenvError(
-        "NAME_OVERRIDE_DUPLICATE",
-        `The \`names\` overrides ${listed.join(" and ")} in penv.config.ts both map to \`${variable}\``,
+        "OVERRIDE_DUPLICATE",
+        `The \`override\` entries ${listed.join(" and ")} in penv.config.ts both map to \`${variable}\``,
         "Two parameters mapping to one generated variable would lose a value on `penv generate`. " +
-          "Give one of them a distinct name in the `names` block.",
+          "Give one of them a distinct name in the `override` block.",
       ),
     );
   }
 
   return errors;
+}
+
+/**
+ * The block was `names` before it was `override` — same shape, honest name. A
+ * config still carrying the old key deserves the exact rewrite, not a silent
+ * ignore that would quietly ungenerate every bent variable.
+ */
+function legacyNamesBlock(config: PenvConfig): PenvError[] {
+  const names = (config as unknown as Readonly<Record<string, unknown>>).names;
+  if (names === undefined) {
+    return [];
+  }
+  return [
+    new PenvError(
+      "CONFIG_NAMES_RENAMED",
+      "`names` in penv.config.ts is now called `override` — it overrides generated variables, and the key says so",
+      'Rename the block: `names: { "database-url": "DATABASE_URL" }` becomes ' +
+        '`override: { "database-url": "DATABASE_URL" }`. The entries are unchanged.',
+    ),
+  ];
 }
 
 /**

@@ -16,7 +16,7 @@
  *
  * Three things decide the answer, so three things are watched: the `.penv/` tree
  * (the values and their meta), `penv.config.ts` (the environment whitelist, and
- * the `names` block), and the schema. The schema is watched on its own only when
+ * the `override` block), and the schema. The schema is watched on its own only when
  * `schemaFile` puts it outside `.penv/` — at the default it is inside the tree,
  * and a second watcher on it would report every edit twice.
  *

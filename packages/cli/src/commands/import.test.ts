@@ -229,7 +229,7 @@ describe("a variable that does not round-trip", () => {
     expect(error.code).toBe("IMPORT_LOSSY_NAME");
     expect(error.message).toContain("MY-VAR");
     expect(error.message).toContain("MY_VAR");
-    expect(error.remedy).toContain("names");
+    expect(error.remedy).toContain("override");
     expect(error.remedy).toContain("penv.config.ts");
     expect(penvTree(root)).toEqual([]);
   });
@@ -248,7 +248,7 @@ describe("a variable that does not round-trip", () => {
   it("succeeds when penv.config.ts declares a names override for it", () => {
     const root = makeProject({
       dotenv: "MY-VAR=1\n",
-      config: { ...CONFIG, names: { "my-var": "MY-VAR" } },
+      config: { ...CONFIG, override: { "my-var": "MY-VAR" } },
     });
 
     const report = importDotenv({ cwd: root, file: ".env" });
@@ -261,7 +261,7 @@ describe("a variable that does not round-trip", () => {
   it("still refuses when the override does not restore the variable", () => {
     const root = makeProject({
       dotenv: "MY-VAR=1\n",
-      config: { ...CONFIG, names: { "my-var": "SOMETHING_ELSE" } },
+      config: { ...CONFIG, override: { "my-var": "SOMETHING_ELSE" } },
     });
 
     expect(importFails(root).code).toBe("IMPORT_LOSSY_NAME");

@@ -499,7 +499,16 @@ export function renderSchemaModule(fields: readonly SchemaField[], draft: boolea
     `// The loaded, validated values for the current environment. Import this in app\n` +
     `// code. Importing it loads configuration and throws (naming the parameter and\n` +
     `// environment) if anything required is missing or invalid.\n` +
-    `export const env = load(schema);\n`
+    `export const env = load(schema);\n` +
+    `\n` +
+    `// Registers the schema's shape with penv's types (erased at runtime, so\n` +
+    `// nothing cycles). This is what makes \`override\` keys in penv.config.ts\n` +
+    `// autocomplete from this schema — a typo'd parameter id is a compile error.\n` +
+    `declare module "@penvhq/core" {\n` +
+    `  interface PenvSchemaShape {\n` +
+    `    readonly shape: z.infer<typeof schema>;\n` +
+    `  }\n` +
+    `}\n`
   );
 }
 
