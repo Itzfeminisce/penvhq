@@ -14,7 +14,7 @@ export default defineConfig({
       "@penvhq/provider-mock": src("providers/mock"),
       "@penvhq/provider-vault": src("providers/vault"),
       "@penvhq/provider-contract": src("providers/contract"),
-      "@penvhq/sink-github": src("sinks/github"),
+      "@penvhq/provider-github": src("providers/github"),
       "@penvhq/cli": src("cli"),
     },
   },
