@@ -34,9 +34,9 @@ describe("OverrideKeysOf", () => {
   });
 
   it("treats an optional leaf as a parameter, not a namespace", () => {
-    expectTypeOf<
-      OverrideKeysOf<{ apiKey?: string; nested: { maxAge?: number } }>
-    >().toEqualTypeOf<"api-key" | "nested/max-age">();
+    expectTypeOf<OverrideKeysOf<{ apiKey?: string; nested: { maxAge?: number } }>>().toEqualTypeOf<
+      "api-key" | "nested/max-age"
+    >();
   });
 
   it("keeps arrays and dates as leaves rather than descending into them", () => {
