@@ -1,5 +1,29 @@
 # @penvhq/penv
 
+## 0.7.0
+
+### Minor Changes
+
+- ab9a971: `load(schema, { inject })` now accepts an allowlist as well as a boolean. Pass an
+  array of parameter ids to inject only those into `process.env`, leaving every
+  other declared parameter untouched — never written, never deleted. Use it when
+  the schema also holds secrets that must not reach `process.env` (database URLs,
+  cloud credentials), while a subset (WorkOS keys, a public redirect) must:
+
+  ```ts
+  export const env = load(schema, {
+    inject: ["workos/api-key", "workos/client-id", "workos/redirect-uri"],
+  });
+  ```
+
+  The allowlist is typed to the schema's own parameter ids at the `load` call
+  site — the ids autocomplete and a typo is a compile error. `inject: true` still
+  injects the whole schema. Off by default.
+
+### Patch Changes
+
+- b630532: `penv init` now writes Bun's `bunfig.toml` for you when injection is enabled, not just the preload file. The preload script is inert until `bunfig.toml` registers it, so penv scaffolds both — the `preload` array and its `[test]` mirror — under the same rule as every seam: it writes a fresh `bunfig.toml`, but never overwrites one you already own (it prints where to add the entry instead).
+
 ## 0.6.0
 
 ### Minor Changes
