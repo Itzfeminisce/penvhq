@@ -158,16 +158,6 @@ export function inject(input: InjectInput): InjectResult {
   const target = input.target ?? process.env;
   const declared = declaredRefs(schema);
 
-  // Invariant 12, over the whole schema: two parameters mapping to one variable
-  // would write first-wins and drop the other silently. The check runs across
-  // every declared parameter, not just the allowlisted ones, so a name clash is
-  // caught even when only one of the two is being injected. Refuse before
-  // touching the target — a half-injected environment is worse than none.
-  const collision = checkNameCollisions(declared, config)[0];
-  if (collision !== undefined) {
-    throw collision;
-  }
-
   // The allowlist scopes *both* halves: an excluded parameter is neither written
   // nor deleted, so a secret the schema declares but the list omits never reaches
   // `process.env`. Absent means the whole schema. Ids are matched in either
@@ -178,6 +168,18 @@ export function inject(input: InjectInput): InjectResult {
     allow === undefined
       ? declared
       : declared.filter((r) => allow.has(slashId(r)) || allow.has(parameterId(r)));
+
+  // Invariant 12, over the parameters this call actually injects: two of them
+  // mapping to one variable would write first-wins and drop the other silently.
+  // The check is scoped to `injected`, not the whole schema — a clash between
+  // parameters the allowlist excludes writes neither, so it cannot drop anything
+  // here and must not crash an otherwise-valid selective inject (a latent
+  // schema-wide clash is `doctor`'s to surface, not this delivery step's). Refuse
+  // before touching the target — a half-injected environment is worse than none.
+  const collision = checkNameCollisions(injected, config)[0];
+  if (collision !== undefined) {
+    throw collision;
+  }
 
   const rawById = new Map<string, string>();
   for (const { ref, value } of values) {

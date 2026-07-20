@@ -6,7 +6,7 @@
 
 import { describe, it } from "vitest";
 import { z } from "zod";
-import { load } from "./load.js";
+import { load, type LoadOptions } from "./load.js";
 
 const schema = z.object({
   databaseUrl: z.url(),
@@ -27,5 +27,12 @@ describe("the inject allowlist type", () => {
   it("rejects a namespace used as if it were a parameter", () => {
     // @ts-expect-error `workos` is a namespace, not a parameter id.
     load(schema, { inject: ["workos"] });
+  });
+
+  it("still forwards a `LoadOptions`-typed value — the base type is assignable", () => {
+    // A wrapper that types its options against the schema-agnostic `LoadOptions`
+    // (whose `inject` is a plain boolean) must still pass them to `load`.
+    const forward = (options: LoadOptions) => load(schema, options);
+    forward({ inject: true });
   });
 });

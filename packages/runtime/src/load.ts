@@ -31,24 +31,43 @@ export interface LoadOptions {
    * - An **allowlist** of parameter ids injects only those, and leaves every other
    *   parameter untouched — never written, never deleted. Use it when the schema
    *   also holds secrets that must *not* reach `process.env` (database URLs, cloud
-   *   credentials): `inject: ["workos/api-key", "workos/client-id"]`.
+   *   credentials): `inject: ["workos/api-key", "workos/client-id"]`. The allowlist
+   *   form lives on {@link LoadOptionsFor}, because typing its ids needs the schema.
    *
-   * At a `load(schema, …)` call the allowlist is typed to *that schema's*
-   * parameter ids — autocompleted, a typo a compile error — via {@link load}'s
-   * own signature; this base type keeps it a plain `readonly string[]`.
+   * This base type keeps `inject` a plain `boolean` — assignable to
+   * {@link LoadOptionsFor} — so a wrapper typed against `LoadOptions` still
+   * forwards to `load`. To pass an allowlist, use `LoadOptionsFor<T>` (or the
+   * `load(schema, { inject: [...] })` literal, which infers it).
    *
    * See {@link inject}.
    */
-  readonly inject?: boolean | readonly string[];
+  readonly inject?: boolean;
 }
 
 /**
  * `load`'s options with the `inject` allowlist narrowed to `T`'s own parameter
  * ids — so the ids autocomplete and a typo is a compile error, without making
  * {@link LoadOptions} generic (which would recurse on the unbound default).
+ *
+ * Known limitation: an *opaque-record* leaf (`z.record`, a JSON blob) is one
+ * injectable parameter at runtime — `declaredRefs` treats an object with no named
+ * properties as a leaf — but `OverrideKeysOf` recurses its index signature into
+ * `` `id/${string}` ``, so such a leaf cannot be named in the typed allowlist.
+ * Inject it with `inject: true`, or reshape it into named fields. This mirrors a
+ * pre-existing gap in `override`'s key type and is left for a shared core fix.
  */
 export type LoadOptionsFor<T extends z.ZodType> = Omit<LoadOptions, "inject"> & {
   readonly inject?: boolean | readonly OverrideKeysOf<z.infer<T>>[];
+};
+
+/**
+ * The loader's own view of the options, after `load` has bound the schema: the
+ * allowlist has collapsed to a plain `readonly string[]` (its element type no
+ * longer matters once the ids are checked at the call site). Kept internal so
+ * the exported surface stays `LoadOptions` / `LoadOptionsFor<T>` only.
+ */
+type ResolvedLoadOptions = Omit<LoadOptions, "inject"> & {
+  readonly inject?: boolean | readonly string[];
 };
 
 /**
@@ -97,7 +116,7 @@ export function load<T extends z.ZodType>(schema: T, options?: LoadOptionsFor<T>
   return loadEagerly(schema, options);
 }
 
-function loadEagerly<T extends z.ZodType>(schema: T, options?: LoadOptions): z.infer<T> {
+function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptions): z.infer<T> {
   const { config, environment, values } = resolveSync(
     options?.cwd ?? process.cwd(),
     options?.environment,
@@ -126,15 +145,20 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: LoadOptions): z.i
   // concrete value at its top level. The raw `values` cross for tree-resolved
   // parameters (`process.env` is strings); `result.data` is passed only so a
   // schema default reaches the environment instead of being deleted.
-  // `inject` is truthy for both `true` and an allowlist array (empty or not); an
-  // array narrows the injected set through `only`, `true` injects the whole schema.
-  if (options?.inject && !schemaHarvestActive()) {
+  // Injection is opt-in through exactly two shapes: `true` (whole schema) or an
+  // allowlist array (only those). Any other value — a truthy non-array a JS caller
+  // might pass (`"false"` read from an env var, `1`) — must fail *closed*: never
+  // fall through to a whole-schema inject, which would push every secret the
+  // allowlist exists to withhold into `process.env`. So the guard tests for the
+  // two blessed shapes, not mere truthiness.
+  const injectMode = options?.inject;
+  if ((injectMode === true || Array.isArray(injectMode)) && !schemaHarvestActive()) {
     inject({
       schema,
       config,
       values,
       validated: result.data,
-      ...(Array.isArray(options.inject) ? { only: options.inject } : {}),
+      ...(Array.isArray(injectMode) ? { only: injectMode } : {}),
     });
   }
   return result.data;
@@ -148,7 +172,7 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: LoadOptions): z.i
  * schema — surfaces on first real use with the same `ValidationError` the eager
  * path throws.
  */
-function deferLoad<T extends z.ZodType>(schema: T, options?: LoadOptions): z.infer<T> {
+function deferLoad<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptions): z.infer<T> {
   let materialized = false;
   let value: unknown;
   const materialize = (): object => {
