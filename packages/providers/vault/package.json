@@ -1,6 +1,6 @@
 {
   "name": "@penvhq/provider-vault",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "The HashiCorp Vault KV v2 penv provider — the milestone proof that a provider is portable.",
   "license": "MIT",
   "type": "module",
