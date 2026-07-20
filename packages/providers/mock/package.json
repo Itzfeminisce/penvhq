@@ -1,6 +1,6 @@
 {
   "name": "@penvhq/provider-mock",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A registered, retaining penv provider for rehearsing dual-valid rotation locally.",
   "license": "MIT",
   "type": "module",

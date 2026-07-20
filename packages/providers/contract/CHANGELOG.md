@@ -1,5 +1,14 @@
 # @penvhq/provider-contract
 
+## 0.5.0
+
+### Patch Changes
+
+- Updated dependencies [c10576f]
+- Updated dependencies [df5cf15]
+- Updated dependencies [b94fd7a]
+  - @penvhq/core@0.5.0
+
 ## 0.4.0
 
 ### Patch Changes
