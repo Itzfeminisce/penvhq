@@ -1,6 +1,6 @@
 {
   "name": "@penvhq/provider-kubernetes",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "The Kubernetes Secrets penv provider — portability with retention declared absent.",
   "license": "MIT",
   "type": "module",

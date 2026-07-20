@@ -1,6 +1,6 @@
 {
   "name": "@penvhq/provider-filesystem",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "The reference penv provider, and the ground truth for the provider contract.",
   "license": "MIT",
   "type": "module",

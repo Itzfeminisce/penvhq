@@ -1,5 +1,34 @@
 # @penvhq/penv
 
+## 0.6.0
+
+### Minor Changes
+
+- 5291754: `load(schema, { inject: true })` — the blessed ambient surface (v0.8, part one).
+
+  A third-party SDK that reads `process.env.ITS_EXACT_NAME` at module load now finds a validated value with no per-SDK bridge code. Passing `{ inject: true }` to `load` writes the validated environment onto `process.env` after the schema has accepted it, so an SDK never sees a half-configured surface.
+
+  - **Exclusive over the schema.** Every parameter the schema declares is penv's to own ambiently: written (under its generated, `override`-bent variable, as the raw string the SDK re-parses) when it has a value — a tree value or a schema `.default()` — and deleted when it has none, so a stray ambient `WORKOS_API_HOSTNAME` cannot steer an SDK behind `@env`'s back.
+  - **Off by default.** No import, no mirror: a consumer who never asked for `process.env` writes gets none. The schemaless `import "@penvhq/penv/config"` compat entry stays for adoption-before-a-schema.
+  - New exports from `penv`/`@penvhq/runtime`: `inject`, `declaredRefs`, and the `InjectResult` type.
+
+  The per-framework `penv init` seams (scaffolding `import "@env"` into `instrumentation.ts`, a Nitro plugin, `hooks.server.ts`, `node --import`) and `doctor`'s `ambient-shadow` check are the follow-ups.
+
+- 596c71a: `penv init` sets up process.env injection for your framework (v0.8, part two).
+
+  When you opt in — `init` asks, default No — penv writes `load(schema, { inject: true })` and places the one line that runs it before your app code, in the file your framework guarantees runs first:
+
+  - **Next.js** → `instrumentation.ts` with a guarded `register()` (the `NEXT_RUNTIME === "nodejs"` guard is mandatory — Next calls `register` on Edge, where penv can't read the filesystem)
+  - **SvelteKit** → `src/hooks.server.ts` (with a note to register the alias in `kit.alias`)
+  - **Nuxt/Nitro** → `server/plugins/0.penv.ts` (the `0.` prefix keeps it first)
+  - **Bun** → `.penv/preload.ts` (with the `bunfig.toml` registration as a note)
+  - **TanStack Start, Astro, plain Node/Express/Fastify** → the exact verified instruction is printed (no file penv can safely own)
+  - **Vite SPA** → nothing: no server reads process.env, and init says so
+
+  penv scaffolds a fresh seam file but never edits a hook you already own — an existing file becomes a printed instruction instead. Each framework's hook was verified against its current documentation. Injection stays off by default: no opt-in, no seam, no change.
+
+  `detect` now also recognizes SvelteKit, Nuxt, and Bun.
+
 ## 0.5.0
 
 ### Minor Changes

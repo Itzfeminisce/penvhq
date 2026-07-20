@@ -1,6 +1,6 @@
 {
   "name": "@penvhq/provider-github",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "The GitHub Actions Secrets provider — a projection-holding, value-withholding store penv pushes to through the gh CLI.",
   "license": "MIT",
   "type": "module",
