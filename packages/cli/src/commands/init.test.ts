@@ -101,6 +101,63 @@ describe("scaffolding", () => {
     expect(read(root, ".penv", "env.ts")).toContain("export const env = load(schema);");
     expect(read(root, "penv.config.ts")).toContain("environments:");
     expect(read(root, "tsconfig.json")).toContain('"@env": [".penv/env.ts"]');
+    // No seam step without injection — nothing scaffolded, nothing to report.
+    expect(result.steps.map((step) => step.target)).not.toContain("seam");
+  });
+
+  describe("the injection seam", () => {
+    const withInject = (root: string): InitDecisions => ({
+      ...planFor(root).decisions,
+      inject: true,
+    });
+
+    it("loads with { inject: true } and scaffolds the framework's pre-app file", () => {
+      const root = makeProject(NEXT, { src: true });
+
+      const result = runInit({ cwd: root, decisions: withInject(root) });
+
+      // env.ts opts in.
+      expect(read(root, "src", "env.ts")).toContain("load(schema, { inject: true })");
+      // Next's own hook is scaffolded, guarded, and reported as a seam step.
+      expect(existsSync(join(root, "src", "instrumentation.ts"))).toBe(true);
+      const seam = read(root, "src", "instrumentation.ts");
+      expect(seam).toContain('process.env.NEXT_RUNTIME === "nodejs"');
+      expect(seam).toContain('await import("@env")');
+      expect(result.steps.map((step) => step.target)).toContain("seam");
+    });
+
+    it("scaffolds nothing and reads load(schema) without the flag", () => {
+      const root = makeProject(NEXT, { src: true });
+
+      runInit({ cwd: root, decisions: { ...planFor(root).decisions, inject: false } });
+
+      expect(read(root, "src", "env.ts")).toContain("export const env = load(schema);");
+      expect(existsSync(join(root, "src", "instrumentation.ts"))).toBe(false);
+    });
+
+    it("prints, rather than overwrites, an instrumentation.ts the user already owns", () => {
+      const root = makeProject(NEXT, { src: true });
+      mkdirSync(join(root, "src"), { recursive: true });
+      writeFileSync(join(root, "src", "instrumentation.ts"), "// mine\n", "utf8");
+
+      const result = runInit({ cwd: root, decisions: withInject(root) });
+
+      // The user's file is untouched; the seam step is an instruction, not a write.
+      expect(read(root, "src", "instrumentation.ts")).toBe("// mine\n");
+      const step = result.steps.find((s) => s.target === "seam");
+      expect(step?.action).toBe("info");
+      expect(step?.note).toContain("register()");
+    });
+
+    it("prints the manual instruction for a framework with no file to own", () => {
+      const root = makeDir(); // no framework — the universal Node fallback
+
+      const result = runInit({ cwd: root, decisions: { ...DEFAULT_DECISIONS, inject: true } });
+
+      const step = result.steps.find((s) => s.target === "seam");
+      expect(step?.action).toBe("info");
+      expect(step?.note).toContain("--import");
+    });
   });
 
   /** Invariant 17: a value file that is not ignored is a secret waiting to be committed. */
@@ -355,6 +412,7 @@ describe("environments", () => {
   it("says in the config why the whitelist is empty and what fills it", () => {
     const config = renderConfigModule({
       environments: [],
+      inject: false,
       schemaFile: ".penv/env.ts",
       publicPrefixes: [],
       alias: "@env",
@@ -368,6 +426,7 @@ describe("environments", () => {
   it("gives every declared environment a provider to read from", () => {
     const config = renderConfigModule({
       environments: ["development", "production"],
+      inject: false,
       schemaFile: ".penv/env.ts",
       publicPrefixes: [],
       alias: "@env",
@@ -468,18 +527,35 @@ describe("the prompt", () => {
   it("shows one screen and takes the suggested environments on Enter", async () => {
     const root = makeProject(NEXT, { src: true });
     writeFileSync(join(root, ".env.production"), "", "utf8");
-    const io = fakeTerminal(["", "y"]);
+    // Three answers now: environments (Enter), inject (n), Proceed (y).
+    const io = fakeTerminal(["", "n", "y"]);
 
     const decisions = await promptForDecisions(planFor(root), io);
 
     expect(io.shown.join("\n")).toContain("Detected Next.js.");
     expect(io.shown.join("\n")).toContain("[production]");
+    expect(io.shown.join("\n")).toContain("inject your validated config into process.env");
     expect(decisions).toEqual({
       environments: ["production"],
+      inject: false,
       schemaFile: "src/env.ts",
       publicPrefixes: ["NEXT_PUBLIC_"],
       alias: "@env",
     });
+  });
+
+  it("turns injection on when the developer says yes, and off by default", async () => {
+    const root = makeProject(NEXT, { src: true });
+
+    const on = await promptForDecisions(planFor(root), fakeTerminal(["", "y", "y"]));
+    expect(on?.inject).toBe(true);
+
+    const off = await promptForDecisions(planFor(root), fakeTerminal(["", "n", "y"]));
+    expect(off?.inject).toBe(false);
+
+    // Enter (no answer) at the inject prompt is a No — injection is opt-in.
+    const blank = await promptForDecisions(planFor(root), fakeTerminal(["", "", "y"]));
+    expect(blank?.inject).toBe(false);
   });
 
   /** Enter with nothing suggested is a valid answer: an empty whitelist, declared. */
@@ -515,7 +591,8 @@ describe("the prompt", () => {
   it("writes nothing when the plan is declined", async () => {
     const root = makeProject(NEXT, { src: true });
 
-    const decisions = await promptForDecisions(planFor(root), fakeTerminal(["", "n"]));
+    // environments (Enter), inject (n), Proceed (n) — the last declines.
+    const decisions = await promptForDecisions(planFor(root), fakeTerminal(["", "n", "n"]));
 
     expect(decisions).toBeUndefined();
     expect(existsSync(join(root, "penv.config.ts"))).toBe(false);
@@ -526,7 +603,7 @@ describe("the prompt", () => {
     const root = makeProject(NEXT, { src: true });
 
     expect(
-      await promptForDecisions(planFor(root), fakeTerminal(["", "maybe later"])),
+      await promptForDecisions(planFor(root), fakeTerminal(["", "n", "maybe later"])),
     ).toBeUndefined();
   });
 });
@@ -534,6 +611,7 @@ describe("the prompt", () => {
 describe("the schema's home", () => {
   const CUSTOM: InitDecisions = {
     environments: [],
+    inject: false,
     schemaFile: "src/config/env.ts",
     publicPrefixes: [],
     alias: "@env",
@@ -567,6 +645,7 @@ describe("the schema's home", () => {
     const custom = renderConfigModule(CUSTOM);
     const standard = renderConfigModule({
       environments: [],
+      inject: false,
       schemaFile: ".penv/env.ts",
       publicPrefixes: [],
       alias: "@env",

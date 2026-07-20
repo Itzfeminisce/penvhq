@@ -460,6 +460,9 @@ interface Adoption {
 function decisionsOf(config: PenvConfig, cwd: string): InitDecisions {
   return {
     environments: config.environments,
+    // `import` re-scaffolds env.ts for an existing project; injection is an init
+    // choice, so it is not turned on here.
+    inject: false,
     schemaFile: schemaFileOf(config),
     publicPrefixes: config.publicPrefixes ?? [],
     alias: detectAlias(cwd),

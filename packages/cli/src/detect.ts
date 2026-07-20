@@ -60,6 +60,8 @@ interface Signature {
  */
 const SIGNATURES: readonly Signature[] = [
   { name: "Next.js", packages: ["next"], publicPrefixes: ["NEXT_PUBLIC_"] },
+  { name: "SvelteKit", packages: ["@sveltejs/kit"], publicPrefixes: ["PUBLIC_"] },
+  { name: "Nuxt", packages: ["nuxt"], publicPrefixes: ["NUXT_PUBLIC_"] },
   {
     name: "TanStack Start",
     packages: ["@tanstack/react-start", "@tanstack/start"],
@@ -195,16 +197,28 @@ export function detectFramework(cwd: string): Detected | undefined {
   }
   for (const signature of SIGNATURES) {
     if (signature.packages.some((name) => dependencies.has(name))) {
-      const schema = schemaFileFor(cwd);
-      return {
-        name: signature.name,
-        schemaFile: schema.file,
-        ...(schema.displaced === undefined ? {} : { displacedFrom: schema.displaced }),
-        publicPrefixes: signature.publicPrefixes,
-      };
+      return detectedFrom(cwd, signature.name, signature.publicPrefixes);
     }
   }
+  // Bun is a runtime, not a package, so no dependency names it. A framework above
+  // would have answered first (a Next-on-Bun project is a Next project); only a
+  // project with no framework and a `bunfig.toml` is a plain Bun one, whose seam
+  // is Bun's preload rather than Node's `--import`. It has no client bundle, so no
+  // public prefix.
+  if (existsSync(join(cwd, "bunfig.toml")) || dependencies.has("bun-types")) {
+    return detectedFrom(cwd, "Bun", []);
+  }
   return undefined;
+}
+
+function detectedFrom(cwd: string, name: string, publicPrefixes: readonly string[]): Detected {
+  const schema = schemaFileFor(cwd);
+  return {
+    name,
+    schemaFile: schema.file,
+    ...(schema.displaced === undefined ? {} : { displacedFrom: schema.displaced }),
+    publicPrefixes,
+  };
 }
 
 /** The alias penv writes when the project says nothing about how it names its own modules. */
