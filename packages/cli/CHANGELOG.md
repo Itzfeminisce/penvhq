@@ -1,5 +1,16 @@
 # @penvhq/cli
 
+## 0.7.0
+
+### Patch Changes
+
+- b630532: `penv init` now writes Bun's `bunfig.toml` for you when injection is enabled, not just the preload file. The preload script is inert until `bunfig.toml` registers it, so penv scaffolds both — the `preload` array and its `[test]` mirror — under the same rule as every seam: it writes a fresh `bunfig.toml`, but never overwrites one you already own (it prints where to add the entry instead).
+- Updated dependencies [ab9a971]
+  - @penvhq/runtime@0.7.0
+  - @penvhq/core@0.7.0
+  - @penvhq/provider-filesystem@0.7.0
+  - @penvhq/provider-mock@0.7.0
+
 ## 0.6.0
 
 ### Minor Changes
