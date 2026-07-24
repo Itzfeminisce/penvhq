@@ -6,6 +6,7 @@
  * tool, whatever package a symbol happens to live in.
  */
 
+export type { PenvSnapshot } from "@penvhq/core";
 export {
   ConfigError,
   defineConfig,

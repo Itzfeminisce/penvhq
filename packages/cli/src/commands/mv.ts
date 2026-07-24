@@ -34,7 +34,15 @@ import {
 } from "@penvhq/core";
 import { defineCommand } from "citty";
 import type { Project } from "../project.js";
-import { assertWritableKey, keySourceFor, openProject, PENV_DIR, refFromKey } from "../project.js";
+import {
+  assertWritableKey,
+  keySourceFor,
+  openProject,
+  PENV_DIR,
+  refFromKey,
+  schemaShapeFileOf,
+} from "../project.js";
+import { refreshSnapshot } from "../snapshot.js";
 import { CHECK, formatRows, guard, type Row, tip, write } from "../ui.js";
 
 export interface MoveOptions {
@@ -58,6 +66,8 @@ export interface MoveResult {
   readonly meta: string | undefined;
   /** The access path the schema still declares, and the one it should now. */
   readonly schema: { readonly was: string; readonly now: string };
+  /** The file that holds the shape to rename — cohort-aware, so the tip names one that exists. */
+  readonly schemaFile: string;
 }
 
 /** The environment a scope names, or `undefined` for the scopes that name none. */
@@ -203,6 +213,10 @@ export async function runMove(options: MoveOptions): Promise<MoveResult> {
     await project.provider.removeMeta(from);
   }
 
+  // A sealed value was re-sealed at a new address, so its snapshot key changed;
+  // refresh it.
+  refreshSnapshot(project);
+
   return {
     from: parameterId(from),
     to: parameterId(to),
@@ -216,6 +230,7 @@ export async function runMove(options: MoveOptions): Promise<MoveResult> {
     // that printed the first while moving the second names no file on disk.
     meta: meta === undefined ? undefined : formatMetaFile({ ...to, format: "json" }),
     schema: { was: accessPath(from).join("."), now: accessPath(to).join(".") },
+    schemaFile: schemaShapeFileOf(project),
   };
 }
 
@@ -237,7 +252,7 @@ export function renderMove(result: MoveResult): string[] {
   lines.push(
     "",
     tip(
-      `.penv/env.ts still declares \`${result.schema.was}\` — rename it to \`${result.schema.now}\`, ` +
+      `${result.schemaFile} still declares \`${result.schema.was}\` — rename it to \`${result.schema.now}\`, ` +
         "or `penv validate` will report the value as unused and the declaration as unset.",
     ),
   );

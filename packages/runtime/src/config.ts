@@ -11,6 +11,11 @@
  * offer without a schema to hold. Reach for this one only to adopt penv before
  * writing a schema.
  *
+ * It is also disk-only, deliberately: a bare side-effect import receives no
+ * snapshot, so this entry cannot serve a bundled or serverless runtime where no
+ * `penv.config.ts` is on disk. Bundled consumers reach for the blessed `@env`
+ * surface, whose `load()` takes an embedded `{ snapshot }` (see `penv snapshot`).
+ *
  * ESM ordering caveat: this module must run before any module that reads
  * `process.env`. ES imports are hoisted and evaluated before the importing
  * module's body, but sibling imports evaluate in source order — so a module

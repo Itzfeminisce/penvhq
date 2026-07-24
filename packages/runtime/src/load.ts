@@ -8,6 +8,7 @@
 import {
   accessPath,
   type OverrideKeysOf,
+  type PenvSnapshot,
   schemaHarvestActive,
   ValidationError,
 } from "@penvhq/core";
@@ -42,6 +43,15 @@ export interface LoadOptions {
    * See {@link inject}.
    */
   readonly inject?: boolean;
+  /**
+   * The committed snapshot to fall back to when no `penv.config.ts` is found on
+   * disk — a bundled or serverless runtime (a Vercel `/var/task` bundle) where
+   * neither the config nor the `.penv/` tree is present. The scaffolded `env.ts`
+   * imports `penv.snapshot.ts` and passes it here; on disk, file discovery always
+   * wins, so this changes nothing in development. Sealed records only, decrypted
+   * at boot via `PENV_KEY_*` exactly as a filesystem load would be.
+   */
+  readonly snapshot?: PenvSnapshot;
 }
 
 /**
@@ -120,6 +130,7 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptio
   const { config, environment, values } = resolveSync(
     options?.cwd ?? process.cwd(),
     options?.environment,
+    options?.snapshot,
   );
 
   const object: Record<string, unknown> = {};

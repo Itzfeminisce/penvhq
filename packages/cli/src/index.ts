@@ -24,6 +24,7 @@ import { pushCommand } from "./commands/push.js";
 import { removeCommand } from "./commands/remove.js";
 import { rotateCommand } from "./commands/rotate.js";
 import { setCommand } from "./commands/set.js";
+import { snapshotCommand } from "./commands/snapshot.js";
 import { validateCommand } from "./commands/validate.js";
 import { watchCommand } from "./commands/watch.js";
 import { defaultKeychain } from "./keychain.js";
@@ -49,6 +50,7 @@ export const main = defineCommand({
     encrypt: encryptCommand,
     decrypt: decryptCommand,
     key: keyCommand,
+    snapshot: snapshotCommand,
     validate: validateCommand,
     doctor: doctorCommand,
     watch: watchCommand,
@@ -96,6 +98,8 @@ export type { RotateOptions, RotatePhase, RotateResult } from "./commands/rotate
 export { renderRotate, runRotate } from "./commands/rotate.js";
 export type { SetResult } from "./commands/set.js";
 export { runSet } from "./commands/set.js";
+export type { SnapshotResult } from "./commands/snapshot.js";
+export { renderSnapshot, runSnapshot } from "./commands/snapshot.js";
 export type { ValidateIssue, ValidateResult } from "./commands/validate.js";
 export { runValidate } from "./commands/validate.js";
 export type { WatchHandle, WatchOptions } from "./commands/watch.js";

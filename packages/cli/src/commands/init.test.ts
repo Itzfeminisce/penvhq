@@ -84,7 +84,7 @@ afterEach(() => {
 });
 
 describe("scaffolding", () => {
-  it("writes the tree, the schema, the config, the alias, and the ignore file", () => {
+  it("writes the tree, the shape, the wrapper, the config, the alias, and the ignore file", () => {
     const root = makeDir();
 
     const result = runInit({ cwd: root });
@@ -92,14 +92,40 @@ describe("scaffolding", () => {
     expect(result.steps.map((step) => step.target)).toEqual([
       "penv-dir",
       "schema",
+      "env",
       "config",
+      "snapshot",
       "tsconfig",
       "gitignore",
     ]);
     expect(existsSync(join(root, ".penv"))).toBe(true);
-    expect(read(root, ".penv", "env.ts")).toContain("export const schema = z.object({");
-    expect(read(root, ".penv", "env.ts")).toContain("export const env = load(schema);");
+    // The shape is a pure module at the root: no `load`, so importing it never
+    // loads configuration.
+    const shape = read(root, "penv.schema.ts");
+    expect(shape).toContain("export const schema = z.object({");
+    expect(shape).toContain('declare module "@penvhq/core"');
+    // The shape has no loader: it does not import the runtime, and it exports no
+    // `env` — importing it can never trigger config loading.
+    expect(shape).not.toContain("@penvhq/penv");
+    expect(shape).not.toContain("export const env");
+    // The wrapper imports the shape, re-exports it, and loads.
+    const wrapper = read(root, ".penv", "env.ts");
+    // The `.js` extension is the output extension nodenext requires on a relative
+    // import; TypeScript maps it back to `penv.schema.ts` for the type.
+    expect(wrapper).toContain('import { schema } from "../penv.schema.js";');
+    // The wrapper is pre-wired for bundled runtimes: it imports the committed
+    // snapshot and passes it to load().
+    expect(wrapper).toContain('import { snapshot } from "../penv.snapshot.js";');
+    expect(wrapper).toContain("export { schema };");
+    expect(wrapper).toContain("export const env = load(schema, { snapshot });");
+    // The snapshot module is scaffolded at the root, beside the config.
+    expect(existsSync(join(root, "penv.snapshot.ts"))).toBe(true);
+    expect(read(root, "penv.snapshot.ts")).toContain("satisfies PenvSnapshot");
+    // The type registration moved to the shape — it belongs with the shape, not
+    // the wrapper.
+    expect(wrapper).not.toContain('declare module "@penvhq/core"');
     expect(read(root, "penv.config.ts")).toContain("environments:");
+    // The alias still resolves to the wrapper: runtime consumers import `env`.
     expect(read(root, "tsconfig.json")).toContain('"@env": [".penv/env.ts"]');
     // No seam step without injection — nothing scaffolded, nothing to report.
     expect(result.steps.map((step) => step.target)).not.toContain("seam");
@@ -116,8 +142,8 @@ describe("scaffolding", () => {
 
       const result = runInit({ cwd: root, decisions: withInject(root) });
 
-      // env.ts opts in.
-      expect(read(root, "src", "env.ts")).toContain("load(schema, { inject: true })");
+      // env.ts opts in, and stays wired for bundled runtimes.
+      expect(read(root, "src", "env.ts")).toContain("load(schema, { inject: true, snapshot })");
       // Next's own hook is scaffolded, guarded, and reported as a seam step.
       expect(existsSync(join(root, "src", "instrumentation.ts"))).toBe(true);
       const seam = read(root, "src", "instrumentation.ts");
@@ -131,7 +157,9 @@ describe("scaffolding", () => {
 
       runInit({ cwd: root, decisions: { ...planFor(root).decisions, inject: false } });
 
-      expect(read(root, "src", "env.ts")).toContain("export const env = load(schema);");
+      expect(read(root, "src", "env.ts")).toContain(
+        "export const env = load(schema, { snapshot });",
+      );
       expect(existsSync(join(root, "src", "instrumentation.ts"))).toBe(false);
     });
 
@@ -235,7 +263,9 @@ describe("scaffolding", () => {
 
     expect(stepFor(second, "penv-dir").action).toBe("kept");
     expect(stepFor(second, "schema").action).toBe("kept");
+    expect(stepFor(second, "env").action).toBe("kept");
     expect(stepFor(second, "config").action).toBe("kept");
+    expect(stepFor(second, "snapshot").action).toBe("kept");
     expect(stepFor(second, "tsconfig").action).toBe("kept");
     expect(stepFor(second, "gitignore").action).toBe("kept");
     // One alias, not two: re-running must not append a second entry.
@@ -243,34 +273,121 @@ describe("scaffolding", () => {
   });
 });
 
-describe("env.ts", () => {
+describe("the two generated modules are both write-once", () => {
   /**
-   * Invariant 2: penv scaffolds `.penv/env.ts` once and never regenerates it. A
-   * generated type is a second representation that drifts from the schema — the
+   * Invariant 2 now covers both halves of the split: penv scaffolds the shape
+   * `penv.schema.ts` and the wrapper `.penv/env.ts` once each, and regenerates
+   * neither. A generated schema is a second representation that drifts — the
    * exact disease penv treats — so an existing file is the user's, always.
    */
-  it("does not overwrite an existing .penv/env.ts", () => {
+  it("does not overwrite an existing penv.schema.ts (the shape)", () => {
     const root = makeDir();
     const mine = "export const schema = 'mine, hand-written, and quite wrong';\n";
+    writeFileSync(join(root, "penv.schema.ts"), mine, "utf8");
+
+    const result = runInit({ cwd: root });
+
+    expect(read(root, "penv.schema.ts")).toBe(mine);
+    expect(stepFor(result, "schema").action).toBe("kept");
+    // The wrapper is a different file, so it is still written.
+    expect(stepFor(result, "env").action).toBe("created");
+  });
+
+  it("does not overwrite an existing .penv/env.ts (the wrapper)", () => {
+    const root = makeDir();
+    const mine = "export const env = 'mine, hand-written, and quite wrong';\n";
     mkdirSync(join(root, ".penv"), { recursive: true });
     writeFileSync(join(root, ".penv", "env.ts"), mine, "utf8");
 
     const result = runInit({ cwd: root });
 
     expect(read(root, ".penv", "env.ts")).toBe(mine);
-    expect(stepFor(result, "schema").action).toBe("kept");
+    expect(stepFor(result, "env").action).toBe("kept");
+    // The shape is a different file, so it is still written.
+    expect(stepFor(result, "schema").action).toBe("created");
   });
 
-  it("says so rather than failing when it keeps one", () => {
+  /**
+   * A project scaffolded before the split has its schema — the `z.object` and the
+   * `PenvSchemaShape` augmentation — inside the self-contained `.penv/env.ts`, with
+   * no separate `penv.schema.ts`. Re-running init must not create an empty
+   * `penv.schema.ts`: a second `PenvSchemaShape` beside the real one is a duplicate
+   * `declare module` that fails to typecheck (TS2717) and the second drifting
+   * schema invariant 2 forbids. The old file stays the one schema.
+   */
+  it("does not add a second penv.schema.ts beside an old self-contained env.ts", () => {
+    const root = makeDir();
+    mkdirSync(join(root, ".penv"), { recursive: true });
+    const selfContained =
+      'import { z } from "zod";\n' +
+      "export const schema = z.object({ databaseUrl: z.url() });\n" +
+      'declare module "@penvhq/core" {\n' +
+      "  interface PenvSchemaShape {\n" +
+      "    readonly shape: z.infer<typeof schema>;\n" +
+      "  }\n" +
+      "}\n";
+    writeFileSync(join(root, ".penv", "env.ts"), selfContained, "utf8");
+
+    const result = runInit({ cwd: root });
+
+    // No second shape file, so no second `PenvSchemaShape` augmentation.
+    expect(existsSync(join(root, "penv.schema.ts"))).toBe(false);
+    expect(read(root, ".penv", "env.ts")).toBe(selfContained);
+    const schema = stepFor(result, "schema");
+    expect(schema.action).toBe("conflicted");
+    expect(schema.text).toContain(".penv/env.ts");
+    expect(schema.note).toContain("penv.schema.ts");
+  });
+
+  /**
+   * penv <= 0.4 scaffolded a self-contained `.penv/env.ts` that declares its own
+   * `z.object` and calls `load`, with no `PenvSchemaShape` block (the augmentation
+   * only landed in 0.5). Detecting the old layout only by that string misreads the
+   * entire pre-0.5 cohort as having no schema and writes an empty second
+   * `penv.schema.ts` beside the real one — the silent second representation
+   * invariants 1 and 2 forbid. The `z.object` marker must catch it too.
+   */
+  it("does not add a second penv.schema.ts beside a pre-0.5 env.ts (no PenvSchemaShape)", () => {
+    const root = makeDir();
+    mkdirSync(join(root, ".penv"), { recursive: true });
+    const preAugmentation =
+      'import { z } from "zod";\n' +
+      'import { load } from "@penvhq/penv";\n' +
+      "export const schema = z.object({ databaseUrl: z.url(), apiKey: z.string() });\n" +
+      "export const env = load(schema);\n";
+    writeFileSync(join(root, ".penv", "env.ts"), preAugmentation, "utf8");
+
+    const result = runInit({ cwd: root });
+
+    expect(existsSync(join(root, "penv.schema.ts"))).toBe(false);
+    expect(read(root, ".penv", "env.ts")).toBe(preAugmentation);
+    const schema = stepFor(result, "schema");
+    expect(schema.action).toBe("conflicted");
+    expect(schema.text).toContain(".penv/env.ts");
+    expect(schema.note).toContain("penv.schema.ts");
+  });
+
+  it("says so rather than failing when it keeps the shape", () => {
+    const root = makeDir();
+    writeFileSync(join(root, "penv.schema.ts"), "// mine\n", "utf8");
+
+    const result = runInit({ cwd: root });
+
+    expect(stepFor(result, "schema").text).toContain("Kept penv.schema.ts");
+    expect(stepFor(result, "schema").note).toContain("never regenerates it");
+    // The run carries on: the alias is still written.
+    expect(read(root, "tsconfig.json")).toContain('"@env"');
+  });
+
+  it("says so rather than failing when it keeps the wrapper", () => {
     const root = makeDir();
     mkdirSync(join(root, ".penv"), { recursive: true });
     writeFileSync(join(root, ".penv", "env.ts"), "// mine\n", "utf8");
 
     const result = runInit({ cwd: root });
 
-    expect(stepFor(result, "schema").text).toContain("Kept .penv/env.ts");
-    expect(stepFor(result, "schema").note).toContain("never regenerates it");
-    // The run carries on: the alias is still written.
+    expect(stepFor(result, "env").text).toContain("Kept .penv/env.ts");
+    expect(stepFor(result, "env").note).toContain("never regenerates it");
     expect(read(root, "tsconfig.json")).toContain('"@env"');
   });
 });
@@ -682,28 +799,37 @@ describe("the schema's home", () => {
     alias: "@env",
   };
 
-  it("writes the schema where the decisions say, creating the directories for it", () => {
+  it("writes the wrapper where the decisions say, creating the directories for it", () => {
     const root = makeDir();
 
     const result = runInit({ cwd: root, decisions: CUSTOM });
 
-    expect(read(root, "src", "config", "env.ts")).toContain("export const env = load(schema);");
+    // The wrapper goes to the chosen path; the shape stays at the root, and the
+    // wrapper climbs back up to it.
+    const wrapper = read(root, "src", "config", "env.ts");
+    expect(wrapper).toContain("export const env = load(schema, { snapshot });");
+    expect(wrapper).toContain('import { schema } from "../../penv.schema.js";');
+    // The snapshot import climbs the same distance as the schema import.
+    expect(wrapper).toContain('import { snapshot } from "../../penv.snapshot.js";');
+    expect(existsSync(join(root, "penv.schema.ts"))).toBe(true);
     expect(existsSync(join(root, ".penv", "env.ts"))).toBe(false);
-    expect(stepFor(result, "schema").text).toContain("Generated src/config/env.ts");
+    expect(stepFor(result, "env").text).toContain("Generated src/config/env.ts");
+    // The shape is always at the root, whatever the wrapper's path.
+    expect(stepFor(result, "schema").text).toContain("Generated penv.schema.ts");
   });
 
   /** Invariant 2 is about the file, not about the path penv would have chosen for it. */
-  it("keeps an existing schema at a custom path", () => {
+  it("keeps an existing wrapper at a custom path", () => {
     const root = makeDir();
-    const mine = "export const schema = 'mine, hand-written, and quite wrong';\n";
+    const mine = "export const env = 'mine, hand-written, and quite wrong';\n";
     mkdirSync(join(root, "src", "config"), { recursive: true });
     writeFileSync(join(root, "src", "config", "env.ts"), mine, "utf8");
 
     const result = runInit({ cwd: root, decisions: CUSTOM });
 
     expect(read(root, "src", "config", "env.ts")).toBe(mine);
-    expect(stepFor(result, "schema").action).toBe("kept");
-    expect(stepFor(result, "schema").text).toContain("Kept src/config/env.ts");
+    expect(stepFor(result, "env").action).toBe("kept");
+    expect(stepFor(result, "env").text).toContain("Kept src/config/env.ts");
   });
 
   it("records the schema's home in the config only when it is not the default", () => {
