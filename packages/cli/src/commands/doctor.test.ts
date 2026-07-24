@@ -5,10 +5,12 @@
  * every line in it is true.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { openProject } from "../project.js";
+import { SNAPSHOT_FILE, writeSnapshotFile } from "../snapshot.js";
 import type { DoctorCheck, DoctorFinding, DoctorSeverity } from "./doctor.js";
 import { runDoctor } from "./doctor.js";
 
@@ -221,6 +223,9 @@ describe("declared", () => {
     expect(fired).toHaveLength(1);
     expect(fired[0]?.label).toBe("Declared, no value");
     expect(fired[0]?.subject).toBe("redis.password");
+    // This fixture keeps its schema self-contained in `.penv/env.ts` (the
+    // pre-split layout), so the detail names that file — not a `penv.schema.ts`
+    // the project does not have. The location is cohort-aware, never hard-coded.
     expect(fired[0]?.detail).toBe("declared in .penv/env.ts, no value for production");
     expect(fired[0]?.remedy).toBe("penv set redis/password --env production");
   });
@@ -723,5 +728,79 @@ describe("the report", () => {
     // without being read.
     expect(findingsOf(report.findings, "schema")[0]?.label).toBe("Schema valid");
     expect(findingsOf(report.findings, "provider")[0]?.subject).toBe("@penvhq/provider-filesystem");
+  });
+});
+
+describe("snapshot-stale", () => {
+  it("stays silent for a project that commits no snapshot", async () => {
+    const root = makeProject({ schema: "apiUrl: z.string()", tree: { "api-url.production": "x" } });
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+
+    expect(findingsOf(report.findings, "snapshot-stale")).toHaveLength(0);
+  });
+
+  it("passes when the committed snapshot matches the tree and config", async () => {
+    const root = makeProject({ schema: "apiUrl: z.string()", tree: { "api-url.production": "x" } });
+    writeSnapshotFile(openProject(root));
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+
+    expect(severityOf(report.findings, "snapshot-stale")).toBe("pass");
+    expect(report.ok).toBe(true);
+  });
+
+  it("passes on a CRLF checkout — git autocrlf is not drift", async () => {
+    const root = makeProject({ schema: "apiUrl: z.string()", tree: { "api-url.production": "x" } });
+    writeSnapshotFile(openProject(root));
+    const path = join(root, SNAPSHOT_FILE);
+    writeFileSync(path, readFileSync(path, "utf8").replace(/\n/g, "\r\n"), "utf8");
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+
+    expect(severityOf(report.findings, "snapshot-stale")).toBe("pass");
+  });
+
+  it("fails when a sealed value changed but the snapshot was not refreshed", async () => {
+    const root = makeProject({
+      schema: "apiUrl: z.string()",
+      tree: { "api-url.production": "x", "secret.production.enc": "penv:1:prod:aa:bb" },
+    });
+    writeSnapshotFile(openProject(root));
+    // A committed sealed value changes on disk without a refresh — the exact drift
+    // a bundle would then resolve stale.
+    writeFileSync(join(root, ".penv", "secret.production.enc"), "penv:1:prod:cc:dd", "utf8");
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+    const fired = firedFor(report.findings, "snapshot-stale");
+
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.subject).toBe(SNAPSHOT_FILE);
+    expect(fired[0]?.remedy).toBe("penv snapshot");
+    expect(report.ok).toBe(false);
+  });
+});
+
+describe("bundle-invisible-plaintext", () => {
+  it("stays silent for a project that commits no snapshot", async () => {
+    const root = makeProject({ schema: "apiUrl: z.string()", tree: { "api-url.production": "x" } });
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+
+    expect(findingsOf(report.findings, "bundle-invisible-plaintext")).toHaveLength(0);
+  });
+
+  it("warns about a team-scope plaintext value once a snapshot is committed", async () => {
+    const root = makeProject({ schema: "apiUrl: z.string()", tree: { "api-url.production": "x" } });
+    writeSnapshotFile(openProject(root));
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+    const fired = firedFor(report.findings, "bundle-invisible-plaintext");
+
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.subject).toBe("api-url.production");
+    expect(fired[0]?.severity).toBe("warning");
+    // A warning, not a failure — the value simply is not embeddable as-is.
+    expect(report.ok).toBe(true);
   });
 });

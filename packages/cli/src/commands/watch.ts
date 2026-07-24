@@ -16,9 +16,13 @@
  *
  * Three things decide the answer, so three things are watched: the `.penv/` tree
  * (the values and their meta), `penv.config.ts` (the environment whitelist, and
- * the `override` block), and the schema. The schema is watched on its own only when
- * `schemaFile` puts it outside `.penv/` — at the default it is inside the tree,
- * and a second watcher on it would report every edit twice.
+ * the `override` block), and the schema. The schema is two modules: the shape
+ * (`penv.schema.ts`, the `z.object` every consumer derives from) always lives at
+ * the project root, outside the tree, so nothing above watches it — it gets its
+ * own watcher, always. The loader (`.penv/env.ts`, the wrapper `schemaFile` names)
+ * is inside the tree at the default and the recursive watcher already covers it; a
+ * second watcher on it would report every edit twice, so it earns one only when
+ * `schemaFile` moves it outside `.penv/`.
  *
  * `node:fs` does the watching. A dependency-free watcher is worth the handful of
  * lines here: the events this needs are the ones the platform already reports,
@@ -28,7 +32,7 @@
 import type { FSWatcher } from "node:fs";
 import { existsSync, watch } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import { schemaFileOf, schemaInsideTree } from "@penvhq/core";
+import { SCHEMA_SHAPE_FILE, schemaFileOf, schemaInsideTree } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { openProject } from "../project.js";
 import type { DriftReport } from "../schema.js";
@@ -253,10 +257,18 @@ export function runWatch(options: WatchOptions): WatchHandle {
   addWatcher(project.penvDir, true);
   addWatcher(dirname(project.configFile), false, configFile);
 
-  // The schema declares what must exist, so an edit to it changes the answer. A
-  // schema inside the tree already has a watcher; one outside would have none,
-  // and a watch that keeps reporting a verdict it can no longer see the reason
-  // for is the silence this command exists to prevent.
+  // The schema shape declares what must exist, so an edit to it — a newly declared
+  // parameter — changes the answer as much as a value does. It lives at the
+  // project root, outside the tree the recursive watcher covers and filtered out
+  // of the config-dir watcher above, so nothing else sees it: it always gets its
+  // own watcher, or an edit to the one file `penv init` labels "yours to edit"
+  // would fire nothing at all.
+  addWatcher(project.root, false, SCHEMA_SHAPE_FILE);
+
+  // The loader `schemaFile` names is the wrapper the alias resolves to. Inside the
+  // tree it already has a watcher; one outside `.penv/` would have none, and a
+  // watch that keeps reporting a verdict it can no longer see the reason for is the
+  // silence this command exists to prevent.
   if (schemaInsideTree(project.config) === undefined) {
     const schemaFile = resolve(project.root, schemaFileOf(project.config));
     addWatcher(dirname(schemaFile), false, basename(schemaFile));

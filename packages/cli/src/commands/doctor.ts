@@ -36,6 +36,8 @@
  * Warnings are reported; failures are reported and exit non-zero.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type {
   Meta,
   PenvConfig,
@@ -68,10 +70,23 @@ import { defineCommand } from "citty";
 import type { z } from "zod";
 import { shadowedEnvironments, shorthandCandidates } from "../env-flags.js";
 import type { Project } from "../project.js";
-import { keySourceFor, openProject, sourceProviderFor, targetEnvironment } from "../project.js";
+import {
+  keySourceFor,
+  openProject,
+  schemaShapeFileOf,
+  sourceProviderFor,
+  targetEnvironment,
+} from "../project.js";
 import { LOCAL_TREE_TYPE } from "../registry.js";
 import type { DriftReport } from "../schema.js";
 import { computeDrift, lookup, minLengthOf } from "../schema.js";
+import {
+  buildSnapshot,
+  equalsIgnoringEol,
+  renderSnapshotModule,
+  SNAPSHOT_FILE,
+  snapshotExists,
+} from "../snapshot.js";
 import { out } from "../style.js";
 import {
   CHECK,
@@ -110,6 +125,8 @@ export type DoctorCheck =
   | "rotation-overdue"
   | "rotation-stuck"
   | "provider-value-drift"
+  | "snapshot-stale"
+  | "bundle-invisible-plaintext"
   | "provider"
   | "projection-unreachable"
   | "projection-name-drift"
@@ -243,13 +260,15 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
       skipped("unused", "Value coverage"),
     );
   } else {
+    const schemaShapeFile = schemaShapeFileOf(project);
     const drift = computeDrift({
       schema,
       resolutions: subjects.map(({ resolution }) => resolution),
       config: project.config,
       environment,
+      schemaShapeFile,
     });
-    findings.push(...declaredFindings(drift, missing, environment));
+    findings.push(...declaredFindings(drift, missing, environment, schemaShapeFile));
     findings.push(...weakFindings(subjects, schema));
     findings.push(...unusedFindings(drift));
   }
@@ -271,6 +290,8 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     findings.push(...stuckFindings(rotation.subjects, environment, now, stuckThresholdMs));
   }
   findings.push(...(await providerDriftFindings(project, environment, options.source)));
+  findings.push(...snapshotStaleFindings(project));
+  findings.push(...bundleInvisibleFindings(project, subjects, environment));
   findings.push(...(await projectionFindings(project, environment, options.projection)));
 
   findings.push({
@@ -331,6 +352,7 @@ function declaredFindings(
   drift: DriftReport,
   missing: readonly DoctorFinding[],
   environment: string,
+  schemaShapeFile: string,
 ): DoctorFinding[] {
   const reported = new Set(missing.filter((f) => f.severity !== "pass").map((f) => f.subject));
 
@@ -353,7 +375,7 @@ function declaredFindings(
       check: "declared",
       severity: "pass",
       label: "Schema coverage",
-      subject: `every parameter .penv/env.ts requires has a value for ${environment}`,
+      subject: `every parameter ${schemaShapeFile} requires has a value for ${environment}`,
     },
   ];
 }
@@ -1296,6 +1318,86 @@ async function providerDriftFindings(
       severity: "pass",
       label: "Provider values",
       subject: `every value matches the ${providerConfig.type} source of truth for ${environment}`,
+    },
+  ];
+}
+
+/**
+ * The committed snapshot has drifted from what the tree and config now imply — so
+ * a bundle would resolve stale values. A recompute-and-text-compare, the same
+ * determinism `penv snapshot` writes with. Silent for a project that commits no
+ * snapshot: the check reports nothing rather than a pass it did not earn.
+ */
+function snapshotStaleFindings(project: Project): DoctorFinding[] {
+  if (!snapshotExists(project.root)) {
+    return [];
+  }
+  const wanted = renderSnapshotModule(buildSnapshot(project));
+  const committed = readFileSync(join(project.root, SNAPSHOT_FILE), "utf8");
+  if (equalsIgnoringEol(committed, wanted)) {
+    return [
+      {
+        check: "snapshot-stale",
+        severity: "pass",
+        label: "Snapshot",
+        subject: `${SNAPSHOT_FILE} matches the committed sealed values and config`,
+      },
+    ];
+  }
+  return [
+    {
+      check: "snapshot-stale",
+      severity: "failure",
+      label: "Snapshot stale",
+      subject: SNAPSHOT_FILE,
+      detail: "does not match the current sealed values or config, so a bundle resolves stale data",
+      remedy: "penv snapshot",
+    },
+  ];
+}
+
+/**
+ * A team-scope plaintext value is invisible to a bundle: value files are
+ * gitignored, and the snapshot embeds sealed records only — so neither ships it.
+ * Seal it to ship it. Only meaningful for a project that commits a snapshot;
+ * personal `.local` scopes are never shipped and are not flagged.
+ */
+function bundleInvisibleFindings(
+  project: Project,
+  subjects: readonly Subject[],
+  environment: string,
+): DoctorFinding[] {
+  if (!snapshotExists(project.root)) {
+    return [];
+  }
+  const findings: DoctorFinding[] = [];
+  for (const { resolution } of subjects) {
+    const winner = resolution.winner;
+    if (winner === undefined || winner.file.encrypted) {
+      continue;
+    }
+    const scope = winner.file.scope;
+    if (scope.kind === "local" || scope.kind === "environment-local") {
+      continue;
+    }
+    findings.push({
+      check: "bundle-invisible-plaintext",
+      severity: "warning",
+      label: "Invisible to bundles",
+      subject: winner.location,
+      detail: "plaintext is gitignored and not embedded in the snapshot, so a bundle cannot see it",
+      remedy: `penv encrypt ${refPathOf(resolution.ref)} --env ${environment}`,
+    });
+  }
+  if (findings.length > 0) {
+    return findings;
+  }
+  return [
+    {
+      check: "bundle-invisible-plaintext",
+      severity: "pass",
+      label: "Bundle coverage",
+      subject: `every value resolving for ${environment} is embeddable in ${SNAPSHOT_FILE}`,
     },
   ];
 }

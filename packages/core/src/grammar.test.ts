@@ -4,6 +4,7 @@ import {
   IllegalEnvironmentNameError,
   PenvError,
   ReservedTokenError,
+  StrayCodeFileError,
   UnknownEnvironmentError,
 } from "./errors.js";
 import {
@@ -373,6 +374,93 @@ describe("parseFilename — errors", () => {
     expect(() => parseFilename("../../etc/passwd.production", config)).toThrow(
       FilenameGrammarError,
     );
+  });
+});
+
+// A developer drops `schema.ts` (or any source file) into `.penv/`. The walker
+// gate `isParameterFile` passes it — it is not a dotfile and not the declared
+// schema — so `parseFilename` sees it. Without the diagnosis, `ts` is read as an
+// undeclared environment and `schema.ts` is reported as "environment `ts` is not
+// declared": true, and useless. The diagnosis keeps it FATAL (invariant 11, no
+// warn path) but names the real problem.
+describe("parseFilename — stray code files", () => {
+  it("diagnoses `schema.ts` as a code module, not an undeclared environment", () => {
+    let thrown: unknown;
+    try {
+      parseFilename("schema.ts", config);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(StrayCodeFileError);
+    expect(thrown).not.toBeInstanceOf(UnknownEnvironmentError);
+    const error = thrown as StrayCodeFileError;
+    expect(error.code).toBe("STRAY_CODE_FILE");
+    expect(error.extension).toBe("ts");
+    // Names the offending file and the two remedies.
+    expect(error.message).toMatch(/schema\.ts looks like a code module/);
+    expect(error.message).toMatch(/Move the code out of `\.penv\/`/);
+    expect(error.message).toMatch(/declare it as `schemaFile`/);
+  });
+
+  it.each(["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"])(
+    "diagnoses a stray `.%s` file",
+    (extension) => {
+      expect(() => parseFilename(`helpers.${extension}`, config)).toThrow(StrayCodeFileError);
+      expect(() => parseFilename(`redis/client.${extension}`, config)).toThrow(StrayCodeFileError);
+    },
+  );
+
+  // A code file can fail the grammar somewhere other than the environment segment
+  // — `drizzle.config.ts` splits into three segments and would otherwise trip the
+  // scope-count check. The terminal-extension diagnosis catches it regardless.
+  it("diagnoses a multi-dot code file before the scope-count error fires", () => {
+    let thrown: unknown;
+    try {
+      parseFilename("drizzle.config.ts", config);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(StrayCodeFileError);
+    expect((thrown as StrayCodeFileError).extension).toBe("ts");
+  });
+
+  // Declared environments win before the diagnosis fires (invariant 10): an
+  // environment literally named `ts` keeps `<key>.ts` a legal value file.
+  it("treats a declared environment named `ts` as a normal scope, not a code file", () => {
+    const withTs: PenvConfig = {
+      environments: ["development", "ts"],
+      providers: {},
+    };
+    expect(parseFilename("api-key.ts", withTs)).toEqual({
+      kind: "value",
+      namespace: [],
+      name: "api-key",
+      scope: { kind: "environment", environment: "ts" },
+      encrypted: false,
+    } satisfies ParsedFile);
+    // And `schema.ts` is then parameter `schema` for environment `ts`, not a stray.
+    expect(parseFilename("schema.ts", withTs)).toMatchObject({
+      kind: "value",
+      name: "schema",
+      scope: { kind: "environment", environment: "ts" },
+    });
+  });
+
+  // The negative case: a non-code undeclared segment keeps its existing error.
+  it("leaves the unknown-environment error unchanged for a non-code segment", () => {
+    expect(() => parseFilename("redis/password.prod", config)).toThrow(UnknownEnvironmentError);
+    expect(() => parseFilename("redis/password.prod", config)).not.toThrow(StrayCodeFileError);
+  });
+
+  // A file with no extension is a plain parameter, never a stray code file.
+  it("does not misfire on an extensionless parameter named like a module", () => {
+    expect(parseFilename("schema", config)).toEqual({
+      kind: "value",
+      namespace: [],
+      name: "schema",
+      scope: { kind: "unscoped" },
+      encrypted: false,
+    } satisfies ParsedFile);
   });
 });
 

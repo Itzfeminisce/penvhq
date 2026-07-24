@@ -48,6 +48,7 @@ import {
 import { defineCommand } from "citty";
 import { detectAlias } from "../detect.js";
 import { localTree, openProject } from "../project.js";
+import { refreshSnapshot } from "../snapshot.js";
 import { CHECK, formatSteps, guard, type Step, WARN, write } from "../ui.js";
 import type { InitDecisions, InitStep, SchemaField } from "./init.js";
 import { planInit, scaffold, writeConfigFile } from "./init.js";
@@ -581,6 +582,10 @@ export function importDotenv(options: ImportOptions): ImportReport {
 
   const backup = `${file}${BACKUP_SUFFIX}`;
   copyFileSync(file, backup);
+
+  // The scaffold wrote a snapshot; refresh it against the imported tree (import
+  // writes plaintext, so this only matters if a sealed value was already present).
+  refreshSnapshot(project);
 
   return {
     root: project.root,

@@ -18,6 +18,18 @@ import type { PenvConfig } from "./types.js";
 /** Where the schema lives when the project does not say. */
 export const DEFAULT_SCHEMA_FILE = ".penv/env.ts";
 
+/**
+ * The shape module, always at the project root beside `penv.config.ts`.
+ *
+ * `schemaFile` (above) names the *wrapper* that loads — the module the `@env`
+ * alias resolves to, which may move to `src/env.ts`. The shape it derives from is
+ * fixed here: a side-effect-free `z.object` every consumer imports without loading
+ * configuration. It is outside `.penv/`, so the grammar never reads it as a
+ * parameter — but that also means nothing in the tree watches it, so `watch` has
+ * to watch this path on its own.
+ */
+export const SCHEMA_SHAPE_FILE = "penv.schema.ts";
+
 /** The directory the parameter tree lives in, relative to the config. */
 const PENV_DIR = ".penv";
 

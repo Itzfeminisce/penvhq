@@ -3,10 +3,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  ConfigError,
   createEnvKeySource,
+  findConfigFile,
   KEY_BYTES,
   type NameCollisionError,
   PenvError,
+  type PenvSnapshot,
   SCHEMA_HARVEST_ENV,
   sealValue,
   type UndecryptableValueError,
@@ -57,6 +60,15 @@ function makeProject(files: Readonly<Record<string, string>>, config: unknown = 
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, value, "utf8");
   }
+  return root;
+}
+
+/** A directory with no `penv.config.ts` and no ancestor that has one — a bundle. */
+function makeBundleDir(): string {
+  const root = mkdtempSync(join(tmpdir(), "penv-bundle-"));
+  created.push(root);
+  // Guard the premise: a stray config in an ancestor of tmpdir would take the disk path.
+  expect(findConfigFile(root)).toBeUndefined();
   return root;
 }
 
@@ -662,5 +674,121 @@ describe("load", () => {
         setEnv("DATABASE_URL", before);
       }
     });
+  });
+});
+
+/**
+ * The bundled/serverless story: a compiled bundle has no `penv.config.ts` and no
+ * `.penv/` tree, so `load` falls back to the committed snapshot `env.ts` passes
+ * it. File discovery still comes first — on disk, a live edit wins — and the
+ * snapshot carries sealed records only, decrypted at boot exactly as a filesystem
+ * load would be. This reproduces the Vercel middleware crash and its fix.
+ */
+describe("load from a bundle (embedded snapshot)", () => {
+  const bundleSchema = z.object({ databaseUrl: z.url() });
+
+  /** A snapshot the way `penv snapshot` writes it: config plus sealed records only. */
+  function snapshotWith(values: Readonly<Record<string, string>>): PenvSnapshot {
+    // KEY_CONFIG is a plain test literal, so its `source` widens to string; the
+    // cast is the same one `makeProject`'s `config: unknown` parameter makes.
+    return { v: 1, config: KEY_CONFIG as unknown as PenvSnapshot["config"], values };
+  }
+
+  it("resolves and decrypts from the snapshot when no config is on disk", () => {
+    const sealed = seal(DATABASE_URL_ENC, "postgres://sealed/app"); // exports PENV_KEY_DEV
+    const cwd = makeBundleDir();
+
+    const env = load(bundleSchema, {
+      cwd,
+      environment: "development",
+      snapshot: snapshotWith({ "database-url.enc": sealed }),
+    });
+
+    expect(env.databaseUrl).toBe("postgres://sealed/app");
+  });
+
+  it("prefers the filesystem over the snapshot when a config is on disk", () => {
+    // Both are present; a live edit to the tree must win, so the snapshot is a
+    // fallback and never a shadow of what is really on disk.
+    const cwd = makeProject({
+      "database-url": "postgres://on-disk/app",
+      "redis/host": "127.0.0.1",
+    });
+    const snapshot = snapshotWith({
+      "database-url.enc": seal(DATABASE_URL_ENC, "postgres://snapshot/app"),
+    });
+
+    expect(load(schema, { cwd, environment: "development", snapshot }).databaseUrl).toBe(
+      "postgres://on-disk/app",
+    );
+  });
+
+  it("throws ValidationError naming a required parameter the snapshot omits", () => {
+    // The snapshot carries database-url and redis/password (keeping the namespace
+    // present), but not the required `redis.host` — so requiredness stays the
+    // schema's call, no special-casing for a bundle.
+    const redisPassword: ValueFile = {
+      namespace: ["redis"],
+      name: "password",
+      scope: { kind: "unscoped" },
+      encrypted: true,
+    };
+    const cwd = makeBundleDir();
+
+    let thrown: unknown;
+    try {
+      load(schema, {
+        cwd,
+        environment: "development",
+        snapshot: snapshotWith({
+          "database-url.enc": seal(DATABASE_URL_ENC, "postgres://sealed/app"),
+          "redis/password.enc": seal(redisPassword, "prod-secret"),
+        }),
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as ValidationError).issues.map((issue) => issue.parameter)).toEqual([
+      "redis.host",
+    ]);
+  });
+
+  it("loads fine when the only absent parameters are optional or defaulted", () => {
+    const withOptional = z.object({
+      databaseUrl: z.url(),
+      region: z.string().default("us-east-1"),
+      note: z.string().optional(),
+    });
+    const sealed = seal(DATABASE_URL_ENC, "postgres://sealed/app");
+    const cwd = makeBundleDir();
+
+    const env = load(withOptional, {
+      cwd,
+      environment: "development",
+      snapshot: snapshotWith({ "database-url.enc": sealed }),
+    });
+
+    expect(env.databaseUrl).toBe("postgres://sealed/app");
+    expect(env.region).toBe("us-east-1");
+    expect(env.note).toBeUndefined();
+  });
+
+  it("throws ConfigError pointing at `penv snapshot` when there is no config and no snapshot", () => {
+    const cwd = makeBundleDir();
+
+    let thrown: unknown;
+    try {
+      load(bundleSchema, { cwd, environment: "development" });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(ConfigError);
+    const error = thrown as ConfigError;
+    expect(error.message).toContain("No penv.config.ts found");
+    // The extended remedy names the bundled-runtime escape hatch.
+    expect(error.message).toContain("penv snapshot");
   });
 });

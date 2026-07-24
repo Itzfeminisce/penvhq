@@ -4,7 +4,8 @@
  * rooted at `.penv/`, and the parameter a CLI key names.
  */
 
-import { dirname, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import type {
   AnyProvider,
   DecryptFailure,
@@ -27,6 +28,8 @@ import {
   refFromAccessPath,
   resolveEnvironment,
   resolveKeySource,
+  SCHEMA_SHAPE_FILE,
+  schemaFileOf,
 } from "@penvhq/core";
 import { FilesystemProvider } from "@penvhq/provider-filesystem";
 import { environmentFromShorthand } from "./env-flags.js";
@@ -92,6 +95,46 @@ export function localTree(project: Project): FilesystemProvider {
     );
   }
   return project.provider;
+}
+
+/**
+ * The module `schemaFile` names, when it carries the schema shape itself rather
+ * than importing it — a project scaffolded before the shape/loader split, whose
+ * `.penv/env.ts` (or wherever `schemaFile` points) defines its own `z.object`.
+ * Returns that path; `undefined` when there is no such file, or when it is the
+ * thin wrapper the current scaffold writes, which imports the shape and declares
+ * no `z.object` of its own.
+ *
+ * Detection is by two markers, because the released layouts differ. penv 0.5+
+ * scaffolded a `PenvSchemaShape` augmentation into the self-contained module;
+ * penv <= 0.4 scaffolded `export const schema = z.object(...)` with no
+ * augmentation at all. Either marker means the module declares its own shape; the
+ * current wrapper (a re-export and a `load` call) carries neither.
+ */
+export function selfContainedSchemaModule(root: string, schemaFile: string): string | undefined {
+  const file = join(root, ...schemaFile.split("/"));
+  if (!existsSync(file)) {
+    return undefined;
+  }
+  const source = readFileSync(file, "utf8");
+  return source.includes("PenvSchemaShape") || source.includes("z.object") ? schemaFile : undefined;
+}
+
+/**
+ * The file that holds the editable schema shape, cohort-aware.
+ *
+ * A project scaffolded on the split keeps the `z.object` in `penv.schema.ts` and
+ * a thin loader in `schemaFile`; one scaffolded before it keeps the shape
+ * self-contained in `schemaFile` (invariant 2 — penv never rewrites either layout
+ * into the other). Every message that tells the user where to edit the shape must
+ * name the file that actually holds it, not a hard-coded path that is wrong for
+ * whichever cohort it is not from — the same rule `writeSchemaShapeFile` follows
+ * when it keeps an old-layout schema in place rather than standing a second one
+ * beside it.
+ */
+export function schemaShapeFileOf(project: Project): string {
+  const schemaFile = schemaFileOf(project.config);
+  return selfContainedSchemaModule(project.root, schemaFile) ?? SCHEMA_SHAPE_FILE;
 }
 
 /**

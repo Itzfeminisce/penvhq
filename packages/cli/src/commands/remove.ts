@@ -10,6 +10,7 @@ import type { ValueFile } from "@penvhq/core";
 import { formatValueFile } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { openProject, PENV_DIR, refFromKey } from "../project.js";
+import { refreshSnapshot } from "../snapshot.js";
 import { CHECK, formatRows, guard, type Row, WARN, write } from "../ui.js";
 import { type ScopeOptions, targetScope } from "./set.js";
 
@@ -50,6 +51,9 @@ export async function runRemove(options: RemoveOptions): Promise<RemoveResult> {
     await project.provider.remove(file);
     removed.push(formatValueFile(file));
   }
+
+  // A removed sealed value leaves the snapshot; refresh it.
+  refreshSnapshot(project);
 
   return {
     parameter: options.key,

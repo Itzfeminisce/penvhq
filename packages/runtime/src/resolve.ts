@@ -30,11 +30,13 @@
  */
 
 import { dirname, resolve as resolvePath } from "node:path";
-import type { ParameterRef, PenvConfig, ValueFile } from "@penvhq/core";
+import type { KeySource, ParameterRef, PenvConfig, PenvSnapshot, ValueFile } from "@penvhq/core";
 import {
+  ConfigError,
   candidatesFor,
+  findConfigFile,
   formatValueFile,
-  loadConfig,
+  loadConfigFrom,
   openValue,
   parameterId,
   resolveEnvironment,
@@ -42,6 +44,7 @@ import {
   UndecryptableValueError,
 } from "@penvhq/core";
 import { createFilesystemProvider } from "@penvhq/provider-filesystem";
+import { createSnapshotProvider, type SnapshotProvider } from "./snapshot.js";
 
 /** One parameter that resolved to a present value for the target environment. */
 export interface ResolvedValue {
@@ -81,21 +84,18 @@ function refsFrom(files: readonly ValueFile[]): ParameterRef[] {
   });
 }
 
+/** The one synchronous read surface the cascade walks — filesystem or snapshot. */
+interface SyncReadProvider {
+  listSync(): ValueFile[];
+  readSync(file: ValueFile): string | undefined;
+}
+
 /**
- * Loads the config, settles the environment, and resolves every parameter the
- * local tree holds — the work `load` and `penv/config` both start from.
+ * Resolves every parameter a read source holds for one environment. The one place
+ * the sync cascade walks, so the filesystem path and the snapshot path resolve,
+ * decrypt, and fail identically — only the read source differs.
  */
-export function resolveSync(cwd: string, environment?: string): ResolvedConfig {
-  const { config, file } = loadConfig(cwd);
-  const target = resolveEnvironment(config, environment);
-
-  const provider = createFilesystemProvider({
-    root: resolvePath(dirname(file), ".penv"),
-    config,
-  });
-
-  const keys = resolveKeySource(config, target);
-
+function resolveFrom(provider: SyncReadProvider, target: string, keys: KeySource): ResolvedValue[] {
   const values: ResolvedValue[] = [];
   for (const ref of refsFrom(provider.listSync())) {
     for (const candidate of candidatesFor(ref, target)) {
@@ -120,6 +120,49 @@ export function resolveSync(cwd: string, environment?: string): ResolvedConfig {
       break;
     }
   }
+  return values;
+}
 
-  return { config, environment: target, values };
+/**
+ * Loads the config, settles the environment, and resolves every parameter the
+ * local tree holds — the work `load` and `penv/config` both start from.
+ *
+ * File discovery comes first, always: with a `penv.config.ts` on disk, the
+ * filesystem tree is the source of truth and a live edit wins, exactly as before.
+ * The `snapshot` is a fallback for the one place the filesystem has nothing to
+ * read — a bundled or serverless runtime where discovery finds no config — so
+ * `load()` resolves from the embedded projection there instead of throwing.
+ */
+export function resolveSync(
+  cwd: string,
+  environment?: string,
+  snapshot?: PenvSnapshot,
+): ResolvedConfig {
+  const file = findConfigFile(cwd);
+  if (file !== undefined) {
+    const config = loadConfigFrom(file);
+    const target = resolveEnvironment(config, environment);
+    const provider = createFilesystemProvider({
+      root: resolvePath(dirname(file), ".penv"),
+      config,
+    });
+    const keys = resolveKeySource(config, target);
+    return { config, environment: target, values: resolveFrom(provider, target, keys) };
+  }
+
+  if (snapshot !== undefined) {
+    const config = snapshot.config;
+    const target = resolveEnvironment(config, environment);
+    const keys = resolveKeySource(config, target);
+    const provider: SnapshotProvider = createSnapshotProvider(snapshot);
+    return { config, environment: target, values: resolveFrom(provider, target, keys) };
+  }
+
+  throw new ConfigError(
+    `No penv.config.ts found in ${resolvePath(cwd)} or any parent directory`,
+    "Run `penv init` at your project root to create one, or run this command from inside a penv " +
+      "project. In a bundled or serverless runtime where no config file is on disk — a Vercel " +
+      "`/var/task` bundle, say — generate and wire an embedded snapshot with `penv snapshot`, so " +
+      "`load()` resolves from it instead.",
+  );
 }

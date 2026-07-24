@@ -164,8 +164,10 @@ export interface ProviderFactoryContext {
 /**
  * The schema's inferred shape, registered by the schema module so the config
  * file can be typed against it. Empty here, deliberately — core must not depend
- * on Zod or know any one project's schema. The scaffolded `.penv/env.ts`
- * augments it with the *inferred* shape (computed where Zod lives):
+ * on Zod or know any one project's schema. The scaffolded `penv.schema.ts`
+ * augments it with the *inferred* shape (computed where Zod lives), beside the
+ * `z.object` it registers — the thin `.penv/env.ts` wrapper only re-exports that
+ * shape and loads it:
  *
  * ```ts
  * declare module "@penvhq/core" {
@@ -342,6 +344,29 @@ export interface PenvConfig {
    * has no key source, which is not the same as having no key — see `keys.ts`.
    */
   readonly keys?: Readonly<Record<string, KeyConfig>>;
+}
+
+/**
+ * A committed, bundler-traversable projection of a project — the evaluated config
+ * and every committed sealed value — so `load()` resolves in a bundled or
+ * serverless runtime where no `penv.config.ts` or `.penv/` tree is on disk (a
+ * Vercel `/var/task` bundle, say). The CLI generates it as `penv.snapshot.ts` at
+ * the project root and the runtime falls back to it only when file discovery finds
+ * no config; on disk, live edits always win.
+ *
+ * `values` holds sealed records *only* — `*.enc` envelope strings keyed by their
+ * filename-grammar address (`formatValueFile`). Plaintext is never embedded, at
+ * any scope, so the snapshot ships exactly what a git clone already sees:
+ * ciphertext that a `PENV_KEY_*` opens at boot, and nothing a key does not.
+ * Deliberately distinct from the plaintext, name-mapped `ProjectionProvider`
+ * vocabulary — this preserves sealed records at their grammar addresses.
+ */
+export interface PenvSnapshot {
+  readonly v: 1;
+  /** The evaluated config; no key material. */
+  readonly config: PenvConfig;
+  /** `formatValueFile(file)` → sealed envelope string. Sealed records only. */
+  readonly values: Readonly<Record<string, string>>;
 }
 
 /**

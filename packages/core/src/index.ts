@@ -41,6 +41,7 @@ export {
   NameCollisionError,
   PenvError,
   ReservedTokenError,
+  StrayCodeFileError,
   UnknownEnvironmentError,
   ValidationError,
 } from "./errors.js";
@@ -96,6 +97,7 @@ export {
 export {
   DEFAULT_SCHEMA_FILE,
   isPublicVariable,
+  SCHEMA_SHAPE_FILE,
   schemaFileOf,
   schemaInsideTree,
   validatePublicPrefixes,
@@ -119,6 +121,7 @@ export type {
   PenvConfig,
   PenvErrorLike,
   PenvSchemaShape,
+  PenvSnapshot,
   ProjectionProvider,
   ProjectionSecret,
   Provider,

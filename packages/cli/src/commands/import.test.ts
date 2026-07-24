@@ -65,7 +65,11 @@ interface Fixture {
   readonly config?: unknown;
   /** The source file's name. `.env` unless a test is about the scope it names. */
   readonly filename?: string;
-  /** Written to `.penv/env.ts` before the import, so invariant 2 has a file to keep. */
+  /**
+   * Written to `penv.schema.ts` (the shape) before the import, so invariant 2 has
+   * a file to keep. The shape is where the parameters — and the draft `import`
+   * would infer — live, so a kept shape is the one the "undeclared" warning is about.
+   */
   readonly schema?: string;
 }
 
@@ -82,8 +86,7 @@ function makeProject(fixture: Fixture): string {
     );
   }
   if (fixture.schema !== undefined) {
-    mkdirSync(join(root, ".penv"), { recursive: true });
-    writeFileSync(join(root, ".penv", "env.ts"), fixture.schema, "utf8");
+    writeFileSync(join(root, "penv.schema.ts"), fixture.schema, "utf8");
   }
   writeFileSync(join(root, fixture.filename ?? ".env"), fixture.dotenv, "utf8");
   return root;
@@ -616,7 +619,7 @@ describe("--env for a filename that names no environment", () => {
   });
 });
 
-describe("an env.ts the import kept", () => {
+describe("a shape the import kept", () => {
   const KEPT: Fixture = {
     dotenv: "API_KEY=k\nDATABASE_URL=postgres://localhost/app\n",
     config: CONFIG,
@@ -633,15 +636,15 @@ describe("an env.ts the import kept", () => {
 
   /**
    * Invariant 2 keeps the file; invariant 13 makes the consequence loud. `penv
-   * init` then `penv import` leaves an empty `z.object({})` while the parameters
-   * sit in the tree, and the closing validate passes — an empty object satisfies
-   * an empty schema. A ✓ there reports that as fine.
+   * init` then `penv import` leaves an empty `z.object({})` in the shape while the
+   * parameters sit in the tree, and the closing validate passes — an empty object
+   * satisfies an empty schema. A ✓ there reports that as fine.
    */
   it("warns, naming how many parameters the skipped draft would have declared", () => {
     const root = makeProject(KEPT);
 
     const report: ImportReport = importDotenv({ cwd: root, file: ".env" });
-    const line = renderImport(report, PASSED).find((text) => text.includes("env.ts"));
+    const line = renderImport(report, PASSED).find((text) => text.includes("penv.schema.ts"));
 
     expect(line).toBeDefined();
     expect(line).toContain("⚠");
@@ -651,14 +654,44 @@ describe("an env.ts the import kept", () => {
     expect(line).toContain("skipped");
   });
 
-  it("still reports a schema it wrote itself with a ✓", () => {
+  it("still reports a shape it wrote itself with a ✓", () => {
     const root = makeProject({ dotenv: KEPT.dotenv, config: CONFIG });
 
     const report = importDotenv({ cwd: root, file: ".env" });
-    const line = renderImport(report, PASSED).find((text) => text.includes("env.ts"));
+    const line = renderImport(report, PASSED).find((text) => text.includes("penv.schema.ts"));
 
     expect(line).toContain("✓");
     expect(line).toContain("Generated");
+  });
+
+  /** The draft the import infers lands in the shape module, not the wrapper. */
+  it("writes the harvested fields into penv.schema.ts, wrapped by .penv/env.ts", () => {
+    const root = makeProject({ dotenv: KEPT.dotenv, config: CONFIG });
+
+    importDotenv({ cwd: root, file: ".env" });
+
+    const shape = readFileSync(join(root, "penv.schema.ts"), "utf8");
+    expect(shape).toContain("DRAFT");
+    expect(shape).toContain("apiKey:");
+    expect(shape).toContain("databaseUrl:");
+    // The wrapper carries the loader and re-exports the shape.
+    const wrapper = readFileSync(join(root, ".penv", "env.ts"), "utf8");
+    expect(wrapper).toContain('import { schema } from "../penv.schema.js";');
+    expect(wrapper).toContain("export const env = load(schema, { snapshot });");
+  });
+
+  /** The scaffold pre-wires the bundled-runtime path: env.ts imports a real file. */
+  it("scaffolds penv.snapshot.ts that env.ts imports", () => {
+    const root = makeProject({ dotenv: KEPT.dotenv, config: CONFIG });
+
+    importDotenv({ cwd: root, file: ".env" });
+
+    expect(existsSync(join(root, "penv.snapshot.ts"))).toBe(true);
+    // Import writes plaintext, so a fresh import embeds no values — but the module
+    // is present, so the wrapper's `import { snapshot }` resolves.
+    const snapshot = readFileSync(join(root, "penv.snapshot.ts"), "utf8");
+    expect(snapshot).toContain("satisfies PenvSnapshot");
+    expect(snapshot).toContain('"values": {}');
   });
 });
 
@@ -728,11 +761,11 @@ describe("the schema goes where the config says", () => {
 
 /**
  * The line whose whole job is "your schema is untouched" has to name the schema
- * it did not touch. It rebuilt its text from a hardcoded `.penv/env.ts` rather
- * than using the step's own, so a project whose schema lives in `src/` was told
- * penv had kept a file the project does not have.
+ * it did not touch — the shape module `penv.schema.ts`, which is where the
+ * parameters and the skipped draft would have gone. It uses the step's own text
+ * rather than a hardcoded path, so it names the file that was actually kept.
  */
-describe("the kept-schema line names the schema that was kept", () => {
+describe("the kept-schema line names the shape that was kept", () => {
   /** A passing validation, so the render has one; this block is about the step above it. */
   const validated: ValidateResult = {
     ok: true,
@@ -742,36 +775,36 @@ describe("the kept-schema line names the schema that was kept", () => {
     drift: EMPTY_DRIFT,
   };
 
-  it("names the declared path, not `.penv/env.ts`", () => {
+  it("names penv.schema.ts, and stays stable even when the wrapper moved", () => {
+    // A custom schemaFile moves the wrapper to `src/env.ts`, but the shape — the
+    // thing the kept warning is about — is always `penv.schema.ts` at the root.
     const root = makeProject({
       dotenv: "API_KEY=abc\nDB_URL=postgres://x\n",
       filename: ".env.production",
       config: { ...CONFIG, schemaFile: "src/env.ts" },
+      schema: "export const schema = 1;\n",
     });
-    mkdirSync(join(root, "src"), { recursive: true });
-    writeFileSync(join(root, "src", "env.ts"), "export const mine = 1;\n", "utf8");
 
     const report = importDotenv({ cwd: root, file: ".env.production" });
     const line = renderImport(report, validated).find((text) => text.includes("Kept"));
 
-    expect(line).toContain("src/env.ts");
-    expect(line).not.toContain(".penv/env.ts");
+    expect(line).toContain("penv.schema.ts");
     // The warning it exists to carry is still there.
     expect(line).toContain("⚠");
     expect(line).toContain("undeclared");
   });
 
-  it("still names .penv/env.ts when that is where the schema really is", () => {
+  it("names penv.schema.ts for a default-layout project too", () => {
     const root = makeProject({
       dotenv: "API_KEY=abc\n",
       filename: ".env.production",
       config: CONFIG,
-      schema: "export const mine = 1;\n",
+      schema: "export const schema = 1;\n",
     });
 
     const report = importDotenv({ cwd: root, file: ".env.production" });
     const line = renderImport(report, validated).find((text) => text.includes("Kept"));
 
-    expect(line).toContain(".penv/env.ts");
+    expect(line).toContain("penv.schema.ts");
   });
 });

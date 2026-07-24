@@ -29,7 +29,13 @@ import { defineCommand } from "citty";
 import type { z } from "zod";
 import { shorthandCandidates } from "../env-flags.js";
 import type { Project } from "../project.js";
-import { keySourceFor, openProject, refsFrom, targetEnvironment } from "../project.js";
+import {
+  keySourceFor,
+  openProject,
+  refsFrom,
+  schemaShapeFileOf,
+  targetEnvironment,
+} from "../project.js";
 import type { DriftReport } from "../schema.js";
 import { computeDrift, EMPTY_DRIFT } from "../schema.js";
 import { out } from "../style.js";
@@ -145,6 +151,7 @@ export interface SchemaLoad {
 function validationIssuesOf(
   cause: unknown,
   schemaPath: string,
+  schemaShapeFile: string,
 ): readonly ValidateIssue[] | undefined {
   if (typeof cause !== "object" || cause === null) {
     return undefined;
@@ -159,7 +166,10 @@ function validationIssuesOf(
       kind: "schema" as const,
       subject: typeof parameter === "string" && parameter !== "" ? parameter : schemaPath,
       message: typeof message === "string" ? message : String(issue),
-      remedy: `Fix the value, or adjust the schema in ${schemaPath} if the shape is wrong.`,
+      // `schemaPath` is the loader penv evaluated; the shape to adjust lives in
+      // `schemaShapeFile`, which is that same file for an old-layout project and
+      // `penv.schema.ts` for one on the split.
+      remedy: `Fix the value, or adjust the schema in ${schemaShapeFile} if the shape is wrong.`,
     };
   });
 }
@@ -218,14 +228,18 @@ export function loadSchema(project: Project, environment: string): Promise<Schem
   // Resolved against the project root, not `.penv/`: `schemaFile` is relative to
   // penv.config.ts, so a schema at `src/env.ts` is looked for where it is.
   const schemaPath = schemaFileOf(project.config);
+  // The file to name in an "adjust the schema" remedy, which is not always the
+  // loader `schemaPath`: after the split the shape lives in `penv.schema.ts`.
+  const schemaShapeFile = schemaShapeFileOf(project);
   const file = pathToFileURL(resolvePath(project.root, schemaPath)).href;
-  return exclusively(() => loadSchemaExclusively(file, schemaPath, environment));
+  return exclusively(() => loadSchemaExclusively(file, schemaPath, schemaShapeFile, environment));
 }
 
 /** {@link loadSchema}'s body, run only while it holds the `PENV_ENV` + harvest pins. */
 async function loadSchemaExclusively(
   file: string,
   schemaPath: string,
+  schemaShapeFile: string,
   environment: string,
 ): Promise<SchemaLoad> {
   // Resolved from the user's own file: `zod` and `penv` are their dependencies,
@@ -247,7 +261,7 @@ async function loadSchemaExclusively(
   try {
     loaded = await jiti.import(file);
   } catch (cause) {
-    const issues = validationIssuesOf(cause, schemaPath);
+    const issues = validationIssuesOf(cause, schemaPath, schemaShapeFile);
     if (issues !== undefined) {
       return { issues };
     }
@@ -299,6 +313,7 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
   const project = openProject(options.cwd);
   const environment = targetEnvironment(project, options.environment, options.envFlags);
   const schemaPath = schemaFileOf(project.config);
+  const schemaShapeFile = schemaShapeFileOf(project);
   const issues: ValidateIssue[] = [];
 
   // Invariant 11: a reserved token in a filename is an error, never a silent
@@ -371,7 +386,13 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
     }
     // Measured from the same resolutions the verdict below is reached on, so the
     // report can never describe a tree the verdict did not read.
-    drift = computeDrift({ schema, resolutions, config: project.config, environment });
+    drift = computeDrift({
+      schema,
+      resolutions,
+      config: project.config,
+      environment,
+      schemaShapeFile,
+    });
 
     const result = schema.safeParse(object);
     if (!result.success) {
@@ -389,7 +410,7 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
           kind: "schema",
           subject: path || schemaPath,
           message: problem.message,
-          remedy: `Fix the value, or adjust the schema in ${schemaPath} if the shape is wrong.`,
+          remedy: `Fix the value, or adjust the schema in ${schemaShapeFile} if the shape is wrong.`,
         });
       }
     }

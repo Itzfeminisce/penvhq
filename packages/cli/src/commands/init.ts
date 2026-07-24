@@ -26,6 +26,7 @@ import {
   type PenvConfig,
   PenvError,
   RESERVED_TOKENS,
+  SCHEMA_SHAPE_FILE,
   schemaFileOf,
   schemaInsideTree,
   validateSchemaFile,
@@ -38,11 +39,50 @@ import {
   detectFramework,
   srcPrefix,
 } from "../detect.js";
+import { selfContainedSchemaModule } from "../project.js";
 import { type ScaffoldSeam, type Seam, seamFor } from "../seams.js";
+import {
+  buildSnapshotFrom,
+  renderSnapshotModule,
+  SNAPSHOT_FILE,
+  snapshotSpecifier,
+} from "../snapshot.js";
 import { out } from "../style.js";
 import { CHECK, columns, formatSteps, guard, prompt, type Step, tip, WARN, write } from "../ui.js";
 
 export const SCHEMA_FILE = "env.ts";
+
+/**
+ * The shape module, at the project root beside `penv.config.ts`. It is pure — a
+ * `z.object` and the type registration, no `load` — so importing it never loads
+ * configuration, which is what lets a tooling config (drizzle-kit, a CI script)
+ * import the one schema without a side effect instead of hand-inlining a second
+ * `z.object` that drifts (invariant 2). `.penv/env.ts` is the thin wrapper that
+ * re-exports it and calls `load`.
+ *
+ * Fixed at the root rather than following `schemaFile`: `schemaFile` names the
+ * *wrapper* (see {@link writeEnvFile}), and the shape is the one file every
+ * consumer derives from wherever the wrapper is kept.
+ *
+ * `schemaFile` stays on the wrapper `.penv/env.ts` — it is not moved to point at
+ * this shape module — for one deciding reason beyond the harvester. `schemaFile`
+ * is what the value-file walker excludes from the tree (core's `schemaInsideTree`
+ * un-marks exactly that path); the wrapper lives inside `.penv/`, so with
+ * `schemaFile` on it the walker keeps skipping `.penv/env.ts`. Pointing
+ * `schemaFile` at this root-level shape instead would make `schemaInsideTree`
+ * answer "nothing to skip", and the walker would then read `.penv/env.ts` as a
+ * parameter file and break `list`. The wrapper re-exports `schema`, so the
+ * harvester (loadSchema) still reads one `schema` export from `schemaFile` — the
+ * wrapper choice costs it nothing and keeps every other consumer working.
+ *
+ * The path itself (`penv.schema.ts`, at the root) is core's — `watch` watches it,
+ * the grammar excludes it, and one authority answers where it is.
+ */
+export { SCHEMA_SHAPE_FILE };
+
+/** The basename the wrapper imports the shape by, extension appended per {@link shapeSpecifier}. */
+const SCHEMA_SHAPE_BASENAME = "penv.schema";
+
 export const CONFIG_FILE = "penv.config.ts";
 export const TSCONFIG_FILE = "tsconfig.json";
 export const GITIGNORE_FILE = ".gitignore";
@@ -61,7 +101,15 @@ const IMPORTS_PREFIX = "#";
 const PACKAGE_FILE = "package.json";
 
 /** What init touched, so a caller can report it and a test can assert it. */
-export type InitTarget = "penv-dir" | "schema" | "config" | "tsconfig" | "gitignore" | "seam";
+export type InitTarget =
+  | "penv-dir"
+  | "schema"
+  | "env"
+  | "config"
+  | "snapshot"
+  | "tsconfig"
+  | "gitignore"
+  | "seam";
 /**
  * `conflicted` is the one that is not a success. penv wanted to write something,
  * found the user's file already saying something else about the same thing, and
@@ -534,37 +582,30 @@ const DRAFT_HEADER =
   "// must also accept `1`/`0`, or that a string is really a URL. penv scaffolds\n" +
   "// this file once and never regenerates it, so edits here are safe.\n";
 
-export function renderSchemaModule(
-  fields: readonly SchemaField[],
-  draft: boolean,
-  inject = false,
-): string {
+/**
+ * `penv.schema.ts` — the shape, and nothing that loads. This is the side-effect
+ * free half of the split: a `z.object` plus the type registration, so importing
+ * it (or `z.infer<typeof schema>`) never touches configuration. Tooling that
+ * needs the schema imports *this* — never a second `z.object` over the same
+ * store, which is the drift invariant 2 exists to prevent.
+ *
+ * The draft header and the harvested fields land here, because this is where the
+ * parameters live: `penv import` writes the shape it inferred into the shape
+ * module, and `.penv/env.ts` wraps whatever it finds.
+ */
+export function renderSchemaShapeModule(fields: readonly SchemaField[], draft: boolean): string {
   const body =
     fields.length === 0
       ? EMPTY_SCHEMA_BODY
       : fields.map((field) => `  ${field.key}: ${field.type},`).join("\n");
 
-  const loadComment = inject
-    ? "// The loaded, validated values for the current environment. Import this in app\n" +
-      "// code. `inject: true` also copies the values into process.env, for libraries\n" +
-      "// that read process.env directly (WorkOS, Prisma) instead of importing @env.\n"
-    : "// The loaded, validated values for the current environment. Import this in app\n" +
-      "// code. Importing it loads configuration and throws (naming the parameter and\n" +
-      "// environment) if anything required is missing or invalid.\n";
-  const loadCall = inject
-    ? "export const env = load(schema, { inject: true });\n"
-    : "export const env = load(schema);\n";
-
   return (
     `${draft ? DRAFT_HEADER : ""}import { z } from "zod";\n` +
-    `import { load } from "@penvhq/penv";\n` +
     `\n` +
-    `// The shape. Import this (or z.infer<typeof schema>) when you only need the\n` +
-    `// type — tests, tooling — so you don't trigger config loading.\n` +
+    `// The shape — the one definition every consumer derives from. Import this (or\n` +
+    `// z.infer<typeof schema>) when you only need the type — tests, tooling — so you\n` +
+    `// don't trigger config loading. .penv/env.ts wraps it with load().\n` +
     `export const schema = z.object({\n${body}\n});\n` +
-    `\n` +
-    loadComment +
-    loadCall +
     `\n` +
     `// Registers the schema's shape with penv's types (erased at runtime, so\n` +
     `// nothing cycles). This is what makes \`override\` keys in penv.config.ts\n` +
@@ -574,6 +615,63 @@ export function renderSchemaModule(
     `    readonly shape: z.infer<typeof schema>;\n` +
     `  }\n` +
     `}\n`
+  );
+}
+
+/**
+ * The specifier `.penv/env.ts` imports the shape by, relative to wherever the
+ * wrapper is kept. The shape is always at the project root, so this is the climb
+ * back up to it: `.penv/env.ts` → `../penv.schema.js`, a root `env.ts` →
+ * `./penv.schema.js`, `src/lib/env.ts` → `../../penv.schema.js`.
+ *
+ * The `.js` extension is deliberate, not a typo for the `.ts` file it names: a
+ * relative import under `moduleResolution: node16`/`nodenext` must carry the
+ * *output* extension, and TypeScript maps `penv.schema.js` back to
+ * `penv.schema.ts` for the type. Bundler resolution accepts it too, so one
+ * specifier is correct everywhere — an extensionless one would fail to resolve for
+ * a project on nodenext.
+ */
+function shapeSpecifier(schemaFile: string): string {
+  const depth = schemaFile.split("/").length - 1;
+  const climb = depth === 0 ? "./" : "../".repeat(depth);
+  return `${climb}${SCHEMA_SHAPE_BASENAME}.js`;
+}
+
+/**
+ * `.penv/env.ts` — the thin wrapper. It imports the shape from
+ * `penv.schema.ts`, re-exports it so a type-only consumer can reach the schema
+ * through `@env` without loading, and calls `load`. This is the module the
+ * `@env`/`#env` alias resolves to and the module `schemaFile` names, so
+ * application code still `import { env } from "@env"` exactly as before.
+ *
+ * The re-export is what keeps the harvester (loadSchema) working unchanged: it
+ * reads the `schema` export of `schemaFile`, and the wrapper has one.
+ */
+export function renderEnvModule(schemaFile: string, inject = false): string {
+  const loadComment = inject
+    ? "// The loaded, validated values for the current environment. Import this in app\n" +
+      "// code. `inject: true` also copies the values into process.env, for libraries\n" +
+      "// that read process.env directly. `snapshot` lets load() resolve in a bundled or\n" +
+      "// serverless runtime where no penv.config.ts is on disk.\n"
+    : "// The loaded, validated values for the current environment. Import this in app\n" +
+      "// code. Importing it loads configuration and throws (naming the parameter and\n" +
+      "// environment) if anything required is missing or invalid. `snapshot` lets load()\n" +
+      "// resolve in a bundled or serverless runtime where no penv.config.ts is on disk.\n";
+  const loadCall = inject
+    ? "export const env = load(schema, { inject: true, snapshot });\n"
+    : "export const env = load(schema, { snapshot });\n";
+
+  return (
+    `import { load } from "@penvhq/penv";\n` +
+    `import { schema } from "${shapeSpecifier(schemaFile)}";\n` +
+    `import { snapshot } from "${snapshotSpecifier(schemaFile)}";\n` +
+    `\n` +
+    `// Re-exported so type-only consumers can import the shape through @env without\n` +
+    `// triggering config loading — the shape itself lives in ${SCHEMA_SHAPE_FILE}.\n` +
+    `export { schema };\n` +
+    `\n` +
+    loadComment +
+    loadCall
   );
 }
 
@@ -593,7 +691,7 @@ function renderEnvironments(decisions: InitDecisions): string {
       "  // can read off your codebase, and an environment you do not have is worse\n" +
       "  // than one you have not declared yet. Name yours, and give each a provider:\n" +
       '  //   environments: ["development", "production"],\n' +
-      '  //   providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-filesystem" } },\n' +
+      '  //   providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-vault" } },\n' +
       "  environments: [],\n" +
       "\n" +
       "  providers: {},\n"
@@ -945,33 +1043,78 @@ export function ensurePenvDir(root: string): InitStep {
 }
 
 /**
- * Invariant 2: the schema module is scaffolded once and never regenerated. An
- * existing file is the user's, whatever penv would have written instead — and
- * that holds wherever they keep it, so the check is against the chosen path and
- * not the default one.
+ * Invariant 2, first half: the shape module `penv.schema.ts` is scaffolded once
+ * and never regenerated. It holds the parameters (and the draft `penv import`
+ * infers), so an existing one is the user's schema — keeping it, rather than
+ * overwriting it, is the whole point.
  */
-export function writeSchemaFile(
+export function writeSchemaShapeFile(
   root: string,
   fields: readonly SchemaField[],
   draft: boolean,
   decisions: InitDecisions = DEFAULT_DECISIONS,
 ): InitStep {
-  const file = join(root, ...decisions.schemaFile.split("/"));
+  const file = join(root, SCHEMA_SHAPE_FILE);
   if (existsSync(file)) {
     return {
       target: "schema",
+      action: "kept",
+      text: `Kept ${SCHEMA_SHAPE_FILE}`,
+      note: "(yours — penv never regenerates it)",
+    };
+  }
+  // A project scaffolded before the split keeps its `z.object` inside the module
+  // `schemaFile` names (0.5+ also its `PenvSchemaShape` augmentation there), not
+  // in a separate `penv.schema.ts`. Writing one now would stand a second, empty
+  // `z.object` beside the real one — the second drifting schema invariant 2
+  // forbids — and, for a 0.5+ layout, a duplicate `PenvSchemaShape` block that
+  // fails to typecheck (TS2717). So the old file stays the one schema, and penv
+  // says how to split it by hand rather than doing it destructively.
+  const oldLayout = selfContainedSchemaModule(root, decisions.schemaFile);
+  if (oldLayout !== undefined) {
+    return {
+      target: "schema",
+      action: "conflicted",
+      text: `Kept your schema in ${oldLayout}`,
+      note:
+        `(the shape lives there, from before the ${SCHEMA_SHAPE_FILE} split — penv did not add a ` +
+        `second one. To adopt the split: move the \`z.object\` (and any \`declare module\` block) ` +
+        `into ${SCHEMA_SHAPE_FILE}, leaving ${oldLayout} importing \`schema\` from it and calling \`load\`.)`,
+    };
+  }
+  writeFileSync(file, renderSchemaShapeModule(fields, draft), "utf8");
+  return {
+    target: "schema",
+    action: "created",
+    text: `Generated ${SCHEMA_SHAPE_FILE}`,
+    note: draft ? "(draft schema — review it, it's yours)" : "(the shape — yours to edit)",
+  };
+}
+
+/**
+ * Invariant 2, second half: the wrapper `.penv/env.ts` is scaffolded once and
+ * never regenerated either. It is the module the alias resolves to and the
+ * module `schemaFile` names, so it goes wherever the decisions put it — the
+ * default `.penv/env.ts`, or a framework's `src/env.ts`. An existing one is the
+ * user's, whatever penv would have written, and that holds at any path.
+ */
+export function writeEnvFile(root: string, decisions: InitDecisions = DEFAULT_DECISIONS): InitStep {
+  const file = join(root, ...decisions.schemaFile.split("/"));
+  if (existsSync(file)) {
+    return {
+      target: "env",
       action: "kept",
       text: `Kept ${decisions.schemaFile}`,
       note: "(yours — penv never regenerates it)",
     };
   }
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, renderSchemaModule(fields, draft, decisions.inject), "utf8");
+  writeFileSync(file, renderEnvModule(decisions.schemaFile, decisions.inject), "utf8");
   return {
-    target: "schema",
+    target: "env",
     action: "created",
     text: `Generated ${decisions.schemaFile}`,
-    note: draft ? "(draft schema — review it, it's yours)" : "(schema + loader — yours to edit)",
+    note: "(loads the shape — yours to edit)",
   };
 }
 
@@ -985,6 +1128,54 @@ export function writeConfigFile(
   }
   writeFileSync(file, renderConfigModule(decisions), "utf8");
   return { target: "config", action: "created", text: `Generated ${CONFIG_FILE}` };
+}
+
+/**
+ * The config a fresh project embeds in its snapshot — the same object
+ * `renderConfigModule` writes into `penv.config.ts` (defineConfig is identity), so
+ * the scaffolded snapshot and one recomputed from the evaluated config are
+ * byte-identical and `doctor snapshot-stale` does not flag a just-init'd project.
+ */
+function snapshotConfig(decisions: InitDecisions): PenvConfig {
+  const providers: Record<string, { readonly type: string }> = {};
+  for (const environment of decisions.environments) {
+    providers[environment] = { type: "@penvhq/provider-filesystem" };
+  }
+  return {
+    environments: decisions.environments,
+    providers,
+    ...(decisions.schemaFile === DEFAULT_SCHEMA_FILE ? {} : { schemaFile: decisions.schemaFile }),
+    ...(decisions.publicPrefixes.length === 0 ? {} : { publicPrefixes: decisions.publicPrefixes }),
+  };
+}
+
+/**
+ * The committed snapshot `penv.snapshot.ts`, scaffolded once so a new project's
+ * `env.ts` — which the scaffold pre-wires to import it — resolves in a bundled or
+ * serverless runtime with no config on disk. It embeds the config the decisions
+ * describe and every committed sealed value (none, at init); the mutating commands
+ * and `penv snapshot` keep it current thereafter. Write-once, like the config and
+ * schema — an existing one is the user's.
+ */
+export function writeSnapshotModule(
+  root: string,
+  decisions: InitDecisions = DEFAULT_DECISIONS,
+): InitStep {
+  const file = join(root, SNAPSHOT_FILE);
+  if (existsSync(file)) {
+    return { target: "snapshot", action: "kept", text: `Kept ${SNAPSHOT_FILE}` };
+  }
+  writeFileSync(
+    file,
+    renderSnapshotModule(buildSnapshotFrom(root, snapshotConfig(decisions))),
+    "utf8",
+  );
+  return {
+    target: "snapshot",
+    action: "created",
+    text: `Generated ${SNAPSHOT_FILE}`,
+    note: "(committed — the bundle resolves load() from it)",
+  };
 }
 
 export function writeTsconfigAlias(
@@ -1223,8 +1414,15 @@ export function scaffold(
 ): InitStep[] {
   const steps = [
     ensurePenvDir(root),
-    writeSchemaFile(root, fields, draft, decisions),
+    // The shape at the root, then the wrapper that loads it — both write-once.
+    // The shape step needs the decisions too: an old-layout `schemaFile` already
+    // holds the shape, and a second `penv.schema.ts` beside it would not compile.
+    writeSchemaShapeFile(root, fields, draft, decisions),
+    writeEnvFile(root, decisions),
     writeConfigFile(root, decisions),
+    // After the config, whose evaluated shape the snapshot embeds; the wrapper
+    // env.ts written above already imports it.
+    writeSnapshotModule(root, decisions),
     writeTsconfigAlias(root, decisions),
     writeGitignore(root, decisions),
   ];
@@ -1251,10 +1449,17 @@ export function renderInit(result: InitResult): string[] {
       ? { glyph, text: step.text }
       : { glyph, text: step.text, note: step.note };
   });
+  // The shape is in `penv.schema.ts` for a project on the split, but a project
+  // whose old-layout schema init just kept (the `conflicted` step) still holds it
+  // in `schemaFile` — penv wrote no `penv.schema.ts` there, so pointing at one
+  // would name a file that does not exist.
+  const schemaStep = result.steps.find((step) => step.target === "schema");
+  const shapeFile =
+    schemaStep?.action === "conflicted" ? result.decisions.schemaFile : SCHEMA_SHAPE_FILE;
   return [
     ...formatSteps(steps),
     "",
-    `${out.green(CHECK)} ${out.bold("Done.")} Declare your parameters in ${result.decisions.schemaFile}, then:`,
+    `${out.green(CHECK)} ${out.bold("Done.")} Declare your parameters in ${shapeFile}, then:`,
     tip(out.cyan("penv set <key>")),
     ...(result.decisions.environments.length === 0
       ? [

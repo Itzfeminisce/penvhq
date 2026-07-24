@@ -52,7 +52,8 @@ npx penv import .env
 ```
 ✓ Found 34 variables
 ✓ Created .penv/
-✓ Generated .penv/env.ts       (schema + loader — yours to edit)
+✓ Generated penv.schema.ts     (draft schema — review it, it's yours)
+✓ Generated .penv/env.ts       (loads the shape — yours to edit)
 ✓ Added @env alias to tsconfig.json
 ✓ Updated .gitignore
 ✓ Validated configuration
@@ -69,18 +70,25 @@ env.databaseUrl;         // string, validated at boot
 env.redis.password;      // string | undefined (optional in your schema)
 ```
 
-`@env` is an alias for `.penv/env.ts`, the one file `penv init` scaffolds and you own:
+`penv init` scaffolds two modules you own: `penv.schema.ts` — the *shape*, side-effect free, so tests and tooling can import it without loading anything — and `.penv/env.ts`, the thin loader `@env` resolves to:
 
 ```ts
-// .penv/env.ts
+// penv.schema.ts — the shape, at the project root
 import { z } from "zod";
-import { load } from "@penvhq/penv";
 
 export const schema = z.object({ /* your config shape */ });
+```
+
+```ts
+// .penv/env.ts — the loader
+import { load } from "@penvhq/penv";
+import { schema } from "../penv.schema.js";
+
+export { schema };
 export const env = load(schema);   // typed z.infer<typeof schema>, validated at import
 ```
 
-The types come from `z.infer` on your schema; the values are validated against that same schema at boot. One source, so the type you code against and the value you receive can't diverge. Generate a plain `.env` for deploy targets any time:
+The types come from `z.infer` on your schema; the values are validated against that same schema at boot. One source, so the type you code against and the value you receive can't diverge — and because the shape imports without side effects, a `drizzle.config.ts` or CI script `load(schema.pick({ … }))`s the *same* schema instead of hand-writing a second one. Generate a plain `.env` for deploy targets any time:
 
 ```bash
 npx penv generate

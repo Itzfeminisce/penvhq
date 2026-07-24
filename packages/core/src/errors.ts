@@ -138,6 +138,33 @@ export class UnknownEnvironmentError extends PenvError {
   }
 }
 
+/**
+ * A code module is sitting in the parameter tree where a value file was expected.
+ *
+ * Distinct from `UnknownEnvironmentError`: the segment that failed is not a
+ * mistyped environment but a source-file extension (`.ts`, `.js`, …), so reading
+ * `schema.ts` back as "environment `ts` is not declared" is technically true and
+ * humanly useless. The remedy is to move the code out of the tree or declare it
+ * as `schemaFile`, never to add an environment.
+ */
+export class StrayCodeFileError extends PenvError {
+  override readonly name = "StrayCodeFileError";
+  readonly filename: string;
+  readonly extension: string;
+
+  constructor(filename: string, extension: string) {
+    super(
+      "STRAY_CODE_FILE",
+      `${filename} looks like a code module, not a value file`,
+      `Value files are named \`<key>.<environment>\`, but \`.${extension}\` is a source-file ` +
+        "extension. Move the code out of `.penv/`, or declare it as `schemaFile` in " +
+        "penv.config.ts.",
+    );
+    this.filename = filename;
+    this.extension = extension;
+  }
+}
+
 /** penv.config.ts is absent or unreadable. */
 export class ConfigError extends PenvError {
   override readonly name = "ConfigError";

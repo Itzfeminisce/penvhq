@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PenvConfig, ValueFile } from "@penvhq/core";
-import { FilenameGrammarError, UnknownEnvironmentError } from "@penvhq/core";
+import { FilenameGrammarError, StrayCodeFileError, UnknownEnvironmentError } from "@penvhq/core";
 import { runProviderContractSuite } from "@penvhq/provider-contract";
 import { afterAll, describe, expect, it } from "vitest";
 import { createFilesystemProvider } from "./filesystem.js";
@@ -311,6 +311,21 @@ describe("FilesystemProvider", () => {
       writeFileSync(join(provider.root, "database-url.qa"), "value\n", "utf8");
 
       await expect(provider.list()).rejects.toBeInstanceOf(UnknownEnvironmentError);
+    });
+
+    // A developer drops a code module into `.penv/` that is not the declared
+    // schema. The walker hands it to the grammar, which must name the real
+    // problem — a code file in the tree — not report `ts` as an undeclared
+    // environment. Still fatal (invariant 11): `list` backs `load`, so this
+    // surfaces at startup rather than silently listing nothing.
+    it("rejects a stray code module with the helpful stray-code-file error", async () => {
+      const provider = makeProvider();
+      await provider.write(redisPassword, "hunter2");
+      writeFileSync(join(provider.root, "schema.ts"), "export const schema = {};\n", "utf8");
+
+      await expect(provider.list()).rejects.toBeInstanceOf(StrayCodeFileError);
+      await expect(provider.list()).rejects.toThrow(/schema\.ts looks like a code module/);
+      await expect(provider.list()).rejects.toThrow(/declare it as `schemaFile`/);
     });
 
     it("returns nothing when the root does not exist yet", async () => {
