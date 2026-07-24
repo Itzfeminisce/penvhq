@@ -28,9 +28,9 @@ Run `pnpm typecheck && pnpm test && pnpm lint` before proposing a change as done
 
 ## Invariants — do not violate without human sign-off
 
-1. **One schema, never per-environment.** Exactly one schema, in `.penv/env.ts`. Do not add per-environment schemas or fork by env — forking reintroduces the drift penv removes. Per-env requiredness is meta policy, not a second schema.
+1. **One schema, never per-environment.** Exactly one schema — its shape in `penv.schema.ts`, loaded through `.penv/env.ts` (one definition, two modules; the split is not a second representation). Do not add per-environment schemas or fork by env — forking reintroduces the drift penv removes. Per-env requiredness is meta policy, not a second schema.
 
-2. **`env.ts` is scaffolded once, never regenerated.** `penv init` writes it; the user owns it. Do not add codegen that overwrites it. Generate the `@env` alias, not the file. A generated type is a second representation that drifts from the schema — the exact disease penv treats.
+2. **The scaffolded modules are written once, never regenerated.** `penv init` writes `penv.schema.ts` (the shape) and `.penv/env.ts` (the loader); the user owns both. Do not add codegen that overwrites either. Generate the `@env` alias, not the files. The shape module is deliberately side-effect free so tooling can import it without loading configuration — that is what makes the one schema importable everywhere, not a second drifting representation. A generated type is a second representation that drifts from the schema — the exact disease penv treats.
 
 3. **`load` must stay generic.** `load<T extends z.ZodType>(schema: T): z.infer<T>`. If it ever returns a non-inferred type, the entire type-safety story collapses to `unknown`. Keep a type-level test asserting the return type.
 
@@ -87,7 +87,7 @@ Run `pnpm typecheck && pnpm test && pnpm lint` before proposing a change as done
 ## Coding conventions
 
 - TypeScript strict. No `any` in exported surfaces. Prefer inferred types from Zod over hand-written duplicates — duplication is the drift penv opposes; practice it in the code too.
-- `import { env } from "@env"` is the blessed runtime path. Type-only consumers import `schema`, not `env`, to avoid triggering eager load. The `import "@penvhq/penv/config"` form is compat-only and carries an ESM ordering caveat.
+- `import { env } from "@env"` is the blessed runtime path; `import { schema } from` `penv.schema.ts` is the blessed types-and-tooling path. Type-only consumers and tooling configs import `schema`, not `env`, to avoid triggering eager load — a tooling config (drizzle-kit, a CI script) calls `load(schema.pick({ ... }))`, **never a second `z.object` over the same store**. A second shape is the drift these invariants exist to prevent, rebuilt in tooling; a rename must break the tooling config at compile time, which `pick` guarantees and a hand-written duplicate does not. The `import "@penvhq/penv/config"` form is compat-only and carries an ESM ordering caveat.
 - Every new `doctor` check needs a test that fires (true positive) *and* stays quiet when it should (no false positive). Stuck-rotation-vs-atomic-cutover is the canonical reason the negative test matters.
 
 ## Definition of done

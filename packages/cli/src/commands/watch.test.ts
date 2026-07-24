@@ -56,6 +56,46 @@ function writeSchema(root: string, schemaFile: string, body: string): void {
   );
 }
 
+/** The root shape module `penv init` writes — the `z.object` every consumer derives from. */
+function writeShape(root: string, body: string): void {
+  writeFileSync(
+    join(root, "penv.schema.ts"),
+    `import { z } from "zod";\nexport const schema = z.object({${body}});\n`,
+    "utf8",
+  );
+}
+
+/**
+ * The two-module scaffold `penv init` produces: the shape at the project root, and
+ * a thin `.penv/env.ts` wrapper that re-exports it. The wrapper is load-free so the
+ * fixture depends only on `zod` (as every fixture here does) — the harvester reads
+ * its `schema` re-export either way, and what this exercises is that the root shape
+ * is watched at all.
+ */
+function makeSplitProject(shape: string, tree: Readonly<Record<string, string>>): string {
+  mkdirSync(FIXTURE_PARENT, { recursive: true });
+  const root = mkdtempSync(join(FIXTURE_PARENT, "watch-"));
+  created.push(root);
+  writeFileSync(
+    join(root, "penv.config.ts"),
+    `export default ${JSON.stringify(CONFIG)};\n`,
+    "utf8",
+  );
+  mkdirSync(join(root, ".penv"), { recursive: true });
+  writeShape(root, shape);
+  writeFileSync(
+    join(root, ".penv", "env.ts"),
+    'import { schema } from "../penv.schema.js";\nexport { schema };\n',
+    "utf8",
+  );
+  for (const [name, contents] of Object.entries(tree)) {
+    const file = join(root, ".penv", name);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, contents, "utf8");
+  }
+  return root;
+}
+
 function makeProject(fixture: Fixture): string {
   mkdirSync(FIXTURE_PARENT, { recursive: true });
   const root = mkdtempSync(join(FIXTURE_PARENT, "watch-"));
@@ -226,6 +266,30 @@ describe("watch mode", () => {
     expect(results[0]?.ok).toBe(true);
 
     writeSchema(root, "src/env.ts", "databaseUrl: z.url(), apiKey: z.string()");
+
+    await until(() => results.length >= 2);
+    expect(results[results.length - 1]?.ok).toBe(false);
+  });
+
+  /**
+   * The regression the shape/loader split introduced: after `penv init` the
+   * `z.object` lives in `penv.schema.ts` at the root, outside the tree, while
+   * `schemaFile` still names the in-tree wrapper. Nothing watched the root shape,
+   * so editing the one file init labels "yours to edit" fired no re-validation
+   * until an unrelated change happened to trigger one. It gets its own watcher now.
+   */
+  it("re-validates when the root shape penv.schema.ts changes", async () => {
+    const root = makeSplitProject("databaseUrl: z.url()", {
+      "database-url": "postgres://localhost/app",
+    });
+
+    const { results } = watching(root);
+    await until(() => results.length >= 1);
+    expect(results[0]?.ok).toBe(true);
+
+    // A newly declared, required parameter with no value in the tree: the answer
+    // changes, so a watch that caught the edit must report it.
+    writeShape(root, "databaseUrl: z.url(), apiKey: z.string()");
 
     await until(() => results.length >= 2);
     expect(results[results.length - 1]?.ok).toBe(false);
@@ -452,7 +516,7 @@ describe("renderDrift", () => {
             subject: "database-url",
             ref: { namespace: [], name: "database-url" },
             remedy: "penv set database-url --env production",
-            detail: "declared in .penv/env.ts, no value for production",
+            detail: "declared in penv.schema.ts, no value for production",
           },
         ],
         undeclared: [{ ref: { namespace: [], name: "legacy" }, variable: "LEGACY_API_KEY" }],

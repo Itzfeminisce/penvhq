@@ -1,7 +1,7 @@
 /**
  * Reading the user's schema, and the distance between it and the parameter tree.
  *
- * `.penv/env.ts` declares what must exist and the tree holds what does. The gap
+ * The schema declares what must exist and the tree holds what does. The gap
  * between them is the signal `penv validate` exists to raise; this module makes
  * it legible without closing it. Nothing here writes or deletes a value file —
  * a declaration has no value, so materialising one could only invent it, and an
@@ -229,7 +229,7 @@ export function defaultValueOf(node: unknown): string | undefined {
   return undefined;
 }
 
-/** A parameter `.penv/env.ts` declares that the tree has no value for. */
+/** A parameter the schema declares that the tree has no value for. */
 export interface DeclaredDrift {
   /** The parameter id, or the dotted schema path when no filename could reach it. */
   readonly subject: string;
@@ -240,7 +240,7 @@ export interface DeclaredDrift {
   readonly detail: string;
 }
 
-/** A parameter the tree holds a value for that `.penv/env.ts` does not declare. */
+/** A parameter the tree holds a value for that the schema does not declare. */
 export interface UndeclaredDrift {
   readonly ref: ParameterRef;
   /** The generated variable, which is the name the application would have read. */
@@ -267,7 +267,7 @@ export interface OptionalDrift {
 }
 
 /**
- * The distance between `.penv/env.ts` and the tree, in both directions. Named
+ * The distance between the schema and the tree, in both directions. Named
  * `declared`/`undeclared` for the side that has it, not for a verdict: neither
  * direction is by itself an error, and only `validate` decides that. `optional`
  * is the deliberately verdict-free third list — see {@link OptionalDrift}.
@@ -286,6 +286,13 @@ export interface DriftInput {
   readonly resolutions: readonly Resolution[];
   readonly config: PenvConfig;
   readonly environment: string;
+  /**
+   * The file that holds the editable schema shape, named in the remedies below.
+   * Cohort-aware (see `schemaShapeFileOf`): `penv.schema.ts` for a project on the
+   * split, the self-contained `schemaFile` for one scaffolded before it — a
+   * hard-coded path would misdirect whichever cohort it is not from.
+   */
+  readonly schemaShapeFile: string;
 }
 
 /**
@@ -298,7 +305,7 @@ function hasValue(resolution: Resolution): boolean {
 }
 
 export function computeDrift(input: DriftInput): DriftReport {
-  const { schema, resolutions, config, environment } = input;
+  const { schema, resolutions, config, environment, schemaShapeFile } = input;
 
   const valued = new Set(resolutions.filter(hasValue).map((resolution) => resolution.parameter));
 
@@ -315,7 +322,7 @@ export function computeDrift(input: DriftInput): DriftReport {
     const path = leaf.path.join(".");
     const ref = refFromAccessPath(leaf.path);
     const renameRemedy =
-      `Rename the \`${path}\` key in .penv/env.ts — a parameter name is lower-case, ` +
+      `Rename the \`${path}\` key in ${schemaShapeFile} — a parameter name is lower-case, ` +
       `hyphenated, and never a reserved token, so no value file reaches this key.`;
     // Declared, and permanently unreachable — two ways, one consequence. Either
     // the key is outside the name transform's image (`apiURL`), or it spells a
@@ -353,7 +360,7 @@ export function computeDrift(input: DriftInput): DriftReport {
       subject: parameterId(ref),
       ref,
       remedy: `penv set ${[...ref.namespace, ref.name].join("/")} --env ${environment}`,
-      detail: `declared in .penv/env.ts, no value for ${environment}`,
+      detail: `declared in ${schemaShapeFile}, no value for ${environment}`,
     });
   }
 

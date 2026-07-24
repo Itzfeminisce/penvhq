@@ -11,6 +11,7 @@ import {
   IllegalEnvironmentNameError,
   PenvError,
   ReservedTokenError,
+  StrayCodeFileError,
   UnknownEnvironmentError,
 } from "./errors.js";
 import { schemaInsideTree } from "./schema-file.js";
@@ -30,6 +31,15 @@ const BARE_WORD = /^[A-Za-z][A-Za-z0-9_-]*$/;
 
 const ENC = "enc";
 const LOCAL = "local";
+
+/**
+ * Source-file extensions that mark a code module dropped into the tree rather
+ * than a value file. A value file's terminal dot segment is always an
+ * environment, `local`, or `enc` — never one of these — so a file ending in one
+ * is code that wandered in, unless the project declared an environment by that
+ * name, which wins (invariant 10).
+ */
+const CODE_FILE_EXTENSIONS = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"]);
 
 /** The only meta format penv parses. `.toml`/`.yml` are reserved, not implemented. */
 const SUPPORTED_META_FORMAT: MetaFormat = "json";
@@ -250,6 +260,26 @@ export function parseFilename(relativePath: string, config: PenvConfig): ParsedF
       "it has an empty `.` segment",
       "Filenames are split on `.`, so every segment must be non-empty, e.g. `redis/password.production`.",
     );
+  }
+
+  // The stray-code-file diagnosis lives here, not in `asEnvironment`, for two
+  // reasons: `asEnvironment` sees one dot segment and cannot tell whether it is
+  // the file's terminal extension, and a dropped code module fails the grammar
+  // at several points (a bare `schema.ts` at the environment segment, a
+  // `drizzle.config.ts` at the scope-count check) that no per-segment wrap would
+  // catch. `parseFilename` has the whole filename, so it is the one seam that is
+  // both in core's pure grammar — reachable from every provider that parses a
+  // filename, not just the walker — and holds the context the diagnosis needs.
+  // Declared environments win first: an environment literally named `ts` keeps
+  // `<key>.ts` a legal value file (invariant 10), so the check is skipped when
+  // the extension is a declared environment.
+  const extension = segments[segments.length - 1];
+  if (
+    extension !== undefined &&
+    CODE_FILE_EXTENSIONS.has(extension) &&
+    !config.environments.includes(extension)
+  ) {
+    throw new StrayCodeFileError(relativePath, extension);
   }
 
   const name = segments[0];

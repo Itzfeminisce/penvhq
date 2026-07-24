@@ -211,6 +211,45 @@ describe("a schema module with the scaffolded eager load", () => {
   });
 });
 
+/**
+ * The scaffolded two-module layout: a pure `penv.schema.ts` shape beside the
+ * config, and a thin `.penv/env.ts` wrapper that re-exports the shape and loads.
+ * The harvester reads the `schema` export of `schemaFile` (the wrapper), so the
+ * re-export is what keeps it working across the split — nothing here assumes a
+ * single file. (`load` comes from `@penvhq/runtime`, which the CLI resolves;
+ * `@penvhq/penv` re-exports the same `load`, but is not a CLI dependency, so a
+ * fixture uses the runtime directly — the harvesting behaviour is identical.)
+ */
+describe("the scaffolded two-module layout", () => {
+  it("harvests the schema through the wrapper's re-export, and validates", async () => {
+    const root = makeProject({
+      schemaModule:
+        'import { load } from "@penvhq/runtime";\n' +
+        // The `.js` specifier the scaffold now writes — the output extension
+        // nodenext needs, which jiti resolves to `penv.schema.ts` all the same.
+        'import { schema } from "../penv.schema.js";\n' +
+        "export { schema };\n" +
+        "export const env = load(schema);\n",
+      tree: { "database-url": "postgres://localhost/app" },
+    });
+    // The shape beside penv.config.ts — pure, no load, so importing it has no
+    // side effect. It is not under `.penv/`, so the value-file walker never sees it.
+    writeFileSync(
+      join(root, "penv.schema.ts"),
+      'import { z } from "zod";\nexport const schema = z.object({ databaseUrl: z.url() });\n',
+      "utf8",
+    );
+
+    const { schema, issues } = await loadSchema(openProject(root), "development");
+    expect(issues).toEqual([]);
+    expect(schema).toBeDefined();
+
+    const result = await runValidate({ cwd: root, environment: "development" });
+    expect(result.ok).toBe(true);
+    expect(result.parameters).toBe(1);
+  });
+});
+
 describe("a configuration the schema accepts", () => {
   it("passes, and exits zero", async () => {
     const root = makeProject({

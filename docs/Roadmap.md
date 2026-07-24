@@ -31,6 +31,7 @@ Everything below describes the *finished* design (see docs). This table says whe
 | Provider portability as a *proven* claim | Yes | v0.5 (Vault), generalized v0.6 |
 | Provider unification — `sinks` deleted, `@penvhq/provider-github`, `push`/`pull` against every provider | Yes | v0.7 (in progress) |
 | Ambient delivery — blessed `process.env` mirror, schema exclusivity, per-framework seams, `override` rename | RFC only | v0.8 (planned) |
+| Two-module scaffold — `penv.schema.ts` shape + `.penv/env.ts` loader, tooling `load(schema.pick({…}))`, stray-code-file diagnosis | Yes | v0.8 (planned) |
 | Fully-qualified provider `type`, declaration-merged config types, `location` | Yes | v0.7 (in progress) |
 | Install-what-you-use providers — Vault, SSM, Kubernetes, GitHub external to the CLI | Yes | v0.7 (in progress) |
 | `--destination` one-shot push, environment shorthand flags, `ensureTarget` create-on-approval | Yes | v0.7 (in progress) |
@@ -174,7 +175,9 @@ Decided 2026-07-19; the [v0.8 plan](./v0.8-plan.md) owns *how*, the RFC's "The a
 
 - `import "@penvhq/penv/config"` is promoted from compat-only to blessed: it validates through `load()` before writing, writes generated (`override`-bent) names, and is exclusive over the schema — a declared parameter is written when it resolves and deleted when it does not, so nothing configures an SDK behind `@env`'s back.
 - `penv init` scaffolds the import at the detected framework's guaranteed pre-app seam (Next `instrumentation.ts`, Nitro plugin, SvelteKit `hooks.server.ts`, `node --import`), plus the build-time seam for client-inlined variables. Halves scaffolded only where they exist; unknown frameworks are asked, never guessed.
-- `names` becomes `override`, with schema-typed keys: the scaffolded `env.ts` registers the schema's shape on `PenvSchemaShape` (a type-only `declare module`, erased at runtime), and `override` keys narrow to the parameters the schema declares. Breaking; rides the 0.5.0 release train.
+- `names` becomes `override`, with schema-typed keys: the scaffolded `penv.schema.ts` registers the schema's shape on `PenvSchemaShape` (a type-only `declare module`, erased at runtime), and `override` keys narrow to the parameters the schema declares. Breaking; rides the 0.5.0 release train.
+- The schema splits into two scaffolded modules: `penv.schema.ts` at the project root holds the *shape* (the `z.object` plus the `PenvSchemaShape` registration) and loads nothing, and `.penv/env.ts` becomes the thin loader that imports it, re-exports `schema`, and calls `load()`. Making the one schema importable without side effects is what lets a tooling config — `drizzle.config.ts`, a `playwright.config.ts`, a CI script — `load(schema.pick({ … }))` the same schema instead of hand-inlining a second `z.object` that drifts. This is the fourth config consumer (tooling evaluated outside the app runtime), joining `@env`, `inject`, and the client bundle.
+- Stray-code-file diagnosis: a `.ts`/`.js` module dropped into `.penv/` that is not the file `schemaFile` declares is reported as a stray code module (`STRAY_CODE_FILE`) rather than misparsed as a value file — the safeguard that comes with the shape moving to the root, where the parameter tree has nothing to exclude.
 - `doctor` gains `ambient-shadow`.
 
 **Gate to advance:** penv-cloud deletes its WorkOS bridge files, declares the SDK's surface in its schema plus one `override` entry, and WorkOS authenticates with no penv-aware code in the app — including the exclusivity proof: a stray exported `WORKOS_API_HOSTNAME` never reaches the SDK.
