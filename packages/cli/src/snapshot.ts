@@ -191,7 +191,8 @@ export function wireEnvModule(project: Project): WireResult {
 
   let updated = source;
   if (!snapshotInOptions) {
-    const trimmed = (options ?? "").trim();
+    // Multi-line options carry a trailing comma; strip it so appending never doubles it.
+    const trimmed = (options ?? "").trim().replace(/,$/, "");
     const replacement =
       match[1] === ")" || trimmed.length === 0
         ? "load(schema, { snapshot })"

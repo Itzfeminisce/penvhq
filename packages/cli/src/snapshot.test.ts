@@ -205,6 +205,18 @@ describe("wireEnvModule", () => {
     expect(wrapperText(project)).toContain("load(schema, { inject: true, snapshot })");
   });
 
+  it("strips a multi-line option list's trailing comma rather than doubling it", () => {
+    const project = withWrapper(
+      'export const env = load(schema, { inject: [\n    "workos-api-key",\n  ],\n});',
+    );
+
+    wireEnvModule(project);
+
+    const text = wrapperText(project);
+    expect(text).not.toContain(",,");
+    expect(text).toContain("], snapshot })");
+  });
+
   it('is not fooled by the word "snapshot" inside an option string', () => {
     const project = withWrapper('export const env = load(schema, { inject: ["snapshot-url"] });');
 
