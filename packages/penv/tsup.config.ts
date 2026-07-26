@@ -41,6 +41,9 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   target: "node20",
+  // `import.meta.url` in the CJS output: the config loader resolves jiti lazily
+  // through `createRequire`, and both builds need a base path for it.
+  shims: true,
   external: ["zod", "jiti", "@napi-rs/keyring", "readline/promises", "node:readline/promises"],
   noExternal: [/^@penvhq\//],
 });

@@ -9,10 +9,10 @@
  * and calls into this module, so nothing here may become a promise.
  */
 
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
 import {
   ConfigError,
   IllegalEnvironmentNameError,
@@ -23,8 +23,28 @@ import { isLegalEnvironmentName, validateEnvironmentNames } from "./grammar.js";
 import { validateKeys } from "./keys.js";
 import { validatePublicPrefixes, validateSchemaFile } from "./schema-file.js";
 import type { PenvConfig, ValidatedProviders } from "./types.js";
+import { own } from "./types.js";
 
 const CONFIG_FILENAMES = ["penv.config.ts", "penv.config.js", "penv.config.mjs"] as const;
+
+/**
+ * jiti is a TypeScript loader, and only the config-file branch of resolution
+ * needs one — a `load()` that resolves from an embedded snapshot never evaluates
+ * a `.ts` module. A static import would put jiti in the import graph of every
+ * bundle that reaches this module, so it is required at first use instead: the
+ * runtime chunk then names `jiti` nowhere, and a serverless or edge bundle stops
+ * carrying a loader it cannot invoke.
+ *
+ * `require` rather than `await import` because `load(schema)` is synchronous and
+ * must stay so (invariant 3). It resolves from this module's own package, where
+ * jiti is a declared dependency.
+ */
+let jitiModule: typeof import("jiti") | undefined;
+
+function jitiApi(): typeof import("jiti") {
+  jitiModule ??= createRequire(import.meta.url)("jiti") as typeof import("jiti");
+  return jitiModule;
+}
 
 /**
  * A schema that guards itself with `import "server-only"` — the standard Next.js
@@ -41,7 +61,7 @@ const CONFIG_FILENAMES = ["penv.config.ts", "penv.config.js", "penv.config.mjs"]
  * the probe misses and resolution is left exactly as it was.
  */
 function serverOnlyAlias(file: string): Record<string, string> | undefined {
-  const probe = createJiti(file, { moduleCache: false });
+  const probe = jitiApi().createJiti(file, { moduleCache: false });
   const resolved = probe.esmResolve("server-only", {
     try: true,
     conditions: ["node", "react-server", "import", "require", "default"],
@@ -69,7 +89,7 @@ function serverOnlyAlias(file: string): Record<string, string> | undefined {
  */
 export function jitiFor(file: string) {
   const alias = serverOnlyAlias(file);
-  return createJiti(file, {
+  return jitiApi().createJiti(file, {
     interopDefault: false,
     moduleCache: false,
     ...(alias === undefined ? {} : { alias }),
@@ -114,22 +134,130 @@ export function defineConfig<const C extends PenvConfig>(
   return config;
 }
 
-/** The nearest config file at or above `cwd`, or `undefined` at the root. */
-export function findConfigFile(cwd: string): string | undefined {
+/**
+ * Files that mark the outermost directory one project can span.
+ *
+ * Deliberately not `turbo.json`: Turborepo's Package Configurations put one
+ * inside a workspace package, so treating it as a root would hide the monorepo's
+ * own config from every app under it. Every turborepo root carries one of these.
+ */
+const WORKSPACE_MARKERS = [
+  ".git",
+  "pnpm-workspace.yaml",
+  "pnpm-workspace.yml",
+  "lerna.json",
+] as const;
+
+function declaresWorkspaces(manifest: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(manifest, "utf8"));
+    return typeof parsed === "object" && parsed !== null && "workspaces" in parsed;
+  } catch {
+    return false;
+  }
+}
+
+/** True for a directory nothing above can still be part of the same project. */
+function isWorkspaceRoot(directory: string): boolean {
+  for (const marker of WORKSPACE_MARKERS) {
+    if (existsSync(resolve(directory, marker))) {
+      return true;
+    }
+  }
+  const manifest = resolve(directory, "package.json");
+  return existsSync(manifest) && declaresWorkspaces(manifest);
+}
+
+/**
+ * The directories a config search may look in, nearest first.
+ *
+ * The walk is bounded, and that is the whole point of this function existing.
+ * It stops at the workspace root — the outermost directory a single project can
+ * span — and, failing any workspace marker, at the outermost directory still
+ * carrying a `package.json`. A walk that climbs to the filesystem root eventually
+ * finds a `penv.config.ts` belonging to something else: in a container image, an
+ * unrelated config a layer above `/var/task` is a config penv would evaluate and
+ * then resolve the whole application from.
+ *
+ * A package boundary is deliberately *not* a stop: an app in `apps/web` with its
+ * own `package.json` reads the monorepo's config at the root, so the walk climbs
+ * through package boundaries and halts only at the workspace that contains them.
+ * With neither marker anywhere above, the walk is unbounded exactly as before —
+ * a bare directory tree with no project shape has no boundary to honor.
+ */
+function configSearchPath(cwd: string): string[] {
+  const chain: string[] = [];
   let directory = resolve(cwd);
   for (;;) {
-    for (const filename of CONFIG_FILENAMES) {
-      const candidate = resolve(directory, filename);
-      if (existsSync(candidate) && statSync(candidate).isFile()) {
-        return candidate;
-      }
+    chain.push(directory);
+    if (isWorkspaceRoot(directory)) {
+      return chain;
     }
     const parent = dirname(directory);
     if (parent === directory) {
-      return undefined;
+      break;
     }
     directory = parent;
   }
+
+  let outermostPackage = -1;
+  for (const [index, candidate] of chain.entries()) {
+    if (existsSync(resolve(candidate, "package.json"))) {
+      outermostPackage = index;
+    }
+  }
+  return outermostPackage === -1 ? chain : chain.slice(0, outermostPackage + 1);
+}
+
+function configFileIn(directory: string): string | undefined {
+  for (const filename of CONFIG_FILENAMES) {
+    const candidate = resolve(directory, filename);
+    if (existsSync(candidate) && statSync(candidate).isFile()) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+export interface ConfigSearch {
+  /** The config file penv will use, or `undefined`. */
+  readonly file: string | undefined;
+  /**
+   * A config file that exists above the project boundary and was deliberately
+   * not taken. Reported so a bounded search that changes the answer can say so —
+   * a walk that quietly stops one directory short of the config a developer
+   * expects is the same silent surprise as one that climbs too far.
+   */
+  readonly beyondBoundary: string | undefined;
+}
+
+/** The config search, boundary and all. {@link findConfigFile} is the usual door. */
+export function searchConfigFile(cwd: string): ConfigSearch {
+  const searched = configSearchPath(cwd);
+  for (const directory of searched) {
+    const file = configFileIn(directory);
+    if (file !== undefined) {
+      return { file, beyondBoundary: undefined };
+    }
+  }
+
+  let directory = searched[searched.length - 1] ?? resolve(cwd);
+  for (;;) {
+    const parent = dirname(directory);
+    if (parent === directory) {
+      return { file: undefined, beyondBoundary: undefined };
+    }
+    directory = parent;
+    const file = configFileIn(directory);
+    if (file !== undefined) {
+      return { file: undefined, beyondBoundary: file };
+    }
+  }
+}
+
+/** The nearest config file at or above `cwd`, within the project boundary. */
+export function findConfigFile(cwd: string): string | undefined {
+  return searchConfigFile(cwd).file;
 }
 
 export function loadConfigFrom(file: string): PenvConfig {
@@ -196,7 +324,7 @@ const LEGACY_PROVIDER_TYPES: Readonly<Record<string, string>> = {
 const PACKAGE_NAME = /^(@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/;
 
 function validateProviderType(environment: string, type: string): PenvError | undefined {
-  const legacy = LEGACY_PROVIDER_TYPES[type];
+  const legacy = own(LEGACY_PROVIDER_TYPES, type);
   if (legacy !== undefined) {
     return new PenvError(
       "PROVIDER_TYPE_LEGACY",
@@ -310,7 +438,7 @@ export function validateConfig(config: PenvConfig): PenvError[] {
   const providerEntries = providers as Readonly<Record<string, unknown>>;
 
   for (const environment of declared) {
-    const provider = providerEntries[environment];
+    const provider = own(providerEntries, environment);
     if (provider === undefined) {
       errors.push(
         new PenvError(

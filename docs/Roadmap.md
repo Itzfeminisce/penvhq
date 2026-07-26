@@ -30,6 +30,7 @@ Everything below describes the *finished* design (see docs). This table says whe
 | AWS SSM, Kubernetes providers | Yes | v0.6 |
 | Provider portability as a *proven* claim | Yes | v0.5 (Vault), generalized v0.6 |
 | Provider unification — `sinks` deleted, `@penvhq/provider-github`, `push`/`pull` against every provider | Yes | v0.7 (in progress) |
+| Embedded snapshot — `penv snapshot`, `load()` in bundled/serverless runtimes, `source` pinning, digest staleness (`penv snapshot --check`) | Yes | v0.8 |
 | Ambient delivery — blessed `process.env` mirror, schema exclusivity, per-framework seams, `override` rename | RFC only | v0.8 (planned) |
 | Two-module scaffold — `penv.schema.ts` shape + `.penv/env.ts` loader, tooling `load(schema.pick({…}))`, stray-code-file diagnosis | Yes | v0.8 (planned) |
 | Fully-qualified provider `type`, declaration-merged config types, `location` | Yes | v0.7 (in progress) |

@@ -10,6 +10,7 @@
 
 import { PenvError, UnknownEnvironmentError } from "./errors.js";
 import type { Meta, MetaBlock, PenvConfig } from "./types.js";
+import { own } from "./types.js";
 
 /** The container key. It is not a policy field and never reaches effective meta. */
 const ENVIRONMENTS_KEY = "environments";
@@ -47,7 +48,7 @@ export function effectiveMeta(meta: Meta | undefined, environment: string | unde
 
   if (environment === undefined) return merged;
 
-  const block = meta.environments?.[environment];
+  const block = own(meta.environments, environment);
   if (block) copyPolicyKeys(block, merged);
 
   return merged;

@@ -379,6 +379,8 @@ The eager export never gets between the CLI and your schema. `penv validate` / `
 
 The schema module may also guard itself with `import "server-only"` — the Next.js pattern for a module that must never reach a client bundle. The CLI resolves that import the way a React Server environment would (its empty, no-throw variant), so the guard protects your app without blinding penv's own tooling.
 
+When a load does not do what you expect, `PENV_DEBUG=1` makes it say so: which environment it settled on, which source answered and where that source was — a config-file path, or the embedded snapshot — and which value file won for every parameter. The same provenance is folded into the failure itself, so a `ValidationError` names the source that produced the values it is rejecting.
+
 A `process.env`-populating compatibility form exists for adopting penv without changing existing code:
 
 ```ts
@@ -408,11 +410,23 @@ export { schema };
 export const env = load(schema, { snapshot });
 ```
 
-The snapshot embeds the evaluated config and **every committed sealed (`.enc`) value** — ciphertext, exactly what a git clone already sees, keyed by its filename address. It never embeds plaintext, at any scope, and never a `.local` value. At runtime, file discovery still comes first: on disk, in development, a live edit to a value file wins and the snapshot is never consulted. Only when no `penv.config.ts` is found — the bundle — does `load()` resolve from the snapshot, decrypting under the same `PENV_KEY_*` a filesystem load would.
+The snapshot embeds the evaluated config and **every committed sealed (`.enc`) value** — ciphertext, exactly what a git clone already sees, keyed by its filename address. It never embeds plaintext, at any scope, and never a `.local` value. At runtime, file discovery still comes first: on disk, in development, a live edit to a value file wins and the snapshot is never consulted while the config file can serve. In the bundle, `load()` resolves from the snapshot instead, decrypting under the same `PENV_KEY_*` a filesystem load would.
 
-One sharp edge follows from disk-first: the fallback triggers on the *config file's* absence, not the tree's. A deployment that ships a `penv.config.ts` in some ancestor of the working directory — a traced-in copy, a monorepo root above a function — takes the filesystem path even with no `.penv/` beside it, and required parameters then fail validation instead of resolving from the snapshot. Don't ship the config into a bundle; the snapshot replaces it there.
+Finding a config file is not the same as finding a project. A `penv.config.ts` with **no `.penv/` tree beside it** is a bundling artifact — a tracer copied the config in because something referenced it, and left the tree behind because nothing imports it — so `load()` resolves from the snapshot there rather than throwing, warning on stderr as it does (it is never silent). That check happens *before* the config is evaluated, which is what keeps the fallback narrow: with a tree present you are in a real project, and your config must load. A syntax error, a missing default export, an import that does not resolve — all still fail the load, because a broken config is your file to fix and a warning you can scroll past is not an answer. Everything downstream is your data and is never fallen back from either: an undecryptable value, an undeclared environment, and a tree that is present but incomplete all still throw.
+
+The config search is bounded, too. penv climbs to the workspace root — a directory holding `.git`, `pnpm-workspace.yaml`, `lerna.json`, or a `package.json` declaring `workspaces` — and no further, so an unrelated `penv.config.ts` sitting a layer above `/var/task` in a container image is never picked up. A package boundary is not a stop: an app in `apps/web` still reads the config at the monorepo root. If a config *does* exist just outside the boundary, `load()` names it rather than skipping it quietly.
+
+Pin the source when a deployment knows which one it runs on:
+
+```ts
+export const env = load(schema, { snapshot, source: "snapshot" });
+```
+
+`source` is `"auto"` by default (the behavior above). `"disk"` refuses the snapshot and `"snapshot"` refuses the filesystem — each fails by name instead of quietly resolving from the other.
 
 Commit `penv.snapshot.ts` beside `penv.config.ts`. The mutating commands (`set`, `encrypt`, `remove`, `mv`, `rotate`, `import`, `pull`, `fill`) refresh it for you whenever a committed sealed value or the config changes, and `penv doctor` reports `snapshot-stale` when it has drifted — run `penv snapshot` to refresh it. A `penv init` on a new project scaffolds it and the pre-wired `env.ts` from the start.
+
+A snapshot that has fallen behind is a build that bakes one value in and serves another, so staleness is checkable rather than assumed. Every snapshot carries a digest of the config and sealed values it projects. `penv snapshot --check` recomputes it, writes nothing, and exits non-zero when the committed snapshot no longer matches or is missing entirely — the shape CI wants. And when `load()` holds both sources at once, in development, it compares them and warns on drift; the disk tree still wins, drift is only ever reported.
 
 Because the snapshot carries sealed records only, a **plaintext** team-scope value is invisible to a bundle — value files are gitignored, so neither git nor the snapshot ships it. `penv doctor` flags this as `bundle-invisible-plaintext`: seal it (`penv encrypt <key> --env <env>`) to ship it, or supply it to the runtime another way.
 
@@ -692,6 +706,7 @@ Reporting is all it does. penv will not materialise a value file from a declarat
 | `penv list` | List parameters. |
 | `penv encrypt` / `penv decrypt` | Encrypt / decrypt one parameter's value file at one scope. Both need `--env`. |
 | `penv key create` | Generate a key for an environment. penv prints it and stores nothing. |
+| `penv snapshot` | Generate `penv.snapshot.ts` and wire it into `env.ts`, so `load()` resolves in a bundled or serverless runtime. `--check` reports whether the committed snapshot is current, writes nothing, and exits non-zero when it is not. |
 | `penv validate` | Validate configuration against the schema; non-zero on failure. |
 | `penv doctor` | Report drift, missing, unused, weak, fallback, plaintext-secret, encryption, and rotation issues. |
 | `penv watch` | Re-validate whenever `.penv/` or `penv.config.ts` changes. Supports `--env`. |

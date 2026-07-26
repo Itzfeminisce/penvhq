@@ -17,47 +17,31 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PenvConfig, PenvSnapshot } from "@penvhq/core";
-import { formatValueFile, schemaFileOf } from "@penvhq/core";
-import { createFilesystemProvider, type FilesystemProvider } from "@penvhq/provider-filesystem";
+import type { PenvConfig, PenvSnapshot, SyncValueSource } from "@penvhq/core";
+import { schemaFileOf, sealedSnapshotValues, snapshotDigest } from "@penvhq/core";
+import { createFilesystemProvider } from "@penvhq/provider-filesystem";
 import { localTree, PENV_DIR, type Project } from "./project.js";
 
 export const SNAPSHOT_FILE = "penv.snapshot.ts";
 
-/** The sealed value files of a tree, keyed by grammar address, code-unit sorted. */
-function sealedValues(tree: FilesystemProvider): Record<string, string> {
-  const collected: Record<string, string> = {};
-  for (const file of tree.listSync()) {
-    // Sealed records only: skip all plaintext, and skip both `.local` scopes —
-    // personal overrides are never shipped, encrypted or not.
-    if (!file.encrypted) {
-      continue;
-    }
-    if (file.scope.kind === "local" || file.scope.kind === "environment-local") {
-      continue;
-    }
-    const stored = tree.readSync(file);
-    if (stored === undefined) {
-      continue;
-    }
-    collected[formatValueFile(file)] = stored;
-  }
-  const values: Record<string, string> = {};
-  for (const key of Object.keys(collected).sort()) {
-    values[key] = collected[key] as string;
-  }
-  return values;
+/**
+ * Which values a snapshot embeds, and the digest binding it to them, both come
+ * from core — the runtime recomputes the same digest to detect drift, and two
+ * implementations of "the sealed inputs" would drift from each other first.
+ */
+function snapshotOf(config: PenvConfig, tree: SyncValueSource): PenvSnapshot {
+  const values = sealedSnapshotValues(tree);
+  return { v: 1, config, values, digest: snapshotDigest(config, values) };
 }
 
 /** The snapshot for a root and its evaluated config — the seam `init` builds from. */
 export function buildSnapshotFrom(root: string, config: PenvConfig): PenvSnapshot {
-  const tree = createFilesystemProvider({ root: join(root, PENV_DIR), config });
-  return { v: 1, config, values: sealedValues(tree) };
+  return snapshotOf(config, createFilesystemProvider({ root: join(root, PENV_DIR), config }));
 }
 
 /** Pure: the snapshot an open project's local tree and config imply. */
 export function buildSnapshot(project: Project): PenvSnapshot {
-  return { v: 1, config: project.config, values: sealedValues(localTree(project)) };
+  return snapshotOf(project.config, localTree(project));
 }
 
 /** The deterministic module text — a recompute of this is what drift-detects. */
@@ -97,6 +81,28 @@ export function writeSnapshotFile(project: Project): SnapshotWriteResult {
   }
   writeFileSync(path, wanted, "utf8");
   return { file: SNAPSHOT_FILE, action: existing === undefined ? "created" : "updated" };
+}
+
+/** What a recompute says about the committed snapshot. */
+export type SnapshotStatus = "absent" | "stale" | "current";
+
+/**
+ * Recompute and compare, writing nothing — `writeSnapshotFile`'s question
+ * without its answer. A build bakes the snapshot's values in, so a snapshot that
+ * has fallen behind the tree is a deploy that serves values nobody set; CI needs
+ * to be able to ask, and to fail.
+ */
+export function checkSnapshotFile(project: Project): { file: string; status: SnapshotStatus } {
+  const path = join(project.root, SNAPSHOT_FILE);
+  if (!existsSync(path)) {
+    return { file: SNAPSHOT_FILE, status: "absent" };
+  }
+  const wanted = renderSnapshotModule(buildSnapshot(project));
+  const existing = readFileSync(path, "utf8");
+  return {
+    file: SNAPSHOT_FILE,
+    status: equalsIgnoringEol(existing, wanted) ? "current" : "stale",
+  };
 }
 
 /** Whether the project commits a snapshot — the opt-in every mutation hook checks. */

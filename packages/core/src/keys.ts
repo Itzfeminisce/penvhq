@@ -22,6 +22,7 @@
 
 import { ConfigError, PenvError } from "./errors.js";
 import type { KeyConfig, PenvConfig } from "./types.js";
+import { own } from "./types.js";
 
 /** The one algorithm's key length. A key of any other size is not a key penv can use. */
 export const KEY_BYTES = 32;
@@ -246,7 +247,7 @@ export function nullKeySource(environment: string): KeySource {
  * find.
  */
 export function resolveKeySource(config: PenvConfig, environment: string): KeySource {
-  const declared = config.keys?.[environment];
+  const declared = own(config.keys, environment);
   if (declared === undefined) {
     return nullKeySource(environment);
   }
@@ -314,7 +315,7 @@ export function validateKeys(config: PenvConfig, declared: ReadonlySet<string>):
       );
       continue;
     }
-    const entry = entries[environment];
+    const entry = own(entries, environment);
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
       errors.push(
         new ConfigError(

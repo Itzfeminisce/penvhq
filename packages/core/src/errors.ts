@@ -82,19 +82,29 @@ export class ValidationError extends PenvError {
   override readonly name = "ValidationError";
   readonly environment: string;
   readonly issues: readonly { readonly parameter: string; readonly message: string }[];
+  /**
+   * Where the values came from — a config-file path, or the embedded snapshot.
+   * Named in the message because "which of the two sources did penv actually
+   * read" is the first question a failure in a bundled runtime raises, and
+   * answering it from the error beats reading the bundle to find out.
+   */
+  readonly source: string | undefined;
 
   constructor(
     environment: string,
     issues: readonly { readonly parameter: string; readonly message: string }[],
+    source?: string,
   ) {
     const lines = issues.map((i) => `  ${i.parameter}: ${i.message}`).join("\n");
+    const via = source === undefined ? "" : `, resolved via ${source}`;
     super(
       "VALIDATION_FAILED",
-      `Configuration for environment ${environment} does not match the schema:\n${lines}`,
+      `Configuration for environment ${environment} does not match the schema${via}:\n${lines}`,
       `Fix the values above, or adjust the schema in .penv/env.ts if the shape is wrong.`,
     );
     this.environment = environment;
     this.issues = issues;
+    this.source = source;
   }
 }
 

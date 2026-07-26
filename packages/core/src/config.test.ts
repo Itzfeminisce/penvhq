@@ -93,6 +93,64 @@ describe("findConfigFile", () => {
     // A temp dir has no penv.config.* above it, so the walk reaches the root.
     expect(findConfigFile(dir)).toBeUndefined();
   });
+
+  it("stops at the workspace root rather than climbing past it", () => {
+    // The shape of a container image: a config one layer above the deployed
+    // bundle is a config belonging to something else. Climbing to it would
+    // resolve the whole application from a stranger's file.
+    const outer = makeDir();
+    writeFileSync(join(outer, "penv.config.ts"), VALID_SOURCE, "utf8");
+    const bundle = join(outer, "var", "task");
+    mkdirSync(bundle, { recursive: true });
+    writeFileSync(join(bundle, ".git"), "gitdir: elsewhere\n", "utf8");
+
+    expect(findConfigFile(bundle)).toBeUndefined();
+  });
+
+  it("stops at the outermost package.json when no workspace marker is above it", () => {
+    const outer = makeDir();
+    writeFileSync(join(outer, "penv.config.ts"), VALID_SOURCE, "utf8");
+    const bundle = join(outer, "var", "task");
+    mkdirSync(bundle, { recursive: true });
+    writeFileSync(join(bundle, "package.json"), '{ "name": "bundle" }\n', "utf8");
+
+    expect(findConfigFile(bundle)).toBeUndefined();
+  });
+
+  it("climbs through a package boundary to the workspace that contains it", () => {
+    // A monorepo app reads the config at the repo root, so a package.json in
+    // `apps/web` must not stop the walk — only the workspace root does.
+    const root = makeProject(VALID_SOURCE);
+    writeFileSync(join(root, "pnpm-workspace.yaml"), 'packages:\n  - "apps/*"\n', "utf8");
+    const app = join(root, "apps", "web");
+    mkdirSync(app, { recursive: true });
+    writeFileSync(join(app, "package.json"), '{ "name": "web" }\n', "utf8");
+
+    expect(findConfigFile(app)).toBe(resolve(root, "penv.config.ts"));
+  });
+
+  it("treats a package.json with `workspaces` as the workspace root", () => {
+    const root = makeProject(VALID_SOURCE);
+    writeFileSync(join(root, "package.json"), '{ "workspaces": ["apps/*"] }\n', "utf8");
+    const app = join(root, "apps", "web");
+    mkdirSync(app, { recursive: true });
+    writeFileSync(join(app, "package.json"), '{ "name": "web" }\n', "utf8");
+
+    expect(findConfigFile(app)).toBe(resolve(root, "penv.config.ts"));
+  });
+});
+
+describe("an environment named after an Object.prototype member", () => {
+  it("is reported as having no provider, not as having an invalid one", () => {
+    // A bare index into `providers` for `constructor` answers with `Object` — a
+    // provider penv was never given, diagnosed as the wrong problem.
+    const config: PenvConfig = {
+      environments: ["constructor"],
+      providers: {},
+    };
+
+    expect(codesFor(config)).toContain("PROVIDER_MISSING");
+  });
 });
 
 describe("loadConfigFrom", () => {

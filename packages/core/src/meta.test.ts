@@ -338,3 +338,11 @@ describe("serializeMeta", () => {
     expect(effectiveMeta(reparsed, "production")["alerts"]).toEqual({ channel: "#incidents" });
   });
 });
+
+describe("an environment named after an Object.prototype member", () => {
+  it("inherits the base rather than merging the prototype", () => {
+    const meta: Meta = { owner: "platform-team", environments: { production: { required: true } } };
+
+    expect(effectiveMeta(meta, "constructor")).toEqual({ owner: "platform-team" });
+  });
+});

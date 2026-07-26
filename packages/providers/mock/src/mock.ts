@@ -23,7 +23,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Meta, ParameterRef, RetainingProvider, Scope, ValueFile } from "@penvhq/core";
-import { assertNever } from "@penvhq/core";
+import { assertNever, own } from "@penvhq/core";
 
 export interface MockProviderOptions {
   /**
@@ -113,7 +113,7 @@ export class MockProvider implements RetainingProvider {
   }
 
   async read(file: ValueFile): Promise<string | undefined> {
-    const versions = this.#load().values[valueKey(file)]?.versions;
+    const versions = own(this.#load().values, valueKey(file))?.versions;
     // The newest version is the current value; an empty history reads as absent.
     return versions === undefined || versions.length === 0
       ? undefined
@@ -127,7 +127,7 @@ export class MockProvider implements RetainingProvider {
    * and penv's timer and the store's retention do not commute.
    */
   async readPrevious(file: ValueFile): Promise<string | undefined> {
-    const versions = this.#load().values[valueKey(file)]?.versions;
+    const versions = own(this.#load().values, valueKey(file))?.versions;
     return versions === undefined || versions.length < 2
       ? undefined
       : versions[versions.length - 2];
@@ -136,7 +136,7 @@ export class MockProvider implements RetainingProvider {
   async write(file: ValueFile, value: string): Promise<void> {
     const store = this.#load();
     const key = valueKey(file);
-    const existing = store.values[key];
+    const existing = own(store.values, key);
     // Append a version rather than overwrite, so the prior value survives as history.
     const versions = existing === undefined ? [] : [...existing.versions];
     versions.push(value);
@@ -158,7 +158,7 @@ export class MockProvider implements RetainingProvider {
   }
 
   async readMeta(ref: ParameterRef): Promise<Meta | undefined> {
-    const stored = this.#load().meta[metaKey(ref)];
+    const stored = own(this.#load().meta, metaKey(ref));
     return stored === undefined ? undefined : (JSON.parse(stored) as Meta);
   }
 

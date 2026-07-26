@@ -75,4 +75,21 @@ describe("createSnapshotProvider", () => {
       }),
     ).toBeUndefined();
   });
+
+  // The cascade ends at the unscoped scope, which `formatValueFile` writes as a
+  // bare name with no suffix — so a parameter called `constructor` addresses
+  // `Object.prototype`, and a bare index answered with a function for a
+  // parameter the snapshot has no value for.
+  it.each(["constructor", "toString", "valueOf", "hasOwnProperty"])(
+    "does not read `%s` off Object.prototype for a parameter it does not hold",
+    (name) => {
+      const provider = createSnapshotProvider(
+        snapshot({ [`${name}.production.enc`]: "penv:1:p:a:b" }),
+      );
+
+      expect(
+        provider.readSync({ namespace: [], name, scope: { kind: "unscoped" }, encrypted: false }),
+      ).toBeUndefined();
+    },
+  );
 });
