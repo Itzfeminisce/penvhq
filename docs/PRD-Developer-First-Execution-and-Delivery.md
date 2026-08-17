@@ -405,3 +405,98 @@ Penv Cloud may add an optional hosted delivery control plane.
 ```
 
 Each layer has a single job and does not silently take over the other two.
+
+## Adoption friction review — to seal before build
+
+The abstractions above are correct, but several charge the newcomer at the exact moment they are
+deciding whether to keep penv. Each item below names the friction and the seal — a decision to
+record, wording to fix, or a cost accepted with its mitigation. Resolving this section closes the
+PRD for implementation.
+
+### 1. Where the wrapper lives
+
+The PRD's examples show a human typing `penv run --env development --source project -- pnpm dev`.
+That changes every developer's daily muscle memory, and forgetting it is a refusal. The design
+already permits the cheaper pattern: the developer commits the wrapper *inside* the script —
+`"dev": "penv run … -- next dev"` — and the daily command stays `pnpm dev`, with the package
+manager still owning lifecycle hooks because it still runs the script.
+**Seal:** bless in-script wrapping as the documented development pattern. `init` shows the exact
+line to paste (it still never edits scripts); wrapper-outside remains the CI/production form.
+
+### 2. `--source` on every run
+
+Only two sources exist, and one is for CI/artifacts. `--source project` is ceremony for the
+interactive user.
+**Seal:** `--source` defaults to `project`; `snapshot` must always be named. This amends "public
+scripts always name a source explicitly" from command-required to recommended-in-scripts.
+
+### 3. `--env` on every command
+
+Dotenv users typed nothing; penv asks for `--env` on `run`, `pull`, `set`, and everything else. A
+`defaultEnvironment` declared in `penv.config.ts` is a recorded decision, not inference —
+the environments-are-a-whitelist invariant stands untouched.
+**Seal:** add declared `defaultEnvironment`; `init` proposes `development` when the development
+cascade was adopted. CI continues to name `--env` explicitly.
+
+### 4. Three version concepts
+
+Launcher, engine, and runtime dependency are the right machinery, but if any happy-path output or
+error asks the user to reason about *which* of three versions is wrong, the abstraction leaks.
+**Seal:** one user-visible version. `penv --version` prints one line; the split surfaces only in
+the unsupported-manifest error, which prints the exact remedial command and nothing to diagnose.
+
+### 5. A name that needs a footnote
+
+`_journal` requires a disclaimer in this very PRD ("not append-only secret history"). A name that
+must be explained mis-teaches at first sight, and the layout is committed — renaming later is a
+migration.
+**Seal:** decide the name before code exists. Recommended: `.penv/state/`. Otherwise accept
+`_journal` explicitly and delete this item.
+
+### 6. Adding an official extension
+
+The trust model — age gates, trust blocks, acknowledgements — exists for strangers. If
+`penv add @penvhq/provider-vault` asks even one trust question, the safety abstraction has taxed
+the blessed path.
+**Seal:** official-scope `add` verifies provenance silently and asks nothing beyond the config
+edit it already offers.
+
+### 7. The gap between `add` and first use
+
+`add` records the extension; onboarding (`penv cloud login`) is a second command the user must
+discover.
+**Seal:** `add` ends by offering the provider's declared onboarding step — the same
+offer-never-assume rule as the config edit.
+
+### 8. The key-authority question (Cloud boundary)
+
+The one hard question in the whole journey, asked during login, permanent per environment, and
+naturally phrased in cryptography. It cannot be removed, but it can be priced in one sentence per
+option.
+**Seal (jointly with the Cloud PRD):** Cloud-managed is the preselected default; each option
+carries exactly one consequence line ("Cloud can deliver to your targets" / "Cloud can never read
+these — and can never deliver them"); opaque is always chosen, never defaulted into; permanence is
+stated in the prompt itself.
+
+### 9. The schema meets the first run
+
+If the drafted schema fails the first `penv run` after cutover, the newcomer's reward for adopting
+is a Zod error in a file they did not write.
+**Seal as acceptance criterion:** the first run after a successful cutover passes with zero edits
+to `penv.schema.ts`, for every adoption fixture in the test suite.
+
+### 10. Refusals are the product
+
+This design refuses often, on purpose: partial cutovers, direct starts, recreated dotenv files,
+missing pulls. Every refusal lands on someone mid-task who has not read this PRD.
+**Seal as acceptance criterion:** every refusal names exactly one next command. The two
+highest-traffic refusals — a direct start outside `penv run`, and a teammate's first missing
+`pull` — get their copy written and reviewed here in the spec, not improvised in code.
+
+### 11. Accepted cost: deploys need a pipeline edit
+
+Retiring the committed snapshot means a clone no longer deploys by itself; CI must build the
+sealed artifact. This is the rebuild's central reversal and stands — but it is also the adoption
+step most likely to stall a team.
+**Mitigation, shipped with v1:** copy-paste artifact recipes for the major CI systems and
+platform-native delivery guides for Vercel/Cloudflare, in the docs at launch, not after.
