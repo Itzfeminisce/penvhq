@@ -69,4 +69,40 @@ Any code or test change; version numbers in package.json; the historical plan do
 
 ## Decisions log
 
-(append here)
+1. **v0.7 shipped on npm as 0.5.0, not 0.7.0.** The issue's parenthetical said 0.7.0;
+   `packages/cli/CHANGELOG.md` 0.5.0 contains all three v0.7 parts (sinks unified into providers,
+   fully-qualified provider types, `names` → `override`), and npm 0.7.0 is a v0.8-milestone patch.
+   The roadmap's existing "ships on npm as 0.5.0" line was correct and was kept; only the
+   "in progress" markers were closed.
+2. **Ambient delivery had already shipped.** The roadmap listed it as "RFC only / v0.8 (planned)",
+   but `load(schema, { inject: true })`, the framework seams, the selective allowlist, and
+   `override` are in npm 0.6.0–0.7.0, and the two-module scaffold in 0.8.0. The one part that
+   never shipped is `doctor`'s `ambient-shadow` check (dropped in b630532). So "ambient delivery
+   moves after v0.9" is recorded as: the shipped surface stays at v0.8, and `ambient-shadow` is
+   the item scheduled after v0.9. Writing "planned" for shipped code would have made the document
+   that owns availability the one document lying about it.
+3. **No npm version invented for v0.9.** The roadmap records it as one breaking release carrying
+   the same version across the launcher, the engine, and `@penvhq/penv`, without naming a number.
+4. **The RFC gained a snapshot section rather than amending one.** The embedded snapshot's
+   rationale was never recorded in the RFC — it lived in `Documentation.md` and `v0.8-plan.md` —
+   so the new "The deployment artifact is external…" section records the superseded decision and
+   retires it in the same place, following the provider-unification precedent.
+5. **PRD §9's "migration window" sentence is marked superseded inline**, not only in the roadmap
+   entry, because acceptance requires that no document contradict another on layout and the
+   sentence promised dual-layout support that ISSUE-03 does not build.
+6. **`_journal` survives once in the RFC**, in the "On the name" paragraph that records the
+   rename. The acceptance grep allows it only in the rebuild folder and the PRD's friction item;
+   naming what a decision supersedes is what the RFC does everywhere else (see the sink
+   supersession), and a rename with no record of the old name teaches nothing.
+7. **`load(schema, { inject: true })` is kept in the docs, narrowed.** The PRD does not mention
+   it, and deleting a shipped surface is not this issue's call. The docs now say the ambient
+   variables come from `penv run`'s child environment, with in-process injection covering the
+   case where a platform starts the process (serverless).
+8. **No artifact filename convention invented.** Examples use `--out build/production.artifact`
+   and `PENV_SNAPSHOT=/run/secrets/production.artifact`; ISSUE-09 owns the real format and may
+   name an extension.
+9. **The client-inlining seam is `penv run -- next build`**, replacing the `next.config.ts` import
+   of `@penvhq/penv/config` — under `penv run` the build already runs inside penv's environment,
+   and the bare import stays documented as the schemaless compat path.
+10. **`penv import` stays in the CLI reference** as the way to bring one more dotenv file into an
+    adopted project; `penv init` is the adoption front door in every example.
