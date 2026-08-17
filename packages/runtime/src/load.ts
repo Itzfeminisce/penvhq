@@ -8,14 +8,13 @@
 import {
   accessPath,
   type OverrideKeysOf,
-  type PenvSnapshot,
   schemaHarvestActive,
   ValidationError,
 } from "@penvhq/core";
 import type { z } from "zod";
 import { debug } from "./diagnostics.js";
 import { inject } from "./inject.js";
-import { describeResolution, type LoadSource, resolveSync } from "./resolve.js";
+import { describeResolution, resolveSync } from "./resolve.js";
 
 export interface LoadOptions {
   /** Where to start looking for `penv.config.ts`. Defaults to `process.cwd()`. */
@@ -44,26 +43,6 @@ export interface LoadOptions {
    * See {@link inject}.
    */
   readonly inject?: boolean;
-  /**
-   * The committed snapshot to fall back to when no `penv.config.ts` is found on
-   * disk — a bundled or serverless runtime (a Vercel `/var/task` bundle) where
-   * neither the config nor the `.penv/` tree is present. The scaffolded `env.ts`
-   * imports `penv.snapshot.ts` and passes it here; on disk, file discovery always
-   * wins, so this changes nothing in development. Sealed records only, decrypted
-   * at boot via `PENV_KEY_*` exactly as a filesystem load would be.
-   *
-   * It is also what a found-but-unusable config file falls back to — a config
-   * traced into a serverless bundle whose own imports no longer resolve there,
-   * or one whose `.penv/` tree was not traced with it. See `resolveSync`.
-   */
-  readonly snapshot?: PenvSnapshot;
-  /**
-   * Which read source may answer. `auto` — the default — tries the config file
-   * first and the {@link snapshot} when the config file is absent or cannot
-   * serve. `disk` and `snapshot` pin it, so a deployment that knows which source
-   * it runs on fails by name rather than quietly resolving from the other.
-   */
-  readonly source?: LoadSource;
 }
 
 /**
@@ -147,8 +126,6 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptio
   const resolved = resolveSync({
     cwd: options?.cwd ?? process.cwd(),
     ...(options?.environment === undefined ? {} : { environment: options.environment }),
-    ...(options?.snapshot === undefined ? {} : { snapshot: options.snapshot }),
-    ...(options?.source === undefined ? {} : { source: options.source }),
   });
   const { config, environment, values } = resolved;
   debug(describeResolution(resolved));
@@ -166,7 +143,6 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptio
         parameter: issue.path.join("."),
         message: issue.message,
       })),
-      resolved.origin,
     );
   }
 

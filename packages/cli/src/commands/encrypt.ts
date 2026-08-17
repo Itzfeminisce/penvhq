@@ -30,7 +30,6 @@ import {
 import { defineCommand } from "citty";
 import type { Project } from "../project.js";
 import { keySourceFor, openProject, PENV_DIR, refFromKey, targetEnvironment } from "../project.js";
-import { refreshSnapshot } from "../snapshot.js";
 import { CHECK, formatRows, guard, write } from "../ui.js";
 import type { ScopeOptions } from "./set.js";
 import { targetScope } from "./set.js";
@@ -111,9 +110,6 @@ export async function runEncrypt(options: ResealOptions): Promise<ResealResult> 
   await project.provider.write(sealed, text);
   await project.provider.remove(plain);
 
-  // A newly sealed value is exactly what the snapshot ships; refresh it.
-  refreshSnapshot(project);
-
   return {
     parameter,
     location: formatValueFile(sealed),
@@ -161,9 +157,6 @@ export async function runDecrypt(options: ResealOptions): Promise<ResealResult> 
 
   await project.provider.write(plain, opened.value);
   await project.provider.remove(sealed);
-
-  // A sealed value became plaintext, so it leaves the snapshot; refresh it.
-  refreshSnapshot(project);
 
   return {
     parameter,

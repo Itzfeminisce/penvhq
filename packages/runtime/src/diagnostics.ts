@@ -1,10 +1,8 @@
 /**
- * The runtime's voice for what is not an error: a fallback it must not take
- * silently (invariant 13), and the `PENV_DEBUG=1` account of how a load
- * resolved.
+ * The `PENV_DEBUG=1` account of how a load resolved.
  *
- * Everything goes to stderr. A program's stdout belongs to the program, and a
- * diagnostic that lands in a piped payload is a diagnostic that corrupts it.
+ * It goes to stderr. A program's stdout belongs to the program, and a diagnostic
+ * that lands in a piped payload is a diagnostic that corrupts it.
  */
 
 const DEBUG_ENV = "PENV_DEBUG";
@@ -13,10 +11,6 @@ const DEBUG_ENV = "PENV_DEBUG";
 export function debugEnabled(): boolean {
   const value = process.env[DEBUG_ENV];
   return value !== undefined && value !== "" && value !== "0" && value !== "false";
-}
-
-export function warn(message: string): void {
-  process.stderr.write(`penv: ${message}\n`);
 }
 
 export function debug(lines: readonly string[]): void {

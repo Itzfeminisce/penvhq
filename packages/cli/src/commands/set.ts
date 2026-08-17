@@ -20,7 +20,6 @@ import {
   refFromKey,
   targetEnvironment,
 } from "../project.js";
-import { refreshSnapshot } from "../snapshot.js";
 import { CHECK, formatRows, guard, write } from "../ui.js";
 
 export interface ScopeOptions {
@@ -244,11 +243,6 @@ export async function runSet(options: SetOptions): Promise<SetResult> {
     value: options.value,
     environment,
   });
-
-  // A committed sealed value may have changed, so refresh the snapshot the bundle
-  // reads from. A no-op for a project that commits none, and never a rewrite when
-  // nothing sealed changed.
-  refreshSnapshot(project);
 
   return { parameter: options.key, location, encrypted };
 }

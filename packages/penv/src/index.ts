@@ -10,13 +10,7 @@
  * deliberately not visible under the `penv` specifier.
  */
 
-export type {
-  InjectResult,
-  LoadOptions,
-  LoadOptionsFor,
-  LoadSource,
-  PenvSnapshot,
-} from "@penvhq/runtime";
+export type { InjectResult, LoadOptions, LoadOptionsFor } from "@penvhq/runtime";
 export {
   ConfigError,
   declaredRefs,
