@@ -51,4 +51,26 @@ Docs (ISSUE-01 owns them), the new artifact (ISSUE-09), layout changes (ISSUE-03
 
 ## Decisions log
 
-(append here)
+- **`load()`'s `source` option went with the snapshot.** `LoadSource` was
+  `"auto" | "disk" | "snapshot"`; with one source left, `auto` and `disk` are the same
+  behavior and pinning names nothing. `LoadOptions.source`, `LoadSource`, `ResolutionSource` and
+  `ResolvedConfig.source` are deleted, and `@penvhq/penv` stops exporting `LoadSource`.
+- **`ValidationError`'s `source` provenance is deleted.** It was added by the snapshot commit to
+  answer "which of the two sources did penv read", and with one source the answer is never in
+  doubt. The message returns to its pre-snapshot form; `ResolvedConfig.origin` survives as the
+  config file's path, because the `PENV_DEBUG` account (not a snapshot feature) names it.
+- **`doctor bundle-invisible-plaintext` is deleted along with `snapshot-stale`.** Both were gated
+  on a committed snapshot existing, so neither can fire now; "invisible to a bundle" is a claim
+  only the embedded snapshot made.
+- **`searchConfigFile` / `ConfigSearch.beyondBoundary` are deleted from core.** The extra walk past
+  the project boundary existed only to warn before falling back to the snapshot. `findConfigFile`
+  now performs the bounded search directly; the boundary rule and its tests are untouched.
+- **The runtime's `warn` channel is deleted.** `diagnostics.ts` was created by the snapshot commit;
+  every `warn` call was a snapshot fallback. `PENV_DEBUG` (`debugEnabled`/`debug`) stays.
+- **The prototype-inheritance regression test was re-expressed against the filesystem.** It was
+  written against a snapshot holding `constructor.production.enc`; the hazard is in the value
+  cascade, so it now loads a tree holding `constructor.production` and asserts the same absence.
+- **Published `packages/*/CHANGELOG.md` entries for 0.8.0 are left alone.** They record what npm
+  consumers actually received; rewriting them would make a released version's changelog lie. So
+  `grep -ri snapshot packages/` is zero over source, and non-zero over that release history — the
+  same exemption git history carries. The new changeset names the removal for the next release.
