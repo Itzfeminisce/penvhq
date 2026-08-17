@@ -117,7 +117,7 @@ project root/
 
   .penv/
     env.ts                       generated once, then project-owned loader bridge
-    _journal/                    Penv-managed state
+    state/                       Penv-managed state
       manifest.json              committed engine/extension lock
       .gitignore                 committed safety boundary
       records/                   canonical local parameter tree
@@ -131,16 +131,16 @@ policy—not generated hidden state—because it declares the environment whitel
 locations, encryption key sources, public prefixes, and explicit name overrides. `.penv/env.ts`
 continues to be generated once and is never overwritten.
 
-`_journal` means Penv-managed project state, not append-only secret history. It must not be used
+`.penv/state/` holds Penv-managed project state, not append-only secret history. It must not be used
 as an audit or rotation version store; provider history remains provider-owned.
 
 All plaintext values, including `.local` values, remain ignored. The initial layout migration moves
-the current parameter tree underneath `_journal/records`; its grammar, cascade, metadata, AAD,
+the current parameter tree underneath `.penv/state/records`; its grammar, cascade, metadata, AAD,
 and provider serialization remain unchanged.
 
 ### 2. Manifest and launcher
 
-`_journal/manifest.json` is a deliberately small, committed launcher contract. It contains layout
+`.penv/state/manifest.json` is a deliberately small, committed launcher contract. It contains layout
 format, exact engine version/integrity, and selected extension version/integrity. It contains no
 secret values, keys, provider credentials, absolute machine paths, provider configuration, or
 snapshot data.
@@ -173,7 +173,7 @@ not assume—an interactive update to `penv.config.ts`. It never adds the extens
 `package.json`.
 
 An installed provider contributes a generated, committed, type-only declaration under
-`_journal/extensions`. That declaration augments provider configuration typing without loading the
+`.penv/state/extensions`. That declaration augments provider configuration typing without loading the
 adapter into the application. Generated declarations contain no adapter code, credentials, values,
 or key material.
 
@@ -339,6 +339,12 @@ The new engine supports old layout during the migration window. It never moves a
 rewrites user-owned schema/loader modules, or changes runtime behavior merely because a global
 launcher was upgraded.
 
+**Superseded (2026-08-17).** The engine reads only the new layout. An old-layout project gets one
+refusal naming `penv migrate`, because an engine that reads both layouts is a tool with two truths
+about where a project's values live. The rest of this section stands: `migrate` previews, moves
+nothing user-owned, and changes no runtime behavior because a launcher was upgraded. The roadmap's
+v0.9 entry owns this claim.
+
 ## Testing decisions
 
 - Test the launcher protocol independently: manifest-format rejection, exact engine selection,
@@ -413,6 +419,10 @@ deciding whether to keep penv. Each item below names the friction and the seal �
 record, wording to fix, or a cost accepted with its mitigation. Resolving this section closes the
 PRD for implementation.
 
+**Resolved 2026-08-17.** One amended (item 1), nine approved as written, and item 5 approved as
+`.penv/state/`. Each item carries its verdict below, and the PRD is closed for implementation —
+`docs/rebuild/` carries the issue set that builds it.
+
 ### 1. Where the wrapper lives
 
 The PRD's examples show a human typing `penv run --env development --source project -- pnpm dev`,
@@ -425,12 +435,16 @@ to `penv run -- pnpm dev`. In-script wrapping remains permitted but entirely dev
 documented with the hook-environment difference. A nested `penv run` (an outer wrapper meeting an
 in-script one) is refused, naming both invocations.
 
+**Verdict (2026-08-17): amended** — the seal above is the amended text; wrapper-outside stays blessed.
+
 ### 2. `--source` on every run
 
 Only two sources exist, and one is for CI/artifacts. `--source project` is ceremony for the
 interactive user.
 **Seal:** `--source` defaults to `project`; `snapshot` must always be named. This amends "public
 scripts always name a source explicitly" from command-required to recommended-in-scripts.
+
+**Verdict (2026-08-17): approved as written.**
 
 ### 3. `--env` on every command
 
@@ -440,12 +454,16 @@ the environments-are-a-whitelist invariant stands untouched.
 **Seal:** add declared `defaultEnvironment`; `init` proposes `development` when the development
 cascade was adopted. CI continues to name `--env` explicitly.
 
+**Verdict (2026-08-17): approved as written.**
+
 ### 4. Three version concepts
 
 Launcher, engine, and runtime dependency are the right machinery, but if any happy-path output or
 error asks the user to reason about *which* of three versions is wrong, the abstraction leaks.
 **Seal:** one user-visible version. `penv --version` prints one line; the split surfaces only in
 the unsupported-manifest error, which prints the exact remedial command and nothing to diagnose.
+
+**Verdict (2026-08-17): approved as written.**
 
 ### 5. A name that needs a footnote
 
@@ -455,6 +473,9 @@ migration.
 **Seal:** decide the name before code exists. Recommended: `.penv/state/`. Otherwise accept
 `_journal` explicitly and delete this item.
 
+**Verdict (2026-08-17): approved as `.penv/state/`** — the `_journal` name is dead, and sections 1
+to 3 above are written in the new one.
+
 ### 6. Adding an official extension
 
 The trust model — age gates, trust blocks, acknowledgements — exists for strangers. If
@@ -463,12 +484,16 @@ the blessed path.
 **Seal:** official-scope `add` verifies provenance silently and asks nothing beyond the config
 edit it already offers.
 
+**Verdict (2026-08-17): approved as written.**
+
 ### 7. The gap between `add` and first use
 
 `add` records the extension; onboarding (`penv cloud login`) is a second command the user must
 discover.
 **Seal:** `add` ends by offering the provider's declared onboarding step — the same
 offer-never-assume rule as the config edit.
+
+**Verdict (2026-08-17): approved as written.**
 
 ### 8. The key-authority question (Cloud boundary)
 
@@ -480,12 +505,16 @@ carries exactly one consequence line ("Cloud can deliver to your targets" / "Clo
 these — and can never deliver them"); opaque is always chosen, never defaulted into; permanence is
 stated in the prompt itself.
 
+**Verdict (2026-08-17): approved as written.**
+
 ### 9. The schema meets the first run
 
 If the drafted schema fails the first `penv run` after cutover, the newcomer's reward for adopting
 is a Zod error in a file they did not write.
 **Seal as acceptance criterion:** the first run after a successful cutover passes with zero edits
 to `penv.schema.ts`, for every adoption fixture in the test suite.
+
+**Verdict (2026-08-17): approved as written.**
 
 ### 10. Refusals are the product
 
@@ -495,6 +524,8 @@ missing pulls. Every refusal lands on someone mid-task who has not read this PRD
 highest-traffic refusals — a direct start outside `penv run`, and a teammate's first missing
 `pull` — get their copy written and reviewed here in the spec, not improvised in code.
 
+**Verdict (2026-08-17): approved as written.**
+
 ### 11. Accepted cost: deploys need a pipeline edit
 
 Retiring the committed snapshot means a clone no longer deploys by itself; CI must build the
@@ -502,3 +533,6 @@ sealed artifact. This is the rebuild's central reversal and stands — but it is
 step most likely to stall a team.
 **Mitigation, shipped with v1:** copy-paste artifact recipes for the major CI systems and
 platform-native delivery guides for Vercel/Cloudflare, in the docs at launch, not after.
+
+**Verdict (2026-08-17): approved as written** — the cost is accepted and the mitigation is scoped
+into the v0.9 milestone.

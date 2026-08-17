@@ -6,6 +6,14 @@ If a change conflicts with an invariant below, stop and surface it to the human.
 
 **Know which document owns what.** The docs describe finished penv with no "not yet" language. The roadmap owns all availability and versioning. The RFC owns rationale. When you write or edit text, keep temporal claims ("not yet," version numbers, "amber until v0.4") in the roadmap only; keep permanent design properties in the docs; keep reasoning in the RFC.
 
+## Developer-first rebuild — read this before the invariants
+
+The v0.9 milestone is a rebuild scoped by [the PRD](./docs/PRD-Developer-First-Execution-and-Delivery.md), including its sealed adoption-friction review, and issued as the tickets in [`docs/rebuild/`](./docs/rebuild/). While that milestone is open, those two are authoritative over shipped code, the docs, and the roadmap.
+
+For rebuild work only, the stop-and-surface rule above is **waived**: where the PRD contradicts an invariant or shipped behavior, the PRD wins, silently. Prefer redesign over fallbacks — delete stale code and files completely, with no compat shims or legacy paths unless a ticket asks for one. Outside that scope the invariants stand exactly as written.
+
+What the rebuild changes that the invariants below assume: penv-managed state moves to `.penv/state/` (records under `state/records/`), the global `penv` launcher runs a project-pinned engine named in `.penv/state/manifest.json`, `penv run -- <command>` is how an adopted app starts, and the embedded `penv.snapshot.ts` is retired in favor of an external sealed artifact.
+
 ---
 
 ## What penv is
@@ -62,11 +70,11 @@ Run `pnpm typecheck && pnpm test && pnpm lint` before proposing a change as done
 
 17. **A ciphertext is bound to its address.** The AAD is the value file's full name, so a sealed value cannot be copied between scopes. Never widen the AAD to the parameter alone — that reopens the scope-widening leak at the one layer below the cascade.
 
-18. **`import` is one-directional.** After import, `.penv/` is source of truth; generated `.env` is an artifact. No silent reverse-sync of hand-edits.
+18. **`import` is one-directional.** After import, the parameter tree under `.penv/state/records/` is source of truth; generated `.env` is an artifact. No silent reverse-sync of hand-edits.
 
 19. **penv does not reimplement provider ACLs.** Access control is proxied to Vault policies / IAM.
 
-20. **Value files are gitignored; only structure/`env.ts`/meta/config are committed.** Never weaken this. A change that could commit a plaintext secret is a security regression regardless of tests.
+20. **Value files are gitignored; only structure/`env.ts`/meta/config are committed.** The manifest and generated extension declarations under `.penv/state/` join that committed set — they are decisions to review, and they hold no values. The adoption rollback bundle never does. Never weaken this. A change that could commit a plaintext secret is a security regression regardless of tests.
 
 21. **`init` may default what it can observe; it must ask for what it cannot.** A fact about the codebase (the framework in `package.json`, whether `src/` exists) may be detected and proposed. A fact about the deployment — `environments` above all — may not: no file says whether a staging tier exists, and an invented environment accepts writes for infrastructure that does not. Unanswered means empty, and `CONFIG_ENVIRONMENTS_EMPTY` is written to be reached.
 
