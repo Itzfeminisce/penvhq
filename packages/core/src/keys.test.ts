@@ -461,3 +461,17 @@ describe("the native-free invariant core depends on", () => {
     expect(Object.keys(dependencies).some((name) => /keyring|keytar|napi/i.test(name))).toBe(false);
   });
 });
+
+describe("a name that is also an Object.prototype member", () => {
+  it("resolves no key source rather than reading the prototype", () => {
+    // `keys` is a plain object, so a bare index for an environment called
+    // `constructor` answers with `Object` — a key source penv never declared.
+    const withKeys: PenvConfig = {
+      ...config,
+      environments: [...config.environments, "constructor"],
+      keys: { production: prod },
+    };
+
+    expect(resolveKeySource(withKeys, "constructor").type).toBe("none");
+  });
+});

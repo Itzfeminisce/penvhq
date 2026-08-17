@@ -13,8 +13,9 @@ import {
   ValidationError,
 } from "@penvhq/core";
 import type { z } from "zod";
+import { debug } from "./diagnostics.js";
 import { inject } from "./inject.js";
-import { resolveSync } from "./resolve.js";
+import { describeResolution, type LoadSource, resolveSync } from "./resolve.js";
 
 export interface LoadOptions {
   /** Where to start looking for `penv.config.ts`. Defaults to `process.cwd()`. */
@@ -50,8 +51,19 @@ export interface LoadOptions {
    * imports `penv.snapshot.ts` and passes it here; on disk, file discovery always
    * wins, so this changes nothing in development. Sealed records only, decrypted
    * at boot via `PENV_KEY_*` exactly as a filesystem load would be.
+   *
+   * It is also what a found-but-unusable config file falls back to — a config
+   * traced into a serverless bundle whose own imports no longer resolve there,
+   * or one whose `.penv/` tree was not traced with it. See `resolveSync`.
    */
   readonly snapshot?: PenvSnapshot;
+  /**
+   * Which read source may answer. `auto` — the default — tries the config file
+   * first and the {@link snapshot} when the config file is absent or cannot
+   * serve. `disk` and `snapshot` pin it, so a deployment that knows which source
+   * it runs on fails by name rather than quietly resolving from the other.
+   */
+  readonly source?: LoadSource;
 }
 
 /**
@@ -80,6 +92,11 @@ type ResolvedLoadOptions = Omit<LoadOptions, "inject"> & {
   readonly inject?: boolean | readonly string[];
 };
 
+/** A namespace node with no prototype — see `own` in core for why. */
+function node(): Record<string, unknown> {
+  return Object.create(null) as Record<string, unknown>;
+}
+
 /**
  * Places a value at its access path, creating namespaces on the way.
  * Values are placed exactly as the provider holds them: coercion is the
@@ -91,18 +108,18 @@ function place(root: Record<string, unknown>, path: readonly string[], value: st
     return;
   }
 
-  let node = root;
+  let target = root;
   for (const key of path.slice(0, -1)) {
-    const existing = node[key];
+    const existing = target[key];
     if (typeof existing === "object" && existing !== null) {
-      node = existing as Record<string, unknown>;
+      target = existing as Record<string, unknown>;
       continue;
     }
-    const child: Record<string, unknown> = {};
-    node[key] = child;
-    node = child;
+    const child = node();
+    target[key] = child;
+    target = child;
   }
-  node[leaf] = value;
+  target[leaf] = value;
 }
 
 /**
@@ -127,13 +144,16 @@ export function load<T extends z.ZodType>(schema: T, options?: LoadOptionsFor<T>
 }
 
 function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptions): z.infer<T> {
-  const { config, environment, values } = resolveSync(
-    options?.cwd ?? process.cwd(),
-    options?.environment,
-    options?.snapshot,
-  );
+  const resolved = resolveSync({
+    cwd: options?.cwd ?? process.cwd(),
+    ...(options?.environment === undefined ? {} : { environment: options.environment }),
+    ...(options?.snapshot === undefined ? {} : { snapshot: options.snapshot }),
+    ...(options?.source === undefined ? {} : { source: options.source }),
+  });
+  const { config, environment, values } = resolved;
+  debug(describeResolution(resolved));
 
-  const object: Record<string, unknown> = {};
+  const object = node();
   for (const { ref, value } of values) {
     place(object, accessPath(ref), value);
   }
@@ -146,6 +166,7 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptio
         parameter: issue.path.join("."),
         message: issue.message,
       })),
+      resolved.origin,
     );
   }
 

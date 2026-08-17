@@ -44,6 +44,23 @@ export function assertNever(value: never, context: string): never {
   throw new Error(`Unhandled ${context}: ${JSON.stringify(value)}`);
 }
 
+/**
+ * Looks a key up as an own property, never through the prototype chain.
+ *
+ * Every record penv indexes by a *user-chosen* name — a parameter, an
+ * environment, a provider type — is a plain object, so a bare index for a name
+ * like `constructor`, `toString`, or `valueOf` answers with something from
+ * `Object.prototype` instead of `undefined`. penv then materialises a function
+ * as the value of a parameter that has none. The lookup is the one place that
+ * can be wrong, so it is the one place this is fixed.
+ */
+export function own<T>(
+  record: Readonly<Record<string, T>> | undefined,
+  key: string,
+): T | undefined {
+  return record !== undefined && Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
 /** Identifies one parameter, independent of scope. `redis/password`. */
 export interface ParameterRef {
   /** Namespace folder segments. `[]` for a root parameter. */
@@ -367,6 +384,14 @@ export interface PenvSnapshot {
   readonly config: PenvConfig;
   /** `formatValueFile(file)` → sealed envelope string. Sealed records only. */
   readonly values: Readonly<Record<string, string>>;
+  /**
+   * The digest of the inputs this snapshot projects, so staleness is checkable
+   * rather than assumed — `penv snapshot --check` recomputes it in CI, and
+   * `load()` warns when the tree it just read no longer digests to this.
+   * Optional because a snapshot generated before digests exist is still
+   * loadable; it is unverifiable, which is what a missing digest reports.
+   */
+  readonly digest?: string;
 }
 
 /**

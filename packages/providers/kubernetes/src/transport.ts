@@ -11,6 +11,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { own } from "@penvhq/core";
 import { KubernetesUnavailableError } from "./errors.js";
 import type { KubernetesTransport } from "./kubernetes.js";
 
@@ -186,7 +187,7 @@ export function defaultKubernetesTransport(
 
   return {
     readKey(key) {
-      return Promise.resolve(readData()?.[key]);
+      return Promise.resolve(own(readData(), key));
     },
     writeKey(key, value) {
       const data = readData() ?? {};
@@ -196,7 +197,7 @@ export function defaultKubernetesTransport(
     },
     deleteKey(key) {
       const data = readData();
-      if (data === undefined || !(key in data)) return Promise.resolve();
+      if (data === undefined || !Object.hasOwn(data, key)) return Promise.resolve();
       delete data[key];
       applyData(data);
       return Promise.resolve();

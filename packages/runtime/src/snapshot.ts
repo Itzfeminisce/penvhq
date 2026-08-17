@@ -12,7 +12,7 @@
  */
 
 import type { PenvSnapshot, ValueFile } from "@penvhq/core";
-import { formatValueFile, parseFilename } from "@penvhq/core";
+import { formatValueFile, own, parseFilename } from "@penvhq/core";
 
 /** The synchronous read surface the value cascade consumes. */
 export interface SnapshotProvider {
@@ -39,7 +39,7 @@ export function createSnapshotProvider(snapshot: PenvSnapshot): SnapshotProvider
       return files;
     },
     readSync(file) {
-      return values[formatValueFile(file)];
+      return own(values, formatValueFile(file));
     },
   };
 }

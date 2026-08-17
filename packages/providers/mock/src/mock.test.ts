@@ -87,3 +87,20 @@ describe("mock provider retention", () => {
     expect(await second.readPrevious(file)).toBe("v1");
   });
 });
+
+describe("a parameter named after an Object.prototype member", () => {
+  it("reads as absent rather than as the prototype's member", async () => {
+    const provider = createMockProvider({ storePath: makeStorePath() });
+    const file: ValueFile = {
+      namespace: [],
+      name: "constructor",
+      scope: { kind: "unscoped" },
+      encrypted: false,
+    };
+
+    await expect(provider.read(file)).resolves.toBeUndefined();
+
+    await provider.write(file, "set-once");
+    await expect(provider.read(file)).resolves.toBe("set-once");
+  });
+});

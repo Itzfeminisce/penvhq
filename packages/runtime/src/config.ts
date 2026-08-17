@@ -29,7 +29,9 @@
 import { checkNameCollisions, variableName } from "@penvhq/core";
 import { resolveSync } from "./resolve.js";
 
-const { config, values } = resolveSync(process.cwd());
+// `source: "disk"` states what this entry already was: a bare side-effect import
+// receives no snapshot, so the disk branch is the only one it could ever take.
+const { config, values } = resolveSync({ cwd: process.cwd(), source: "disk" });
 
 // Invariant 12, enforced where the loss would happen: two parameters mapping to
 // one variable would otherwise resolve first-write-wins, dropping the second

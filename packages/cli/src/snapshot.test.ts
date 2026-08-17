@@ -11,14 +11,17 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { KEY_BYTES } from "@penvhq/core";
+import { KEY_BYTES, snapshotDigest } from "@penvhq/core";
+import { runCommand } from "citty";
 import { afterEach, describe, expect, it } from "vitest";
 import { runEncrypt } from "./commands/encrypt.js";
 import { runRemove } from "./commands/remove.js";
+import { snapshotCommand } from "./commands/snapshot.js";
 import { runSet } from "./commands/set.js";
 import { openProject } from "./project.js";
 import {
   buildSnapshot,
+  checkSnapshotFile,
   renderSnapshotModule,
   SNAPSHOT_FILE,
   snapshotExists,
@@ -296,5 +299,121 @@ describe("mutations refresh a committed snapshot", () => {
     await runSet({ cwd: root, key: "secret", value: "s3cr3t", environment: "production" });
 
     expect(snapshotExists(root)).toBe(false);
+  });
+});
+
+/**
+ * A snapshot with no link back to the tree it came from is unverifiable: a
+ * `penv set` plus a seal, with no re-run of `penv snapshot`, bakes one value
+ * into the build and serves another at runtime with nothing saying so.
+ */
+describe("the snapshot's digest", () => {
+  it("is the digest of the config and sealed values it embeds", () => {
+    const project = openProject(makeProject(MIXED_TREE));
+
+    const snapshot = buildSnapshot(project);
+
+    expect(snapshot.digest).toBe(snapshotDigest(snapshot.config, snapshot.values));
+  });
+
+  it("changes when a sealed value changes", () => {
+    const before = buildSnapshot(openProject(makeProject({ "api-key.enc": "penv:1:dev:aa:bb" })));
+    const after = buildSnapshot(openProject(makeProject({ "api-key.enc": "penv:1:dev:cc:dd" })));
+
+    expect(after.digest).not.toBe(before.digest);
+  });
+});
+
+describe("checkSnapshotFile", () => {
+  it("reports a project that commits no snapshot as absent", () => {
+    const project = openProject(makeProject(MIXED_TREE));
+
+    expect(checkSnapshotFile(project).status).toBe("absent");
+  });
+
+  it("reports a freshly written snapshot as current", () => {
+    const project = openProject(makeProject(MIXED_TREE));
+    writeSnapshotFile(project);
+
+    expect(checkSnapshotFile(project).status).toBe("current");
+  });
+
+  it("reports a snapshot the tree has moved past as stale, and writes nothing", () => {
+    const project = openProject(makeProject(MIXED_TREE));
+    writeSnapshotFile(project);
+    const committed = readFileSync(join(project.root, SNAPSHOT_FILE), "utf8");
+
+    writeFileSync(join(project.root, ".penv", "late.enc"), "penv:1:dev:ee:ff", "utf8");
+
+    expect(checkSnapshotFile(openProject(project.root)).status).toBe("stale");
+    expect(readFileSync(join(project.root, SNAPSHOT_FILE), "utf8")).toBe(committed);
+  });
+
+  it("agrees with `penv snapshot` — regenerating makes a stale project current", () => {
+    const project = openProject(makeProject(MIXED_TREE));
+    writeSnapshotFile(project);
+    writeFileSync(join(project.root, ".penv", "late.enc"), "penv:1:dev:ee:ff", "utf8");
+
+    const reopened = openProject(project.root);
+    expect(checkSnapshotFile(reopened).status).toBe("stale");
+    writeSnapshotFile(reopened);
+    expect(checkSnapshotFile(reopened).status).toBe("current");
+  });
+});
+
+/**
+ * `--check` is a CI contract before it is a report: a stale snapshot deploys
+ * values nobody set, so the exit code is the part that has to be right.
+ */
+describe("penv snapshot --check", () => {
+  const originalCwd = process.cwd();
+
+  /** The exit code the command would leave behind, run as the CLI runs it. */
+  async function exitCodeOf(root: string): Promise<number | undefined> {
+    process.chdir(root);
+    process.exitCode = 0;
+    try {
+      await runCommand(snapshotCommand, { rawArgs: ["--check"] });
+      return process.exitCode;
+    } finally {
+      process.chdir(originalCwd);
+      process.exitCode = 0;
+    }
+  }
+
+  it("exits 0 for a current snapshot and writes nothing", async () => {
+    const project = openProject(makeProject(MIXED_TREE));
+    writeSnapshotFile(project);
+    const committed = readFileSync(join(project.root, SNAPSHOT_FILE), "utf8");
+
+    expect(await exitCodeOf(project.root)).toBe(0);
+    expect(readFileSync(join(project.root, SNAPSHOT_FILE), "utf8")).toBe(committed);
+  });
+
+  it("exits 1 for a stale snapshot, and does not refresh it", async () => {
+    const project = openProject(makeProject(MIXED_TREE));
+    writeSnapshotFile(project);
+    const committed = readFileSync(join(project.root, SNAPSHOT_FILE), "utf8");
+    writeFileSync(join(project.root, ".penv", "late.enc"), "penv:1:dev:ee:ff", "utf8");
+
+    expect(await exitCodeOf(project.root)).toBe(1);
+    expect(readFileSync(join(project.root, SNAPSHOT_FILE), "utf8")).toBe(committed);
+  });
+
+  it("exits 1 when the snapshot was deleted, rather than passing on its absence", async () => {
+    const project = openProject(makeProject(MIXED_TREE));
+
+    expect(await exitCodeOf(project.root)).toBe(1);
+    expect(snapshotExists(project.root)).toBe(false);
+  });
+
+  it("exits 0 again once `penv snapshot` has refreshed it", async () => {
+    const project = openProject(makeProject(MIXED_TREE));
+    writeSnapshotFile(project);
+    writeFileSync(join(project.root, ".penv", "late.enc"), "penv:1:dev:ee:ff", "utf8");
+    expect(await exitCodeOf(project.root)).toBe(1);
+
+    writeSnapshotFile(openProject(project.root));
+    expect(await exitCodeOf(project.root)).toBe(0);
   });
 });

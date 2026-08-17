@@ -12,6 +12,7 @@ import {
   type PenvSnapshot,
   SCHEMA_HARVEST_ENV,
   sealValue,
+  snapshotDigest,
   type UndecryptableValueError,
   ValidationError,
   type ValueFile,
@@ -25,6 +26,7 @@ const originalPenvEnv = process.env.PENV_ENV;
 const originalNodeEnv = process.env.NODE_ENV;
 const originalKey = process.env.PENV_KEY_DEV;
 const originalHarvest = process.env.PENV_SCHEMA_HARVEST;
+const originalDebug = process.env.PENV_DEBUG;
 
 function setEnv(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -33,6 +35,9 @@ function setEnv(name: string, value: string | undefined): void {
     process.env[name] = value;
   }
 }
+
+/** A config file penv cannot evaluate: its import does not resolve. */
+const UNRESOLVABLE_CONFIG = 'import "@penv/nothing-resolves-here";\n';
 
 const CONFIG = {
   environments: ["development", "test", "production"],
@@ -127,11 +132,22 @@ function seal(file: ValueFile, value: string): string {
   );
 }
 
+/** Collects what penv writes to stderr — warnings and the PENV_DEBUG summary. */
+function captureStderr(): { text: () => string; restore: () => void } {
+  const written: string[] = [];
+  const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => {
+    written.push(String(chunk));
+    return true;
+  });
+  return { text: () => written.join(""), restore: () => spy.mockRestore() };
+}
+
 afterEach(() => {
   setEnv("PENV_ENV", originalPenvEnv);
   setEnv("NODE_ENV", originalNodeEnv);
   setEnv("PENV_KEY_DEV", originalKey);
   setEnv("PENV_SCHEMA_HARVEST", originalHarvest);
+  setEnv("PENV_DEBUG", originalDebug);
   for (const dir of created.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -790,5 +806,408 @@ describe("load from a bundle (embedded snapshot)", () => {
     expect(error.message).toContain("No penv.config.ts found");
     // The extended remedy names the bundled-runtime escape hatch.
     expect(error.message).toContain("penv snapshot");
+  });
+});
+
+/**
+ * The disk branch is still first, always. What this covers is the one shape that
+ * is not a project at all: a `penv.config.ts` that a bundler traced into
+ * `/var/task` because a config key referenced it, with no `.penv/` tree beside
+ * it because nothing imports the tree. That is the production outage — the
+ * snapshot was valid, was passed, and was never consulted because a file had
+ * been found.
+ */
+describe("load falls back from a config with no tree beside it", () => {
+  const bundleSchema = z.object({ databaseUrl: z.url() });
+
+  function snapshotWith(values: Readonly<Record<string, string>>): PenvSnapshot {
+    return { v: 1, config: KEY_CONFIG as unknown as PenvSnapshot["config"], values };
+  }
+
+  /** Replaces a project's config with source that cannot be evaluated. */
+  function breakConfig(root: string): void {
+    writeFileSync(join(root, "penv.config.ts"), UNRESOLVABLE_CONFIG, "utf8");
+  }
+
+  it("resolves from the snapshot when the config was traced without its .penv/ tree", () => {
+    const sealed = seal(DATABASE_URL_ENC, "postgres://sealed/app"); // exports PENV_KEY_DEV
+    // `makeProject({})` writes the config and no tree — the bundle that traced
+    // one file and not the other.
+    const cwd = makeProject({});
+    const stderr = captureStderr();
+
+    try {
+      const env = load(bundleSchema, {
+        cwd,
+        environment: "development",
+        snapshot: snapshotWith({ "database-url.enc": sealed }),
+      });
+      expect(env.databaseUrl).toBe("postgres://sealed/app");
+      // Never silent (invariant 13): the warning names the tree that is missing.
+      expect(stderr.text()).toContain(".penv");
+    } finally {
+      stderr.restore();
+    }
+  });
+
+  it("falls back before evaluating the config, so an untraced import cannot fail the load", () => {
+    // The whole outage: the config's own imports do not resolve from the bundle
+    // root. With no tree beside it, penv never evaluates it at all.
+    const sealed = seal(DATABASE_URL_ENC, "postgres://sealed/app");
+    const cwd = makeProject({});
+    breakConfig(cwd);
+    const stderr = captureStderr();
+
+    try {
+      expect(
+        load(bundleSchema, {
+          cwd,
+          environment: "development",
+          snapshot: snapshotWith({ "database-url.enc": sealed }),
+        }).databaseUrl,
+      ).toBe("postgres://sealed/app");
+    } finally {
+      stderr.restore();
+    }
+  });
+
+  it("does NOT fall back for a broken config in a real project — a tree beside it is a project", () => {
+    // The masking risk this narrowing exists to close: a developer who breaks
+    // penv.config.ts must see it, not boot silently on the committed snapshot.
+    const cwd = makeProject({ "database-url": "postgres://on-disk/app" });
+    breakConfig(cwd);
+    const snapshot = snapshotWith({
+      "database-url.enc": seal(DATABASE_URL_ENC, "postgres://snapshot/app"),
+    });
+
+    expect(() => load(bundleSchema, { cwd, environment: "development", snapshot })).toThrow(
+      ConfigError,
+    );
+  });
+
+  it("does NOT fall back for a config whose default export is missing", () => {
+    const cwd = makeProject({ "database-url": "postgres://on-disk/app" });
+    writeFileSync(join(cwd, "penv.config.ts"), "export const notDefault = {};\n", "utf8");
+    const snapshot = snapshotWith({
+      "database-url.enc": seal(DATABASE_URL_ENC, "postgres://snapshot/app"),
+    });
+
+    expect(() => load(bundleSchema, { cwd, environment: "development", snapshot })).toThrow(
+      ConfigError,
+    );
+  });
+
+  it("still throws the config's own error when no snapshot was passed", () => {
+    const cwd = makeProject({});
+    breakConfig(cwd);
+
+    // Nothing to fall back to, so the cause is not downgraded to a warning.
+    expect(() => load(bundleSchema, { cwd, environment: "development" })).toThrow(ConfigError);
+  });
+
+  it("does not fall back past a config that loaded — a value it cannot open still throws", () => {
+    // The tree is present and the config is fine; this is the user's data
+    // failing, and the snapshot must not be allowed to paper over it.
+    const cwd = makeProject({ "database-url.enc": "not-an-envelope" }, KEY_CONFIG);
+    const snapshot = snapshotWith({
+      "database-url.enc": seal(DATABASE_URL_ENC, "postgres://snapshot/app"),
+    });
+
+    expect(() => load(bundleSchema, { cwd, environment: "development", snapshot })).toThrow(
+      /could not decrypt/,
+    );
+  });
+
+  it("does not fall back for an incomplete tree — a missing parameter is still a ValidationError", () => {
+    const cwd = makeProject({ "log-level": "debug" }, KEY_CONFIG);
+    const snapshot = snapshotWith({
+      "database-url.enc": seal(DATABASE_URL_ENC, "postgres://snapshot/app"),
+    });
+
+    expect(() => load(bundleSchema, { cwd, environment: "development", snapshot })).toThrow(
+      ValidationError,
+    );
+  });
+
+  it("names a config the workspace boundary put out of reach rather than quietly skipping it", () => {
+    // A bounded walk that stops one directory short of the config a developer
+    // expects is the same surprise as one that climbs too far, so it says so.
+    const sealed = seal(DATABASE_URL_ENC, "postgres://sealed/app");
+    const outer = makeBundleDir();
+    writeFileSync(
+      join(outer, "penv.config.ts"),
+      `export default ${JSON.stringify(CONFIG)};\n`,
+      "utf8",
+    );
+    const inner = join(outer, "apps", "web");
+    mkdirSync(inner, { recursive: true });
+    writeFileSync(join(inner, ".git"), "gitdir: elsewhere\n", "utf8");
+    const stderr = captureStderr();
+
+    try {
+      load(bundleSchema, {
+        cwd: inner,
+        environment: "development",
+        snapshot: snapshotWith({ "database-url.enc": sealed }),
+      });
+      expect(stderr.text()).toContain("outside this project's workspace");
+    } finally {
+      stderr.restore();
+    }
+  });
+
+  it("says nothing on the ordinary bundle path, where finding no config is the design", () => {
+    const sealed = seal(DATABASE_URL_ENC, "postgres://sealed/app");
+    const cwd = makeBundleDir();
+    const stderr = captureStderr();
+
+    try {
+      load(bundleSchema, {
+        cwd,
+        environment: "development",
+        snapshot: snapshotWith({ "database-url.enc": sealed }),
+      });
+      expect(stderr.text()).toBe("");
+    } finally {
+      stderr.restore();
+    }
+  });
+});
+
+describe("load's `source` option", () => {
+  const bundleSchema = z.object({ databaseUrl: z.url() });
+
+  function snapshotWith(values: Readonly<Record<string, string>>): PenvSnapshot {
+    return { v: 1, config: KEY_CONFIG as unknown as PenvSnapshot["config"], values };
+  }
+
+  it('"disk" refuses the snapshot rather than resolving from it', () => {
+    const sealed = seal(DATABASE_URL_ENC, "postgres://sealed/app");
+    const cwd = makeBundleDir();
+
+    expect(() =>
+      load(bundleSchema, {
+        cwd,
+        environment: "development",
+        source: "disk",
+        snapshot: snapshotWith({ "database-url.enc": sealed }),
+      }),
+    ).toThrow(ConfigError);
+  });
+
+  it('"snapshot" ignores a config file that is on disk', () => {
+    const sealed = seal(DATABASE_URL_ENC, "postgres://snapshot/app");
+    const cwd = makeProject({
+      "database-url": "postgres://on-disk/app",
+      "redis/host": "127.0.0.1",
+    });
+
+    const env = load(bundleSchema, {
+      cwd,
+      environment: "development",
+      source: "snapshot",
+      snapshot: snapshotWith({ "database-url.enc": sealed }),
+    });
+
+    expect(env.databaseUrl).toBe("postgres://snapshot/app");
+  });
+
+  it('"disk" keeps a broken config fatal even with a snapshot to hand', () => {
+    const cwd = makeProject({});
+    writeFileSync(join(cwd, "penv.config.ts"), UNRESOLVABLE_CONFIG, "utf8");
+
+    expect(() =>
+      load(bundleSchema, {
+        cwd,
+        environment: "development",
+        source: "disk",
+        snapshot: snapshotWith({ "database-url.enc": seal(DATABASE_URL_ENC, "postgres://s/app") }),
+      }),
+    ).toThrow(ConfigError);
+  });
+
+  it('"snapshot" with no snapshot is a named error, not a silent disk read', () => {
+    const cwd = makeProject({
+      "database-url": "postgres://on-disk/app",
+      "redis/host": "127.0.0.1",
+    });
+
+    expect(() =>
+      load(bundleSchema, { cwd, environment: "development", source: "snapshot" }),
+    ).toThrow(ConfigError);
+  });
+});
+
+/**
+ * A snapshot that has fallen behind the tree bakes one value into the build and
+ * serves another at runtime. `load` holds both sources at once, so it is where
+ * the drift can be seen — and it is only ever reported, never resolved by.
+ */
+describe("snapshot drift", () => {
+  const bundleSchema = z.object({ databaseUrl: z.url() });
+  const config = KEY_CONFIG as unknown as PenvSnapshot["config"];
+
+  it("warns when the committed snapshot no longer digests to what the tree holds", () => {
+    const sealed = seal(DATABASE_URL_ENC, "postgres://on-disk/app");
+    const cwd = makeProject({ "database-url.enc": sealed }, KEY_CONFIG);
+    const stale = { "database-url.enc": "penv:1:dev:stale:stale" };
+    const snapshot: PenvSnapshot = {
+      v: 1,
+      config,
+      values: stale,
+      digest: snapshotDigest(config, stale),
+    };
+    const stderr = captureStderr();
+
+    try {
+      expect(load(bundleSchema, { cwd, environment: "development", snapshot }).databaseUrl).toBe(
+        "postgres://on-disk/app",
+      );
+      expect(stderr.text()).toContain("penv snapshot");
+    } finally {
+      stderr.restore();
+    }
+  });
+
+  it("stays quiet when the snapshot still digests to the tree", () => {
+    const sealed = seal(DATABASE_URL_ENC, "postgres://on-disk/app");
+    const cwd = makeProject({ "database-url.enc": sealed }, KEY_CONFIG);
+    const values = { "database-url.enc": sealed };
+    const snapshot: PenvSnapshot = { v: 1, config, values, digest: snapshotDigest(config, values) };
+    const stderr = captureStderr();
+
+    try {
+      load(bundleSchema, { cwd, environment: "development", snapshot });
+      expect(stderr.text()).toBe("");
+    } finally {
+      stderr.restore();
+    }
+  });
+
+  it("stays quiet for a snapshot generated before digests — unverifiable is not stale", () => {
+    const sealed = seal(DATABASE_URL_ENC, "postgres://on-disk/app");
+    const cwd = makeProject({ "database-url.enc": sealed }, KEY_CONFIG);
+    const snapshot: PenvSnapshot = { v: 1, config, values: { "database-url.enc": "penv:1:d:x:y" } };
+    const stderr = captureStderr();
+
+    try {
+      load(bundleSchema, { cwd, environment: "development", snapshot });
+      expect(stderr.text()).toBe("");
+    } finally {
+      stderr.restore();
+    }
+  });
+});
+
+describe("provenance", () => {
+  const bundleSchema = z.object({ databaseUrl: z.url() });
+
+  it("names the config file that answered in a ValidationError", () => {
+    const cwd = makeProject({ "log-level": "debug" });
+
+    let thrown: unknown;
+    try {
+      load(bundleSchema, { cwd, environment: "development" });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as ValidationError).source).toBe(join(cwd, "penv.config.ts"));
+    expect((thrown as ValidationError).message).toContain("penv.config.ts");
+  });
+
+  it("names the embedded snapshot in a ValidationError raised from a bundle", () => {
+    const cwd = makeBundleDir();
+
+    let thrown: unknown;
+    try {
+      load(bundleSchema, {
+        cwd,
+        environment: "development",
+        snapshot: { v: 1, config: KEY_CONFIG as unknown as PenvSnapshot["config"], values: {} },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as ValidationError).source).toBe("the embedded snapshot");
+  });
+
+  it("PENV_DEBUG=1 reports the environment, the source, and each winning file", () => {
+    const cwd = makeProject({
+      "database-url": "postgres://default/app",
+      "database-url.production": "postgres://production/app",
+      "redis/host": "127.0.0.1",
+    });
+    setEnv("PENV_DEBUG", "1");
+    const stderr = captureStderr();
+
+    try {
+      load(schema, { cwd, environment: "production" });
+    } finally {
+      stderr.restore();
+    }
+
+    expect(stderr.text()).toContain("environment production");
+    expect(stderr.text()).toContain("resolved from disk");
+    expect(stderr.text()).toContain("database-url <- database-url.production");
+    expect(stderr.text()).toContain("redis.host <- redis/host");
+  });
+
+  it("says nothing without PENV_DEBUG", () => {
+    const cwd = makeProject({
+      "database-url": "postgres://default/app",
+      "redis/host": "127.0.0.1",
+    });
+    setEnv("PENV_DEBUG", undefined);
+    const stderr = captureStderr();
+
+    try {
+      load(schema, { cwd, environment: "development" });
+    } finally {
+      stderr.restore();
+    }
+
+    expect(stderr.text()).toBe("");
+  });
+});
+
+/**
+ * The confirmed prototype-inheritance bug, at the level it was reported from: a
+ * snapshot holding only `constructor.production.enc`, loaded for an environment
+ * with no candidate, reached `Object.prototype` and failed the schema with
+ * `expected string, received function`.
+ */
+describe("a parameter named after an Object.prototype member", () => {
+  const snapshot: PenvSnapshot = {
+    v: 1,
+    config: KEY_CONFIG as unknown as PenvSnapshot["config"],
+    values: { "constructor.production.enc": "penv:1:dev:aa:bb" },
+  };
+
+  it("reports the parameter as absent, not as a function", () => {
+    const cwd = makeBundleDir();
+
+    let thrown: unknown;
+    try {
+      load(z.object({ constructor: z.string() }), { cwd, environment: "development", snapshot });
+    } catch (error) {
+      thrown = error;
+    }
+
+    // The reported failure was `expected string, received function`.
+    expect((thrown as ValidationError).issues[0]?.message).toContain("received undefined");
+  });
+
+  it("yields the same empty result an ordinary parameter name would", () => {
+    const cwd = makeBundleDir();
+
+    const env = load(z.object({ constructor: z.string().optional() }), {
+      cwd,
+      environment: "development",
+      snapshot,
+    });
+
+    expect(Object.hasOwn(env as object, "constructor")).toBe(false);
   });
 });
