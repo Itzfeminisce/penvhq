@@ -94,7 +94,6 @@ describe("scaffolding", () => {
       "schema",
       "env",
       "config",
-      "snapshot",
       "tsconfig",
       "gitignore",
     ]);
@@ -113,14 +112,8 @@ describe("scaffolding", () => {
     // The `.js` extension is the output extension nodenext requires on a relative
     // import; TypeScript maps it back to `penv.schema.ts` for the type.
     expect(wrapper).toContain('import { schema } from "../penv.schema.js";');
-    // The wrapper is pre-wired for bundled runtimes: it imports the committed
-    // snapshot and passes it to load().
-    expect(wrapper).toContain('import { snapshot } from "../penv.snapshot.js";');
     expect(wrapper).toContain("export { schema };");
-    expect(wrapper).toContain("export const env = load(schema, { snapshot });");
-    // The snapshot module is scaffolded at the root, beside the config.
-    expect(existsSync(join(root, "penv.snapshot.ts"))).toBe(true);
-    expect(read(root, "penv.snapshot.ts")).toContain("satisfies PenvSnapshot");
+    expect(wrapper).toContain("export const env = load(schema);");
     // The type registration moved to the shape — it belongs with the shape, not
     // the wrapper.
     expect(wrapper).not.toContain('declare module "@penvhq/core"');
@@ -142,8 +135,7 @@ describe("scaffolding", () => {
 
       const result = runInit({ cwd: root, decisions: withInject(root) });
 
-      // env.ts opts in, and stays wired for bundled runtimes.
-      expect(read(root, "src", "env.ts")).toContain("load(schema, { inject: true, snapshot })");
+      expect(read(root, "src", "env.ts")).toContain("load(schema, { inject: true })");
       // Next's own hook is scaffolded, guarded, and reported as a seam step.
       expect(existsSync(join(root, "src", "instrumentation.ts"))).toBe(true);
       const seam = read(root, "src", "instrumentation.ts");
@@ -157,9 +149,7 @@ describe("scaffolding", () => {
 
       runInit({ cwd: root, decisions: { ...planFor(root).decisions, inject: false } });
 
-      expect(read(root, "src", "env.ts")).toContain(
-        "export const env = load(schema, { snapshot });",
-      );
+      expect(read(root, "src", "env.ts")).toContain("export const env = load(schema);");
       expect(existsSync(join(root, "src", "instrumentation.ts"))).toBe(false);
     });
 
@@ -265,7 +255,6 @@ describe("scaffolding", () => {
     expect(stepFor(second, "schema").action).toBe("kept");
     expect(stepFor(second, "env").action).toBe("kept");
     expect(stepFor(second, "config").action).toBe("kept");
-    expect(stepFor(second, "snapshot").action).toBe("kept");
     expect(stepFor(second, "tsconfig").action).toBe("kept");
     expect(stepFor(second, "gitignore").action).toBe("kept");
     // One alias, not two: re-running must not append a second entry.
@@ -807,10 +796,8 @@ describe("the schema's home", () => {
     // The wrapper goes to the chosen path; the shape stays at the root, and the
     // wrapper climbs back up to it.
     const wrapper = read(root, "src", "config", "env.ts");
-    expect(wrapper).toContain("export const env = load(schema, { snapshot });");
+    expect(wrapper).toContain("export const env = load(schema);");
     expect(wrapper).toContain('import { schema } from "../../penv.schema.js";');
-    // The snapshot import climbs the same distance as the schema import.
-    expect(wrapper).toContain('import { snapshot } from "../../penv.snapshot.js";');
     expect(existsSync(join(root, "penv.schema.ts"))).toBe(true);
     expect(existsSync(join(root, ".penv", "env.ts"))).toBe(false);
     expect(stepFor(result, "env").text).toContain("Generated src/config/env.ts");

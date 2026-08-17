@@ -28,12 +28,11 @@ import { own } from "./types.js";
 const CONFIG_FILENAMES = ["penv.config.ts", "penv.config.js", "penv.config.mjs"] as const;
 
 /**
- * jiti is a TypeScript loader, and only the config-file branch of resolution
- * needs one — a `load()` that resolves from an embedded snapshot never evaluates
- * a `.ts` module. A static import would put jiti in the import graph of every
- * bundle that reaches this module, so it is required at first use instead: the
- * runtime chunk then names `jiti` nowhere, and a serverless or edge bundle stops
- * carrying a loader it cannot invoke.
+ * jiti is a TypeScript loader, and only evaluating a `penv.config.ts` needs one.
+ * A static import would put jiti in the import graph of every bundle that reaches
+ * this module, so it is required at first use instead: the runtime chunk then
+ * names `jiti` nowhere, and a serverless or edge bundle stops carrying a loader
+ * it cannot invoke.
  *
  * `require` rather than `await import` because `load(schema)` is synchronous and
  * must stay so (invariant 3). It resolves from this module's own package, where
@@ -219,45 +218,15 @@ function configFileIn(directory: string): string | undefined {
   return undefined;
 }
 
-export interface ConfigSearch {
-  /** The config file penv will use, or `undefined`. */
-  readonly file: string | undefined;
-  /**
-   * A config file that exists above the project boundary and was deliberately
-   * not taken. Reported so a bounded search that changes the answer can say so —
-   * a walk that quietly stops one directory short of the config a developer
-   * expects is the same silent surprise as one that climbs too far.
-   */
-  readonly beyondBoundary: string | undefined;
-}
-
-/** The config search, boundary and all. {@link findConfigFile} is the usual door. */
-export function searchConfigFile(cwd: string): ConfigSearch {
-  const searched = configSearchPath(cwd);
-  for (const directory of searched) {
-    const file = configFileIn(directory);
-    if (file !== undefined) {
-      return { file, beyondBoundary: undefined };
-    }
-  }
-
-  let directory = searched[searched.length - 1] ?? resolve(cwd);
-  for (;;) {
-    const parent = dirname(directory);
-    if (parent === directory) {
-      return { file: undefined, beyondBoundary: undefined };
-    }
-    directory = parent;
-    const file = configFileIn(directory);
-    if (file !== undefined) {
-      return { file: undefined, beyondBoundary: file };
-    }
-  }
-}
-
 /** The nearest config file at or above `cwd`, within the project boundary. */
 export function findConfigFile(cwd: string): string | undefined {
-  return searchConfigFile(cwd).file;
+  for (const directory of configSearchPath(cwd)) {
+    const file = configFileIn(directory);
+    if (file !== undefined) {
+      return file;
+    }
+  }
+  return undefined;
 }
 
 export function loadConfigFrom(file: string): PenvConfig {

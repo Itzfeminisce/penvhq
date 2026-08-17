@@ -42,7 +42,6 @@ import {
   refFromKey,
   schemaShapeFileOf,
 } from "../project.js";
-import { refreshSnapshot } from "../snapshot.js";
 import { CHECK, formatRows, guard, type Row, tip, write } from "../ui.js";
 
 export interface MoveOptions {
@@ -212,10 +211,6 @@ export async function runMove(options: MoveOptions): Promise<MoveResult> {
   if (meta !== undefined) {
     await project.provider.removeMeta(from);
   }
-
-  // A sealed value was re-sealed at a new address, so its snapshot key changed;
-  // refresh it.
-  refreshSnapshot(project);
 
   return {
     from: parameterId(from),

@@ -11,11 +11,6 @@
  * offer without a schema to hold. Reach for this one only to adopt penv before
  * writing a schema.
  *
- * It is also disk-only, deliberately: a bare side-effect import receives no
- * snapshot, so this entry cannot serve a bundled or serverless runtime where no
- * `penv.config.ts` is on disk. Bundled consumers reach for the blessed `@env`
- * surface, whose `load()` takes an embedded `{ snapshot }` (see `penv snapshot`).
- *
  * ESM ordering caveat: this module must run before any module that reads
  * `process.env`. ES imports are hoisted and evaluated before the importing
  * module's body, but sibling imports evaluate in source order — so a module
@@ -29,9 +24,7 @@
 import { checkNameCollisions, variableName } from "@penvhq/core";
 import { resolveSync } from "./resolve.js";
 
-// `source: "disk"` states what this entry already was: a bare side-effect import
-// receives no snapshot, so the disk branch is the only one it could ever take.
-const { config, values } = resolveSync({ cwd: process.cwd(), source: "disk" });
+const { config, values } = resolveSync({ cwd: process.cwd() });
 
 // Invariant 12, enforced where the loss would happen: two parameters mapping to
 // one variable would otherwise resolve first-write-wins, dropping the second

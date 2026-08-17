@@ -213,11 +213,11 @@ describe("beginRotation", () => {
       rotationPolicy: "90d",
       environments: { production: { rotationState: "active", rotatingSince: null } },
     };
-    const snapshot = JSON.parse(JSON.stringify(meta));
+    const before = JSON.parse(JSON.stringify(meta));
 
     beginRotation(meta, "production", now);
 
-    expect(meta).toEqual(snapshot);
+    expect(meta).toEqual(before);
   });
 
   it("preserves other environments, the base block, and unknown keys", () => {
@@ -275,11 +275,11 @@ describe("completeRotation", () => {
         production: { rotationState: "rotating", rotatingSince: "2026-07-01T00:00:00.000Z" },
       },
     };
-    const snapshot = JSON.parse(JSON.stringify(meta));
+    const before = JSON.parse(JSON.stringify(meta));
 
     completeRotation(meta, "production", now);
 
-    expect(meta).toEqual(snapshot);
+    expect(meta).toEqual(before);
   });
 
   it("preserves other environments and unknown keys", () => {

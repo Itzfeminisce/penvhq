@@ -364,37 +364,6 @@ export interface PenvConfig {
 }
 
 /**
- * A committed, bundler-traversable projection of a project — the evaluated config
- * and every committed sealed value — so `load()` resolves in a bundled or
- * serverless runtime where no `penv.config.ts` or `.penv/` tree is on disk (a
- * Vercel `/var/task` bundle, say). The CLI generates it as `penv.snapshot.ts` at
- * the project root and the runtime falls back to it only when file discovery finds
- * no config; on disk, live edits always win.
- *
- * `values` holds sealed records *only* — `*.enc` envelope strings keyed by their
- * filename-grammar address (`formatValueFile`). Plaintext is never embedded, at
- * any scope, so the snapshot ships exactly what a git clone already sees:
- * ciphertext that a `PENV_KEY_*` opens at boot, and nothing a key does not.
- * Deliberately distinct from the plaintext, name-mapped `ProjectionProvider`
- * vocabulary — this preserves sealed records at their grammar addresses.
- */
-export interface PenvSnapshot {
-  readonly v: 1;
-  /** The evaluated config; no key material. */
-  readonly config: PenvConfig;
-  /** `formatValueFile(file)` → sealed envelope string. Sealed records only. */
-  readonly values: Readonly<Record<string, string>>;
-  /**
-   * The digest of the inputs this snapshot projects, so staleness is checkable
-   * rather than assumed — `penv snapshot --check` recomputes it in CI, and
-   * `load()` warns when the tree it just read no longer digests to this.
-   * Optional because a snapshot generated before digests exist is still
-   * loadable; it is unverifiable, which is what a missing digest reports.
-   */
-  readonly digest?: string;
-}
-
-/**
  * The provider contract. The filesystem provider is the reference
  * implementation and the ground truth: every provider satisfies this contract
  * unchanged, or the portability claim is false.

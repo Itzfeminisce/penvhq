@@ -41,12 +41,6 @@ import {
 } from "../detect.js";
 import { selfContainedSchemaModule } from "../project.js";
 import { type ScaffoldSeam, type Seam, seamFor } from "../seams.js";
-import {
-  buildSnapshotFrom,
-  renderSnapshotModule,
-  SNAPSHOT_FILE,
-  snapshotSpecifier,
-} from "../snapshot.js";
 import { out } from "../style.js";
 import { CHECK, columns, formatSteps, guard, prompt, type Step, tip, WARN, write } from "../ui.js";
 
@@ -106,7 +100,6 @@ export type InitTarget =
   | "schema"
   | "env"
   | "config"
-  | "snapshot"
   | "tsconfig"
   | "gitignore"
   | "seam";
@@ -651,20 +644,17 @@ export function renderEnvModule(schemaFile: string, inject = false): string {
   const loadComment = inject
     ? "// The loaded, validated values for the current environment. Import this in app\n" +
       "// code. `inject: true` also copies the values into process.env, for libraries\n" +
-      "// that read process.env directly. `snapshot` lets load() resolve in a bundled or\n" +
-      "// serverless runtime where no penv.config.ts is on disk.\n"
+      "// that read process.env directly.\n"
     : "// The loaded, validated values for the current environment. Import this in app\n" +
       "// code. Importing it loads configuration and throws (naming the parameter and\n" +
-      "// environment) if anything required is missing or invalid. `snapshot` lets load()\n" +
-      "// resolve in a bundled or serverless runtime where no penv.config.ts is on disk.\n";
+      "// environment) if anything required is missing or invalid.\n";
   const loadCall = inject
-    ? "export const env = load(schema, { inject: true, snapshot });\n"
-    : "export const env = load(schema, { snapshot });\n";
+    ? "export const env = load(schema, { inject: true });\n"
+    : "export const env = load(schema);\n";
 
   return (
     `import { load } from "@penvhq/penv";\n` +
     `import { schema } from "${shapeSpecifier(schemaFile)}";\n` +
-    `import { snapshot } from "${snapshotSpecifier(schemaFile)}";\n` +
     `\n` +
     `// Re-exported so type-only consumers can import the shape through @env without\n` +
     `// triggering config loading — the shape itself lives in ${SCHEMA_SHAPE_FILE}.\n` +
@@ -1130,54 +1120,6 @@ export function writeConfigFile(
   return { target: "config", action: "created", text: `Generated ${CONFIG_FILE}` };
 }
 
-/**
- * The config a fresh project embeds in its snapshot — the same object
- * `renderConfigModule` writes into `penv.config.ts` (defineConfig is identity), so
- * the scaffolded snapshot and one recomputed from the evaluated config are
- * byte-identical and `doctor snapshot-stale` does not flag a just-init'd project.
- */
-function snapshotConfig(decisions: InitDecisions): PenvConfig {
-  const providers: Record<string, { readonly type: string }> = {};
-  for (const environment of decisions.environments) {
-    providers[environment] = { type: "@penvhq/provider-filesystem" };
-  }
-  return {
-    environments: decisions.environments,
-    providers,
-    ...(decisions.schemaFile === DEFAULT_SCHEMA_FILE ? {} : { schemaFile: decisions.schemaFile }),
-    ...(decisions.publicPrefixes.length === 0 ? {} : { publicPrefixes: decisions.publicPrefixes }),
-  };
-}
-
-/**
- * The committed snapshot `penv.snapshot.ts`, scaffolded once so a new project's
- * `env.ts` — which the scaffold pre-wires to import it — resolves in a bundled or
- * serverless runtime with no config on disk. It embeds the config the decisions
- * describe and every committed sealed value (none, at init); the mutating commands
- * and `penv snapshot` keep it current thereafter. Write-once, like the config and
- * schema — an existing one is the user's.
- */
-export function writeSnapshotModule(
-  root: string,
-  decisions: InitDecisions = DEFAULT_DECISIONS,
-): InitStep {
-  const file = join(root, SNAPSHOT_FILE);
-  if (existsSync(file)) {
-    return { target: "snapshot", action: "kept", text: `Kept ${SNAPSHOT_FILE}` };
-  }
-  writeFileSync(
-    file,
-    renderSnapshotModule(buildSnapshotFrom(root, snapshotConfig(decisions))),
-    "utf8",
-  );
-  return {
-    target: "snapshot",
-    action: "created",
-    text: `Generated ${SNAPSHOT_FILE}`,
-    note: "(committed — the bundle resolves load() from it)",
-  };
-}
-
 export function writeTsconfigAlias(
   root: string,
   decisions: InitDecisions = DEFAULT_DECISIONS,
@@ -1420,9 +1362,6 @@ export function scaffold(
     writeSchemaShapeFile(root, fields, draft, decisions),
     writeEnvFile(root, decisions),
     writeConfigFile(root, decisions),
-    // After the config, whose evaluated shape the snapshot embeds; the wrapper
-    // env.ts written above already imports it.
-    writeSnapshotModule(root, decisions),
     writeTsconfigAlias(root, decisions),
     writeGitignore(root, decisions),
   ];

@@ -7,7 +7,6 @@
  * contract: what is not re-exported here is an implementation detail.
  */
 
-export type { ConfigSearch } from "./config.js";
 export {
   assertEnvironment,
   defineConfig,
@@ -19,7 +18,6 @@ export {
   resolveEnvironment,
   SCHEMA_HARVEST_ENV,
   schemaHarvestActive,
-  searchConfigFile,
   validateConfig,
 } from "./config.js";
 export type { DecryptResult } from "./crypto.js";
@@ -105,8 +103,6 @@ export {
   validatePublicPrefixes,
   validateSchemaFile,
 } from "./schema-file.js";
-export type { SyncValueSource } from "./snapshot.js";
-export { sealedSnapshotValues, snapshotDigest } from "./snapshot.js";
 export type {
   AnyProvider,
   DecryptFailure,
@@ -125,7 +121,6 @@ export type {
   PenvConfig,
   PenvErrorLike,
   PenvSchemaShape,
-  PenvSnapshot,
   ProjectionProvider,
   ProjectionSecret,
   Provider,

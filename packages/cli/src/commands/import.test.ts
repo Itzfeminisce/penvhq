@@ -677,21 +677,7 @@ describe("a shape the import kept", () => {
     // The wrapper carries the loader and re-exports the shape.
     const wrapper = readFileSync(join(root, ".penv", "env.ts"), "utf8");
     expect(wrapper).toContain('import { schema } from "../penv.schema.js";');
-    expect(wrapper).toContain("export const env = load(schema, { snapshot });");
-  });
-
-  /** The scaffold pre-wires the bundled-runtime path: env.ts imports a real file. */
-  it("scaffolds penv.snapshot.ts that env.ts imports", () => {
-    const root = makeProject({ dotenv: KEPT.dotenv, config: CONFIG });
-
-    importDotenv({ cwd: root, file: ".env" });
-
-    expect(existsSync(join(root, "penv.snapshot.ts"))).toBe(true);
-    // Import writes plaintext, so a fresh import embeds no values — but the module
-    // is present, so the wrapper's `import { snapshot }` resolves.
-    const snapshot = readFileSync(join(root, "penv.snapshot.ts"), "utf8");
-    expect(snapshot).toContain("satisfies PenvSnapshot");
-    expect(snapshot).toContain('"values": {}');
+    expect(wrapper).toContain("export const env = load(schema);");
   });
 });
 

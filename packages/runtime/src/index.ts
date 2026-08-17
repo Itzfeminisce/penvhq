@@ -6,7 +6,6 @@
  * tool, whatever package a symbol happens to live in.
  */
 
-export type { PenvSnapshot } from "@penvhq/core";
 export {
   ConfigError,
   defineConfig,
@@ -22,4 +21,3 @@ export type { InjectResult } from "./inject.js";
 export { declaredRefs, inject } from "./inject.js";
 export type { LoadOptions, LoadOptionsFor } from "./load.js";
 export { load } from "./load.js";
-export type { LoadSource } from "./resolve.js";
