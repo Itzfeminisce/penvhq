@@ -415,13 +415,15 @@ PRD for implementation.
 
 ### 1. Where the wrapper lives
 
-The PRD's examples show a human typing `penv run --env development --source project -- pnpm dev`.
-That changes every developer's daily muscle memory, and forgetting it is a refusal. The design
-already permits the cheaper pattern: the developer commits the wrapper *inside* the script —
-`"dev": "penv run … -- next dev"` — and the daily command stays `pnpm dev`, with the package
-manager still owning lifecycle hooks because it still runs the script.
-**Seal:** bless in-script wrapping as the documented development pattern. `init` shows the exact
-line to paste (it still never edits scripts); wrapper-outside remains the CI/production form.
+The PRD's examples show a human typing `penv run --env development --source project -- pnpm dev`,
+and muscle memory is the cost. In-script wrapping looks cheaper, but the command after `--` is the
+developer's own and unpredictable — penv cannot compose or suggest a script line containing it
+without guessing. The two placements are also not equivalent: wrapped outside, `pre*`/`post*`
+hooks run inside penv's environment; wrapped inside a script, they run before it exists.
+**Seal:** wrapper-outside stays the blessed form; seals 2 and 3 are what shorten the daily command
+to `penv run -- pnpm dev`. In-script wrapping remains permitted but entirely developer-authored,
+documented with the hook-environment difference. A nested `penv run` (an outer wrapper meeting an
+in-script one) is refused, naming both invocations.
 
 ### 2. `--source` on every run
 
