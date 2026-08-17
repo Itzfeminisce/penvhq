@@ -6,3 +6,4 @@ allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
   - '@changesets/cli@2.31.1'
+verifyDepsBeforeRun: false
