@@ -16,6 +16,7 @@
 import { readFileSync } from "node:fs";
 import type { Manifest } from "@penvhq/core";
 import { PenvError, parseManifest, UnsupportedManifestFormatError } from "@penvhq/core";
+import { add } from "./add.js";
 import type { Spawner } from "./delegate.js";
 import { type Engine, engineAt } from "./engine.js";
 import {
@@ -32,17 +33,10 @@ import {
   PENV_HOME_VAR,
   penvHome,
 } from "./home.js";
+import type { LauncherIo } from "./io.js";
+import type { Project } from "./project.js";
 import { findProject } from "./project.js";
 import { inspectInstall, installPin, type Pin } from "./store.js";
-
-/** Where the launcher writes, and how it asks the one question it asks. */
-export interface LauncherIo {
-  out(line: string): void;
-  err(line: string): void;
-  /** Whether a human is at the other end of the streams. */
-  readonly interactive: boolean;
-  confirm(question: string): Promise<boolean>;
-}
 
 export interface LauncherOptions {
   /** The command line, minus the executable — `process.argv.slice(2)`. */
@@ -58,6 +52,7 @@ export interface LauncherOptions {
 
 /** The launcher's own commands. Everything else belongs to the engine. */
 const INSTALL = "install";
+const ADD = "add";
 const VERSION_FLAGS = new Set(["--version", "-v"]);
 const HELP_FLAGS = new Set(["--help", "-h"]);
 const NO_DOWNLOAD = "--no-download";
@@ -199,6 +194,10 @@ async function launch(options: LauncherOptions): Promise<number> {
     return install(options, pinsOf(manifest), home);
   }
 
+  if (first === ADD) {
+    return addExtension(options, project, home, forwarded.slice(1), noDownload);
+  }
+
   const enginePin = enginePinOf(manifest);
   const engineDir = await ensure(options, "engines", enginePin, home, noDownload);
   for (const pin of extensionPinsOf(manifest)) {
@@ -255,6 +254,37 @@ async function install(
     options.io.out(`✓ ${pin.name} ${pin.version} installed`);
   }
   return 0;
+}
+
+/**
+ * `penv add`: the launcher's command, because everything it writes is the
+ * launcher's — the store and the manifest that pins it.
+ *
+ * The engine is resolved only if the provider's onboarding offer is accepted, so
+ * a project can add an extension before its engine has ever been installed.
+ */
+async function addExtension(
+  options: LauncherOptions,
+  project: Project,
+  home: string,
+  argv: readonly string[],
+  noDownload: boolean,
+): Promise<number> {
+  const { onboard } = await add({
+    argv,
+    root: project.root,
+    manifestFile: project.manifestFile,
+    home,
+    io: options.io,
+    fetcher: options.fetcher,
+  });
+  if (onboard === undefined) {
+    return 0;
+  }
+  const enginePin = enginePinOf(readManifest(project.manifestFile, home, options.argv));
+  const dir = await ensure(options, "engines", enginePin, home, noDownload);
+  const engine = engineAt(dir, enginePin.name, enginePin.version);
+  return delegate(options, engine, onboard, home, options.cwd);
 }
 
 /**

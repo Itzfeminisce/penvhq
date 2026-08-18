@@ -7,20 +7,49 @@
  * counts as installed.
  */
 
+export type { AddOptions, AddResult } from "./add.js";
+export { add } from "./add.js";
+export type { ProviderEntry } from "./config-edit.js";
+export { readProviderEntries, setProviderType } from "./config-edit.js";
+export type { DeclarationSubject, ExtensionPackage } from "./declaration.js";
+export {
+  declarationPath,
+  readExtensionPackage,
+  renderDeclaration,
+  writeDeclaration,
+} from "./declaration.js";
 export type { Delegation, Spawner } from "./delegate.js";
 export { nodeSpawner } from "./delegate.js";
 export type { Engine } from "./engine.js";
 export { bundledEngine, ENGINE_BIN, engineAt } from "./engine.js";
 export {
+  AddFlagError,
+  AddPackageNameError,
+  AddRegistryError,
+  AddSubjectError,
   ArchiveError,
+  DeclarationMissingError,
+  DeclarationNotSelfContainedError,
   DownloadFailedError,
   DownloadIntegrityError,
   EngineEntryError,
   INSTALL_COMMAND,
   InstallDeclinedError,
+  MIN_PACKAGE_AGE_DAYS,
   NoProjectError,
+  OfficialRegistryError,
   PackageCorruptError,
   PackageMissingError,
+  PackageTooYoungError,
+  PackageUnknownError,
+  RegistryUnreadableError,
+  ReleaseIncompleteError,
+  TRUST_YOUNG_FLAG,
+  TrustDeclinedError,
+  TrustPromptNeededError,
+  TrustPublisherMissingError,
+  TrustReasonMissingError,
+  VersionUnknownError,
 } from "./errors.js";
 export type { Fetcher } from "./fetcher.js";
 export { httpFetcher } from "./fetcher.js";
@@ -35,10 +64,13 @@ export {
   penvHome,
 } from "./home.js";
 export { integrityOf } from "./integrity.js";
-export type { LauncherIo, LauncherOptions } from "./launcher.js";
+export type { LauncherIo } from "./io.js";
+export type { LauncherOptions } from "./launcher.js";
 export { runLauncher } from "./launcher.js";
 export type { Project } from "./project.js";
 export { findProject } from "./project.js";
+export type { Release, ReleaseQuery } from "./registry.js";
+export { fetchRelease, packumentUrl } from "./registry.js";
 export type { Installation, InstallOptions, InstallState, Pin } from "./store.js";
 export { DEFAULT_REGISTRY, inspectInstall, installPin, tarballUrl } from "./store.js";
 export type { ArchiveSubject, TarEntry } from "./tar.js";
