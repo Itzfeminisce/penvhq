@@ -786,6 +786,7 @@ Reporting is all it does. penv will not materialise a value file from a declarat
 | `penv migrate` | Convert a project written under an earlier layout to `.penv/state/`. Previews first, moves records on approval, leaves your schema, config, and loader byte-identical. |
 | `penv add <package>` | Add a provider extension: record it in the manifest with its integrity, install it into the launcher's cache, generate its type declaration, offer the config edit and any onboarding step. |
 | `penv upgrade [version]` | Move the pinned engine and the project's `@penvhq/penv` dependency together. |
+| `penv install` | Install the exact engine and extensions the manifest pins. The preinstall step for CI and production, which never download during a run. |
 | `penv import <file>` | Import an existing dotenv file; it becomes the source of truth. The filename names the scope the values are written at (`.env.production` → `<name>.production`); `--env` names it for a file that doesn't, and contradicting the filename is an error. |
 | `penv generate` | Write a standard `.env` artifact for deploy targets. |
 | `penv pull` | Materialise the parameter tree for an environment from its provider. Supports `--env`. |
