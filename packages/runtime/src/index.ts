@@ -19,12 +19,22 @@ export {
   UnknownEnvironmentError,
   ValidationError,
 } from "@penvhq/core";
-export type { ChildEnvironment, ChildEnvironmentInput, Environment } from "./child-env.js";
+export type {
+  ChildEnvironment,
+  ChildEnvironmentInput,
+  DeliveredEnvironmentInput,
+  DeliveredValue,
+  Delivery,
+  Environment,
+} from "./child-env.js";
 export {
   childEnvironment,
-  consumeRunMarker,
+  consumeDelivery,
+  DELIVERY_VARIABLE,
+  deliveredEnvironment,
   ENVIRONMENT_VARIABLE,
   RUN_MARKER,
+  SNAPSHOT_VARIABLE,
   strippedVariables,
 } from "./child-env.js";
 export type { InjectResult } from "./inject.js";

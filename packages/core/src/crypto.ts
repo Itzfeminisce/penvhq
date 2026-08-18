@@ -126,6 +126,20 @@ function failed(reason: DecryptReason, detail: string): DecryptResult {
  * report. See the module note on why reading answers and writing throws.
  */
 export function decryptValue(file: ValueFile, stored: string, keys: KeySource): DecryptResult {
+  return openSealed(formatValueFile(file), stored, keys);
+}
+
+/**
+ * The same open, addressed by the string the AAD *is* rather than by the file it
+ * came from.
+ *
+ * The deployment artifact carries a ciphertext verbatim alongside the address it
+ * was sealed at, and is read where no `penv.config.ts` exists — so there is no
+ * environment whitelist to parse that address back into a {@link ValueFile}
+ * with. Binding stays exactly as strict: the AAD is still the value file's full
+ * name, so a ciphertext moved between scopes still fails to open (invariant 17).
+ */
+export function openSealed(address: string, stored: string, keys: KeySource): DecryptResult {
   const envelope = parseEnvelope(stored);
   if (envelope === undefined) {
     // Decided without consulting a key: a plaintext value in an `.enc` file is
@@ -147,17 +161,14 @@ export function decryptValue(file: ValueFile, stored: string, keys: KeySource): 
 
   try {
     const decipher = createDecipheriv(ALGORITHM, lookup.key, envelope.nonce);
-    decipher.setAAD(aadFor(file));
+    decipher.setAAD(Buffer.from(address, "utf8"));
     decipher.setAuthTag(tag);
     const opened = Buffer.concat([decipher.update(body), decipher.final()]);
     return { kind: "plaintext", value: opened.toString("utf8") };
   } catch {
     // The tag check failed. GCM cannot say which of the three causes it was, so
     // neither does penv — the remedy names all three rather than guessing one.
-    return failed(
-      "undecipherable",
-      `${formatValueFile(file)} did not open under key \`${envelope.keyId}\``,
-    );
+    return failed("undecipherable", `${address} did not open under key \`${envelope.keyId}\``);
   }
 }
 

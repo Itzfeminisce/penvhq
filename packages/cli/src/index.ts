@@ -9,6 +9,7 @@
 
 import { setKeychain } from "@penvhq/core";
 import { runMain as cittyRunMain, defineCommand } from "citty";
+import { artifactCommand } from "./commands/artifact.js";
 import { cleanupCommand } from "./commands/cleanup.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { decryptCommand, encryptCommand } from "./commands/encrypt.js";
@@ -58,6 +59,7 @@ export const main = defineCommand({
     validate: validateCommand,
     doctor: doctorCommand,
     watch: watchCommand,
+    artifact: artifactCommand,
   },
 });
 
@@ -69,6 +71,8 @@ export function runMain(): Promise<void> {
   return cittyRunMain(main);
 }
 
+export type { ArtifactBuildOptions, ArtifactBuildResult } from "./commands/artifact.js";
+export { renderArtifactBuild, runArtifactBuild } from "./commands/artifact.js";
 export type {
   DoctorCheck,
   DoctorFinding,

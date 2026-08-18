@@ -1,30 +1,59 @@
 /**
- * The runtime loader. `load` is generic and returns `z.infer<T>` — the type the
- * caller's own schema describes, never a widened one. The inferred type is only
- * true because the same schema validates the values before they are returned,
- * so the type you code against and the value you receive cannot diverge.
+ * The runtime loader — the application's typed bridge.
+ *
+ * `load` is generic and returns `z.infer<T>` — the type the caller's own schema
+ * describes, never a widened one. The inferred type is only true because the
+ * same schema validates the values before they are returned, so the type you
+ * code against and the value you receive cannot diverge.
+ *
+ * **It validates the environment it was handed, and nothing else** (PRD §4). The
+ * bridge does not open `penv.config.ts`, does not walk the records tree, does
+ * not decrypt, and never calls a provider. `penv run` resolved the cascade,
+ * checked it against the schema, opened what was sealed, and wrote an owned
+ * child environment; this reads that environment back under the same names and
+ * proves it against the schema a second time, in the process that will use it.
+ *
+ * That is what makes one bridge serve both deliveries. Running from the project
+ * tree and running from a sealed artifact differ entirely in the parent and not
+ * at all here — a container started from `penv run --source snapshot` has no
+ * config, no tree and no key, and the bridge never wanted any of them. It also
+ * moves one refusal: an application started outside `penv run` no longer half
+ * resolves a tree, it simply finds nothing penv put there, and hears the sealed
+ * direct-start line naming the command that starts it properly.
+ *
+ * The one thing the bridge cannot work out for itself is which variable each
+ * schema parameter arrived in, because `override` in `penv.config.ts` can bend
+ * any of them. `penv run` writes that map down beside the values (see
+ * `DELIVERY_VARIABLE`), and it is read here as the `override` block it is.
  */
 
 import { basename, isAbsolute, relative } from "node:path";
+import type { ParameterRef, PenvConfig } from "@penvhq/core";
 import {
   accessPath,
   DirectStartError,
-  MissingMaterializationError,
   type OverrideKeysOf,
+  parameterId,
   schemaHarvestActive,
   ValidationError,
+  variableName,
 } from "@penvhq/core";
 import type { z } from "zod";
-import { consumeRunMarker } from "./child-env.js";
-import { debug } from "./diagnostics.js";
-import { inject } from "./inject.js";
-import type { ResolvedValue } from "./resolve.js";
-import { describeResolution, hasRemoteSource, resolveSync } from "./resolve.js";
+import type { Environment } from "./child-env.js";
+import { consumeDelivery, ENVIRONMENT_VARIABLE } from "./child-env.js";
+import { debug, debugEnabled } from "./diagnostics.js";
+import { declaredRefs, inject } from "./inject.js";
 
 export interface LoadOptions {
-  /** Where to start looking for `penv.config.ts`. Defaults to `process.cwd()`. */
-  readonly cwd?: string;
-  /** Overrides `PENV_ENV` / `NODE_ENV`. Must be a declared environment. */
+  /**
+   * The injected environment to validate. Defaults to `process.env`, which is
+   * where `penv run` wrote it.
+   */
+  readonly env?: Record<string, string | undefined>;
+  /**
+   * The environment name a refusal reports. Defaults to `PENV_ENV`, which
+   * `penv run` pins, then `NODE_ENV`.
+   */
   readonly environment?: string;
   /**
    * Also inject the validated values into `process.env`, so an SDK that reads
@@ -83,8 +112,8 @@ function node(): Record<string, unknown> {
 
 /**
  * Places a value at its access path, creating namespaces on the way.
- * Values are placed exactly as the provider holds them: coercion is the
- * schema's job, so a value file's contents stay a string here.
+ * Values are placed exactly as they were delivered: coercion is the schema's
+ * job, so an environment variable's contents stay a string here.
  */
 function place(root: Record<string, unknown>, path: readonly string[], value: string): void {
   const leaf = path[path.length - 1];
@@ -107,18 +136,41 @@ function place(root: Record<string, unknown>, path: readonly string[], value: st
 }
 
 /**
+ * The delivery contract as the only piece of configuration the bridge holds.
+ *
+ * `override` is parameter id → variable, which is exactly what `penv run` wrote
+ * down, so the map is read back as one rather than converted into one. Nothing
+ * else about a project is knowable here, and nothing else is needed: naming is
+ * the only question the injected environment cannot answer about itself.
+ */
+function deliveryConfig(names: Readonly<Record<string, string>>): PenvConfig {
+  return { environments: [], providers: {}, override: names };
+}
+
+/** The environment a refusal names: what the caller said, then what `penv run` pinned. */
+function environmentOf(options: ResolvedLoadOptions | undefined, env: Environment): string {
+  const named = options?.environment ?? env[ENVIRONMENT_VARIABLE] ?? env.NODE_ENV;
+  // Nothing set it, which means nothing prepared this process either — the
+  // refusal below is about that, and `development` is what an unset `NODE_ENV`
+  // means everywhere else in the ecosystem. It names the environment in a
+  // message; it never decides one.
+  return named === undefined || named.trim().length === 0 ? "development" : named.trim();
+}
+
+/**
  * Loads, validates, and returns configuration for the current environment.
- * Eager and synchronous: invalid configuration fails at startup with a
- * parameter-named error rather than later at first use.
+ * Eager and synchronous: an environment that does not satisfy the schema fails
+ * at startup with a parameter-named error rather than later at first use.
  *
  * One deliberate exception to the eagerness: while the CLI is harvesting the
  * `schema` export of `.penv/env.ts` (see `SCHEMA_HARVEST_ENV` in core), the
  * scaffolded module's own `export const env = load(schema)` must not stop the
- * module from evaluating — an empty tree would throw here and take the `schema`
- * export down with it, which is exactly the state `penv fill` exists to fix. In
- * that window `load` returns a lazy stand-in that performs the real load — and
- * raises the same parameter-named error — on first property access. Application
- * runtime never sets the flag, so ordinary loads stay eager and fail-fast.
+ * module from evaluating — the CLI's own environment is not the application's,
+ * so this load would throw and take the `schema` export down with it, which is
+ * exactly the state `penv fill` exists to fix. In that window `load` returns a
+ * lazy stand-in that performs the real load — and raises the same
+ * parameter-named error — on first property access. Application runtime never
+ * sets the flag, so ordinary loads stay eager and fail-fast.
  */
 export function load<T extends z.ZodType>(schema: T, options?: LoadOptionsFor<T>): z.infer<T> {
   if (schemaHarvestActive()) {
@@ -128,21 +180,24 @@ export function load<T extends z.ZodType>(schema: T, options?: LoadOptionsFor<T>
 }
 
 function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptions): z.infer<T> {
-  // Read once, here, and taken out of `process.env` as it is read: the marker is
-  // penv's message to a nested penv, and the application's first act is this
-  // load, so this is where it stops being visible to anything downstream.
-  consumeRunMarker();
-  const resolved = resolveSync({
-    cwd: options?.cwd ?? process.cwd(),
-    ...(options?.environment === undefined ? {} : { environment: options.environment }),
-  });
-  const { config, environment, values } = resolved;
-  debug(describeResolution(resolved));
+  // Read once, here, and taken out of `process.env` as it is read: the marker and
+  // the delivery contract are penv's message to itself, and the application's
+  // first act is this load, so this is where they stop being visible downstream.
+  const source = options?.env ?? process.env;
+  const delivery = consumeDelivery(source);
+  const config = deliveryConfig(delivery.names);
+  const environment = environmentOf(options, source);
 
+  const values: { readonly ref: ParameterRef; readonly value: string }[] = [];
   const object = node();
-  for (const { ref, value } of values) {
-    place(object, accessPath(ref), value);
+  for (const ref of declaredRefs(schema)) {
+    const value = source[variableName(ref, config)];
+    if (value !== undefined) {
+      values.push({ ref, value });
+      place(object, accessPath(ref), value);
+    }
   }
+  debug(describeDelivery(environment, values, config));
 
   const result = schema.safeParse(object);
   if (!result.success) {
@@ -153,7 +208,7 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptio
         message: issue.message,
       })),
       values,
-      hasRemoteSource(config, environment),
+      delivery.invocation,
     );
   }
 
@@ -161,8 +216,8 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptio
   // value, so an SDK reading `process.env` never sees a half-configured surface.
   // Guarded against the harvest window — the CLI reading the `schema` export must
   // never trigger a `process.env` mutation, even if the scaffolded module reads a
-  // concrete value at its top level. The raw `values` cross for tree-resolved
-  // parameters (`process.env` is strings); `result.data` is passed only so a
+  // concrete value at its top level. The delivered strings cross for parameters
+  // that arrived (`process.env` is strings); `result.data` is passed only so a
   // schema default reaches the environment instead of being deleted.
   // Injection is opt-in through exactly two shapes: `true` (whole schema) or an
   // allowlist array (only those). Any other value — a truthy non-array a JS caller
@@ -184,33 +239,31 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptio
 }
 
 /**
- * Which refusal a failed validation is, which depends entirely on who is
- * reading it.
+ * Which refusal a failed validation is, which depends entirely on who is reading
+ * it.
  *
- * Three readers, three answers. Nothing resolved at all, for an environment
- * whose values live in a provider: a teammate who has cloned and not yet pulled,
- * and the whole tree is what they are missing — an environment backed by the
- * local tree is excluded, because there is nowhere for it to pull from and the
- * line would be a dead end. Something resolved but a required parameter did not,
- * in a process penv did not start: an adopted application started the old way,
- * whose remedy is the command rather than the value. Anything else — a value the
- * schema rejects, or a failure inside `penv run`, where the environment was
- * already prepared — is the plain validation error it has always been.
+ * Two readers, two answers. A required parameter did not arrive in a process
+ * penv did not start: an adopted application launched the old way, whose remedy
+ * is the command rather than the value. Anything else — a value the schema
+ * rejects, or a failure inside `penv run`, where the environment was already
+ * prepared and checked once — is the plain validation error it has always been.
+ *
+ * The third reader the tree-reading bridge used to serve, a teammate who has
+ * cloned and not yet pulled, is `penv run`'s now: it is the half that knows
+ * whether the environment has somewhere to pull *from*, and it refuses before
+ * the application starts at all.
  */
 function failure(
   environment: string,
   issues: readonly { readonly parameter: string; readonly message: string }[],
-  values: readonly ResolvedValue[],
-  remoteSource: boolean,
-): ValidationError | MissingMaterializationError {
-  if (values.length === 0 && remoteSource) {
-    return new MissingMaterializationError(environment);
-  }
-  if (consumeRunMarker().invocation !== undefined) {
+  values: readonly { readonly ref: ParameterRef; readonly value: string }[],
+  invocation: string | undefined,
+): ValidationError {
+  if (invocation !== undefined) {
     return new ValidationError(environment, issues);
   }
-  const resolved = new Set(values.map(({ ref }) => accessPath(ref).join(".")));
-  const missing = issues.find((issue) => !resolved.has(issue.parameter));
+  const delivered = new Set(values.map(({ ref }) => accessPath(ref).join(".")));
+  const missing = issues.find((issue) => !delivered.has(issue.parameter));
   if (missing === undefined) {
     return new ValidationError(environment, issues);
   }
@@ -242,13 +295,29 @@ function shorten(argument: string): string {
   return local === "" || local.startsWith("..") ? argument : local;
 }
 
+/** The `PENV_DEBUG=1` account of one load: what arrived, and under which name. */
+function describeDelivery(
+  environment: string,
+  values: readonly { readonly ref: ParameterRef; readonly value: string }[],
+  config: PenvConfig,
+): string[] {
+  if (!debugEnabled()) {
+    return [];
+  }
+  return [
+    `environment ${environment}, read from the injected environment`,
+    `${values.length} parameter${values.length === 1 ? "" : "s"} delivered`,
+    ...values.map(({ ref }) => `  ${parameterId(ref)} <- ${variableName(ref, config)}`),
+  ];
+}
+
 /**
- * `load`'s harvest-time stand-in: nothing is resolved or validated until a
- * property is actually read. The schema module's top level only *binds*
+ * `load`'s harvest-time stand-in: nothing is read or validated until a property
+ * is actually read. The schema module's top level only *binds*
  * `export const env`, so under harvest the binding succeeds, the CLI reads the
- * `schema` export, and the deferred error — if the tree still cannot satisfy the
- * schema — surfaces on first real use with the same `ValidationError` the eager
- * path throws.
+ * `schema` export, and the deferred error — if the environment still cannot
+ * satisfy the schema — surfaces on first real use with the same
+ * `ValidationError` the eager path throws.
  */
 function deferLoad<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptions): z.infer<T> {
   let materialized = false;

@@ -7,6 +7,17 @@
  * contract: what is not re-exported here is an implementation detail.
  */
 
+export type { Artifact, ArtifactEntry, ArtifactExpectation } from "./artifact.js";
+export {
+  ARTIFACT_BUILD_COMMAND,
+  ARTIFACT_FORMAT,
+  ArtifactError,
+  assertArtifactFor,
+  deliveryDigest,
+  parseArtifact,
+  serializeArtifact,
+  UnsupportedArtifactFormatError,
+} from "./artifact.js";
 export {
   assertEnvironment,
   defineConfig,
@@ -24,6 +35,7 @@ export type { DecryptResult } from "./crypto.js";
 export {
   decryptValue,
   KeyUnavailableError,
+  openSealed,
   openValue,
   sameKey,
   sealValue,
@@ -67,6 +79,9 @@ export {
   createKeychainKeySource,
   KEY_BYTES,
   KEYCHAIN_SERVICE,
+  keySourceFrom,
+  keySourceIdentifier,
+  NO_KEY_SOURCE,
   nullKeySource,
   resolveKeySource,
   setKeychain,
@@ -111,6 +126,7 @@ export {
   accessPath,
   checkNameCollisions,
   defaultVariableName,
+  deliveryNames,
   isCanonicalSegment,
   refFromAccessPath,
   refFromVariable,
