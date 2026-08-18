@@ -42,7 +42,7 @@ penv is two programs, and you install exactly one of them yourself:
 npm install -g @penvhq/launcher
 ```
 
-That is the **launcher** — small, stable, and not the thing that runs your project. Inside a project it reads `.penv/state/manifest.json`, the committed file naming the exact **engine** and provider extensions the project pins, finds them in `$PENV_HOME`, verifies their integrity, and hands your command over. So CI runs the penv your repository pins, a newer launcher on your laptop changes nothing about your project, and `penv upgrade` is what moves the pin — together with the project's runtime dependency, never one without the other.
+That is the **launcher** — stable, and not the thing that runs your project. It carries a current **engine** of its own, which is what `penv init` runs: adoption happens before any project has pinned anything, so that one engine has to come with the install. Inside a project the launcher reads `.penv/state/manifest.json`, the committed file naming the exact engine and provider extensions the project pins, finds them in `$PENV_HOME`, verifies their integrity, and hands your command over. So CI runs the penv your repository pins, a newer launcher on your laptop changes nothing about your project, and `penv upgrade` is what moves the pin — together with the project's runtime dependency, never one without the other.
 
 Your project gains exactly one penv dependency, written by `penv init`:
 
@@ -50,7 +50,7 @@ Your project gains exactly one penv dependency, written by `penv init`:
 { "dependencies": { "@penvhq/penv": "<the version the manifest pins>" } }
 ```
 
-That package is the typed `@env` surface and its validation helpers. The CLI engine and every provider extension live in the launcher's cache instead, so a project that talks to Vault does not ship Vault's SDK to production.
+That package is the typed `@env` surface and its validation helpers, and it is the only penv your application bundles. The engine your project pins and every provider extension live in `$PENV_HOME`, installed there by the launcher and never entering `package.json` — so a project that talks to Vault does not ship Vault's SDK to production.
 
 There is one version to know: `penv --version` prints one line — the engine your project pins when you are inside a project.
 
