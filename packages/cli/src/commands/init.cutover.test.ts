@@ -734,7 +734,10 @@ describe("undo", () => {
  */
 describe("an interrupted cutover", () => {
   const FIXTURE: Fixture = {
-    files: { ".env": "DATABASE_URL=postgres://localhost/app\n", ".env.development": "DEBUG=true\n" },
+    files: {
+      ".env": "DATABASE_URL=postgres://localhost/app\n",
+      ".env.development": "DEBUG=true\n",
+    },
   };
 
   /** The record names what the move *intends*, so a move that dies partway is still described. */
