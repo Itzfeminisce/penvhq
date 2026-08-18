@@ -156,6 +156,36 @@ function pending(): ChildHandle & { end: (result?: { exitCode: number }) => void
   };
 }
 
+/** A child that ends only when it is made to, recording what it was sent. */
+function stubborn(signals: (NodeJS.Signals | undefined)[]): ChildHandle {
+  let finish: (value: { exitCode: number; signal: NodeJS.Signals | null }) => void = () =>
+    undefined;
+  const ended = new Promise<{ exitCode: number; signal: NodeJS.Signals | null }>((resolve) => {
+    finish = resolve;
+  });
+  return {
+    ended,
+    kill: (signal) => {
+      signals.push(signal);
+      if (signal === "SIGKILL") {
+        finish({ exitCode: 1, signal: "SIGKILL" });
+      }
+    },
+  };
+}
+
+/** A child that leaves when it is asked to, recording what it was sent. */
+function obedient(signals: (NodeJS.Signals | undefined)[]): ChildHandle {
+  const child = pending();
+  return {
+    ended: child.ended,
+    kill: (signal) => {
+      signals.push(signal);
+      child.end({ exitCode: 0 });
+    },
+  };
+}
+
 /**
  * The runner's own `NODE_ENV=test` is an environment these fixtures do not
  * declare, and how `--env` is settled is one of the things under test — so the
@@ -331,6 +361,98 @@ describe("the environment the child gets", () => {
     await run({ cwd: root, environment: "development", command: reporter(out) });
 
     expect(reported(out).env[RUN_MARKER]).toContain("penv run --env development --");
+  });
+});
+
+/**
+ * penv ships four providers and knows what they authenticate with. Every other
+ * extension names its own in `penv.credentials`, and penv strips exactly what
+ * was named — a stranger's credentials are the ones penv cannot guess, and a
+ * variable it did not declare is the application's.
+ */
+describe("an extension's credentials", () => {
+  const CONSUL_CONFIG = {
+    environments: ["development", "production"],
+    providers: {
+      development: { type: "@penvhq/provider-filesystem" },
+      production: { type: "@acme/provider-consul" },
+    },
+  };
+
+  /** A provider package the project installed, as its own package.json declares it. */
+  function installProvider(root: string, name: string, penv?: Readonly<Record<string, unknown>>) {
+    const dir = join(root, "node_modules", ...name.split("/"));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name, version: "1.0.0", main: "index.js", ...(penv && { penv }) }),
+      "utf8",
+    );
+    writeFileSync(join(dir, "index.js"), "module.exports = {};\n", "utf8");
+  }
+
+  function runWith(root: string, host: Record<string, string>): Promise<RunResult> {
+    return runRun({
+      cwd: root,
+      environment: "development",
+      command: reporter(join(root, "reported.json")),
+      host: { PATH: process.env.PATH ?? "", ...host },
+    });
+  }
+
+  it("never reach the child when the package declares them", async () => {
+    const root = makeProject({ config: CONSUL_CONFIG });
+    installProvider(root, "@acme/provider-consul", { credentials: ["CONSUL_HTTP_TOKEN"] });
+
+    const result = await runWith(root, {
+      CONSUL_HTTP_TOKEN: "for-penv-to-authenticate-with",
+      CONSUL_HTTP_ADDR: "http://consul:8500",
+    });
+
+    const { env } = reported(join(root, "reported.json"));
+    expect(env.CONSUL_HTTP_TOKEN).toBeUndefined();
+    // Undeclared, so it is the application's: penv takes what was named and no more.
+    expect(env.CONSUL_HTTP_ADDR).toBe("http://consul:8500");
+    expect(result.stripped).toContain("CONSUL_HTTP_TOKEN");
+  });
+
+  it("stay where the package declares none", async () => {
+    const root = makeProject({ config: CONSUL_CONFIG });
+    installProvider(root, "@acme/provider-consul");
+
+    await runWith(root, { CONSUL_HTTP_TOKEN: "the-app-talks-to-consul-itself" });
+
+    expect(reported(join(root, "reported.json")).env.CONSUL_HTTP_TOKEN).toBe(
+      "the-app-talks-to-consul-itself",
+    );
+  });
+
+  it("refuse the run when the declaration is not a list of names", async () => {
+    const root = makeProject({ config: CONSUL_CONFIG });
+    installProvider(root, "@acme/provider-consul", { credentials: "CONSUL_HTTP_TOKEN" });
+
+    const error = await refusalFrom(runWith(root, { CONSUL_HTTP_TOKEN: "unreadable" }));
+
+    expect(error.code).toBe("PROVIDER_CREDENTIALS_INVALID");
+    expect(error.message).toContain("@acme/provider-consul");
+  });
+
+  /** The first-party four are penv's own knowledge, and need no declaration. */
+  it("are known without a declaration for the providers penv ships", async () => {
+    const root = makeProject({
+      config: {
+        ...CONFIG,
+        providers: {
+          ...CONFIG.providers,
+          production: { type: "@penvhq/provider-vault", location: "secret/app" },
+        },
+      },
+    });
+
+    const result = await runWith(root, { VAULT_TOKEN: "hvs.abc" });
+
+    expect(reported(join(root, "reported.json")).env.VAULT_TOKEN).toBeUndefined();
+    expect(result.stripped).toContain("VAULT_TOKEN");
   });
 });
 
@@ -845,6 +967,110 @@ describe("--watch", () => {
     children[1]?.end({ exitCode: 7 });
 
     await expect(finished).resolves.toMatchObject({ exitCode: 7, restarts: 1 });
+  });
+
+  /**
+   * The restart's own report. After a restart the first environment is history,
+   * and reporting it would count variables nothing is using — here the tree
+   * gains a value between the two, so the two runs disagree.
+   */
+  it("reports the run that is running, not the first one", async () => {
+    const root = makeProject({ config: REMOTE_CONFIG });
+    const { seam } = pulls();
+    const children = [pending(), pending()];
+    let started = 0;
+    let fire: () => void = () => undefined;
+
+    const finished = run({
+      cwd: root,
+      environment: "development",
+      watch: true,
+      command: ["node", "x.js"],
+      pull: seam,
+      start: () => children[started++] as ChildHandle,
+      changes: (onChange) => {
+        fire = onChange;
+        return { close: () => undefined };
+      },
+    });
+
+    await vi.waitFor(() => expect(started).toBe(1));
+    mkdirSync(join(recordsDir(root), "redis"), { recursive: true });
+    writeFileSync(join(recordsDir(root), "redis", "password"), "prod-secret", "utf8");
+    fire();
+    await vi.waitFor(() => expect(started).toBe(2));
+    children[1]?.end({ exitCode: 0 });
+
+    await expect(finished).resolves.toMatchObject({ written: 2, restarts: 1 });
+  });
+
+  /**
+   * A dev server that traps SIGTERM and stays would otherwise hold the restart
+   * open forever, and the mode's whole promise is the next child starting.
+   */
+  it("insists when a replaced child will not leave", async () => {
+    const root = makeProject({ config: REMOTE_CONFIG });
+    const { seam } = pulls();
+    const signals: (NodeJS.Signals | undefined)[] = [];
+    const replacement = pending();
+    const children: ChildHandle[] = [stubborn(signals), replacement];
+    let started = 0;
+    let fire: () => void = () => undefined;
+
+    const finished = run({
+      cwd: root,
+      environment: "development",
+      watch: true,
+      command: ["node", "x.js"],
+      pull: seam,
+      stopGraceMs: 10,
+      start: () => children[started++] as ChildHandle,
+      changes: (onChange) => {
+        fire = onChange;
+        return { close: () => undefined };
+      },
+    });
+
+    await vi.waitFor(() => expect(started).toBe(1));
+    fire();
+    await vi.waitFor(() => expect(started).toBe(2));
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+
+    replacement.end({ exitCode: 0 });
+    await expect(finished).resolves.toMatchObject({ restarts: 1 });
+  });
+
+  /** The negative case: a child that leaves when asked is never made to. */
+  it("asks once when the child leaves on its own", async () => {
+    const root = makeProject({ config: REMOTE_CONFIG });
+    const { seam } = pulls();
+    const signals: (NodeJS.Signals | undefined)[] = [];
+    const replacement = pending();
+    const children: ChildHandle[] = [obedient(signals), replacement];
+    let started = 0;
+    let fire: () => void = () => undefined;
+
+    const finished = run({
+      cwd: root,
+      environment: "development",
+      watch: true,
+      command: ["node", "x.js"],
+      pull: seam,
+      stopGraceMs: 10,
+      start: () => children[started++] as ChildHandle,
+      changes: (onChange) => {
+        fire = onChange;
+        return { close: () => undefined };
+      },
+    });
+
+    await vi.waitFor(() => expect(started).toBe(1));
+    fire();
+    await vi.waitFor(() => expect(started).toBe(2));
+    replacement.end({ exitCode: 0 });
+    await finished;
+
+    expect(signals).toEqual(["SIGTERM"]);
   });
 
   /** A provider that will not answer must not take the running child down with it. */
