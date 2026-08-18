@@ -46,7 +46,7 @@ function assertImportable(ref: ParameterRef, variable: string): void {
  * Invariant 11: `enc`, `json`, `toml`, `yml`, `local`, and every declared
  * environment are reserved, and a collision is an error rather than a warning.
  *
- * A written `.penv/enc` does not merely import badly — it re-parses as a scope
+ * A written `.penv/state/records/enc` does not merely import badly — it re-parses as a scope
  * segment, so every later `list()` throws and `get`, `generate`, `validate`, and
  * even `remove` stop working. The project can only be repaired by deleting the
  * file by hand, which is why this runs before anything is written rather than

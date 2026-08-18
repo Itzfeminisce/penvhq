@@ -104,7 +104,7 @@ export { schema };
 export const env = load(schema);   // typed z.infer<typeof schema>, validated at import
 ```
 
-The types come from `z.infer` on your schema; the values are validated against that same schema at boot. One source, so the type you code against and the value you receive can't diverge — and because the shape imports without side effects, a `drizzle.config.ts` or CI script `load(schema.pick({ … }))`s the *same* schema instead of hand-writing a second one. Generate a plain `.env` for deploy targets any time:
+The types come from `z.infer` on your schema; the values are validated against that same schema at boot. One source, so the type you code against and the value you receive can't diverge — and because the shape imports without side effects, a `drizzle.config.ts` or CI script started with `penv run -- drizzle-kit migrate` loads `schema.pick({ … })` from the *same* schema instead of hand-writing a second one. Generate a plain `.env` for deploy targets any time:
 
 ```bash
 npx penv generate

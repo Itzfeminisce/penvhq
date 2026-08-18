@@ -136,7 +136,7 @@ penv run -- next build
 
 The build runs inside penv's child environment, so Next inlines `NEXT_PUBLIC_*` from your parameter tree exactly as it would from a `.env`. Your tree is the source of truth for both halves; only the delivery differs. `penv generate` is the other route, and the one deploy targets that read a `.env` file already expect.
 
-Two more consumers read the same tree with no browser in sight: a third-party SDK that reads `process.env` directly — WorkOS, Prisma, NextAuth — which finds its variables already present, because `penv run` wrote every declared parameter into the child environment under its generated name; and tooling that runs outside your application entirely — a `drizzle.config.ts`, a `playwright.config.ts`, a CI script — which imports the schema *shape* and loads only the keys it needs. That is four kinds of code, one schema, four deliveries. [One schema, many consumers](#one-schema-many-consumers) is the full treatment, including why the shape has to be importable without loading anything.
+Two more consumers read the same tree with no browser in sight: a third-party SDK that reads `process.env` directly — WorkOS, Prisma, NextAuth — which finds its variables already present, because `penv run` wrote every declared parameter into the child environment under its generated name; and tooling that runs outside your application entirely — a `drizzle.config.ts`, a `playwright.config.ts`, a CI script — which starts under `penv run --` like everything else, imports the schema *shape*, and reads only the keys it needs out of the environment penv handed it. That is four kinds of code, one schema, four deliveries. [One schema, many consumers](#one-schema-many-consumers) is the full treatment, including why the shape has to be importable without loading anything.
 
 The framework's prefix is the boundary, and the framework enforces it: nothing without `NEXT_PUBLIC_` reaches a browser. penv's job there is to catch the case the framework cannot — a parameter your meta calls a secret whose *name* makes the framework publish it. Declare `publicPrefixes` and `penv doctor` reports it as a failure.
 
@@ -181,12 +181,12 @@ export { schema };
 export const env = load(schema);
 ```
 
-The split is deliberate, and its full payoff is [One schema, many consumers](#one-schema-many-consumers): `penv.schema.ts` is *side-effect free*, so a test, a `drizzle.config.ts`, or a CI script can import the one schema for its type — or `pick` a subset of it — without loading and validating a whole environment. `.penv/env.ts` is the one module that calls `load()`.
+The split is deliberate, and its full payoff is [One schema, many consumers](#one-schema-many-consumers): `penv.schema.ts` is *side-effect free*, so a test, a `drizzle.config.ts`, or a CI script can import the one schema for its type — or `pick` a subset of it — without loading and validating a whole environment. `.penv/env.ts` is the one module your application calls `load()` through.
 
 `load` is generic:
 
 ```ts
-function load<T extends z.ZodType>(schema: T): z.infer<T>;
+function load<T extends z.ZodType>(schema: T, options?: LoadOptionsFor<T>): z.infer<T>;
 ```
 
 Because `load` returns `z.infer<T>`, `env` is typed as exactly the shape of *your* schema, with autocomplete on every nested namespace. `z.infer` is evaluated entirely at compile time from the schema's structure — `z.url()` becomes `string`, `.optional()` becomes `| undefined`, nesting becomes nesting.
@@ -199,7 +199,7 @@ The `@env` alias is written into your `tsconfig.json` by `penv init` so the impo
 
 Two properties follow from this design, and both are intentional:
 
-- **The type is only true because the value is validated at runtime.** `load` parses the loaded values against the same schema before returning them and throws on mismatch. Compile-time inference and runtime validation come from one schema, so the type you code against and the value you receive cannot diverge.
+- **The type is only true because the value is validated at runtime.** `load` parses the environment `penv run` handed this process against the same schema before returning it, and throws on mismatch. Compile-time inference and runtime validation come from one schema, so the type you code against and the value you receive cannot diverge.
 - **`penv.schema.ts` and `.penv/env.ts` are yours, never regenerated.** penv scaffolds each once. They are real files where the schema is visible and the loader call is explicit — not codegen that could drift from your intent. penv generates the *alias*, not the files.
 
 ## Concepts
@@ -355,7 +355,7 @@ The schema is split across two files on purpose, and the split is what makes the
 - **`penv.schema.ts`** — the *shape*, at the project root beside `penv.config.ts`. A `z.object` and a type registration, and nothing that loads: importing it (or `z.infer<typeof schema>`) reads the definition without touching configuration. This is the one representation every consumer derives from.
 - **`.penv/env.ts`** — the *loader*. It imports the shape, re-exports it, and calls `load()`. It is the module the `@env` alias resolves to, so `import { env } from "@env"` is unchanged.
 
-The shape has to be importable *without side effects*, and that is not a nicety — it is what keeps the schema single. A consumer that only wants the schema's structure must not be forced to load and validate a whole environment to get it: a test wants the type, a database migration tool wants one URL, and neither should throw because production's secrets are absent on your laptop. Put the `z.object` in a module that also calls `load()` and every importer pays for the load — so a tool reaching for the schema hand-writes a *second* `z.object` over the same store instead. That second definition is the drift penv exists to delete, rebuilt inside your own tooling.
+The shape has to be importable *without side effects*, and that is not a nicety — it is what keeps the schema single. A consumer that only wants the schema's structure must not be forced to load and validate a whole environment to get it: a test wants the type, a database migration tool wants one URL, and neither should have to reach the definition through a load. Put the `z.object` in a module that also calls `load()` and every importer pays for the load — so a tool reaching for the schema hand-writes a *second* `z.object` over the same store instead. That second definition is the drift penv exists to delete, rebuilt inside your own tooling.
 
 **Four kinds of code read your configuration, and each derives from the one schema by a single rule:**
 
@@ -364,12 +364,12 @@ The shape has to be importable *without side effects*, and that is not a nicety 
 | Your app code | `import { env } from "@env"` | Import `env` — loaded, validated, resolved for the current environment. |
 | Third-party SDKs reading `process.env` | the variables `penv run` writes into the child environment | Declare the parameter; penv delivers it under its generated name. Don't hand-map names — the schema is the pin list. Where a platform starts the process instead of penv, `load(schema, { inject: true })` writes the same surface from inside it. |
 | Client bundles the framework inlines | `NEXT_PUBLIC_*` / `VITE_*` | Name the parameter so it generates the prefixed variable; declare `publicPrefixes` so `doctor` guards it. |
-| Tooling evaluated outside the app | `load(schema.pick({ ... }))` | Import `schema` from `penv.schema.ts` and `pick` the keys you need — never a second `z.object`. |
+| Tooling evaluated outside the app | the same child environment, started with `penv run -- <tool>` | Import `schema` from `penv.schema.ts` and `load(schema.pick({ ... }))` the keys you need — never a second `z.object`. |
 
-**The tooling rule, stated once so it is unmissable: a tooling config never declares a shape.** It imports `schema` from `penv.schema.ts` and calls `load(schema.pick({ ... }))`, so a rename or a type change in the one schema breaks the tooling config *at compile time* instead of silently diverging. A `drizzle.config.ts`, a `playwright.config.ts`, a `vitest` setup file, a CI script — each runs outside your application's runtime, and each used to reach for `process.env` or re-declare the two fields it cared about. Both are seams; `pick` closes them:
+**The tooling rule, stated once so it is unmissable: a tooling config never declares a shape.** It imports `schema` from `penv.schema.ts` and calls `load(schema.pick({ ... }))`, so a rename or a type change in the one schema breaks the tooling config *at compile time* instead of silently diverging. A `drizzle.config.ts`, a `playwright.config.ts`, a `vitest` setup file, a CI script — each runs outside your application's runtime, and each used to reach for `process.env` or re-declare the two fields it cared about. Both are seams; `pick` closes them. The tool is started the way your app is, `penv run -- drizzle-kit migrate`, so what it validates is the same child environment penv resolved once:
 
 ```ts
-// drizzle.config.ts — evaluated by drizzle-kit, outside your app's runtime
+// drizzle.config.ts — evaluated by drizzle-kit under `penv run -- drizzle-kit migrate`
 import { defineConfig } from "drizzle-kit";
 import { load } from "@penvhq/penv";
 import { schema } from "./penv.schema.js";
@@ -424,7 +424,7 @@ Value files are lower-case and hyphenated. A camelCase schema key like `database
 ## Runtime API
 
 ```ts
-import { env } from "@env";       // blessed path — typed, validated, resolved for NODE_ENV
+import { env } from "@env";       // blessed path — typed, validated, the environment `penv run` resolved
 
 env.databaseUrl;
 env.app.jwtSecret;
@@ -438,7 +438,7 @@ The eager export never gets between the CLI and your schema. `penv validate` / `
 
 The schema module may also guard itself with `import "server-only"` — the Next.js pattern for a module that must never reach a client bundle. The CLI resolves that import the way a React Server environment would (its empty, no-throw variant), so the guard protects your app without blinding penv's own tooling.
 
-When a load does not do what you expect, `PENV_DEBUG=1` makes it say so: which environment it settled on, which source answered and where that source was — the project tree beneath a named config file, or a sealed artifact at a named path — and which value file won for every parameter. The same provenance is folded into the failure itself, so a `ValidationError` names the source that produced the values it is rejecting.
+When a load does not do what you expect, `PENV_DEBUG=1` makes it say so on stderr: the environment it read, how many parameters the injected environment delivered, and the variable each one arrived under. Which value file won is `penv run`'s question rather than the bridge's — `penv get <key> --explain` answers that one.
 
 A `process.env`-populating compatibility form exists for adopting penv without changing existing code:
 
@@ -473,13 +473,13 @@ PENV_SNAPSHOT=/run/secrets/production.artifact \
   penv run --env production --source snapshot -- node server.js
 ```
 
-**What the artifact is.** Canonical data, not application source: the final resolved non-local winner for every parameter your schema declares for that environment, sealed where your policy encrypts, plus the environment name, the engine and format it is compatible with, a non-secret digest of the schema it was built against, and the identifier of the key source that opens it.
+**What the artifact is.** Canonical data, not application source: the final resolved non-local winner for every parameter your schema declares for that environment, sealed where your policy encrypts, plus the environment name, the engine and format it is compatible with, a non-secret digest of the delivery mappings it carries, and the identifier of the key source that opens it.
 
 **What it never contains.** Provider configuration, provider credentials, key material, plaintext for a sealed value, `.local` values of any scope, or the fallback records that lost the cascade. The artifact carries the answer, not the reasoning.
 
 **Where it lives.** Outside your source tree and outside Git — it is release-specific, and it is data your pipeline hands to a machine, not a file your repository carries. `penv doctor` reports an artifact found inside the repository as a finding, because a committed artifact is a value store that outlives the release it was built for.
 
-**What happens before your process starts.** `penv run --source snapshot` verifies the artifact's environment against the one you asked for, its engine and format against the running engine, and its schema digest against the schema you are running — then decrypts in memory and builds the child environment. A mismatch on any of the three is a refusal that names which one and what to do about it, before your command runs. No source files, no provider adapters, and no network are involved: the artifact plus its key is the entire input.
+**What happens before your process starts.** `penv run --source snapshot` checks the artifact whole before it opens anything: its format against the one this engine reads, its own delivery mappings against the digest it declares for them, its engine version against the running engine, and its environment against the one you asked for — then decrypts in memory and builds the child environment. Each mismatch is its own refusal, naming what is wrong and what to do about it, before your command runs. The digest is the artifact checked against itself rather than against your schema — a release container has no schema to check — so what it catches is an artifact edited after it was built. No source files, no provider adapters, and no network are involved: the artifact plus its key is the entire input.
 
 ### Managed serverless: the platform's own store
 
