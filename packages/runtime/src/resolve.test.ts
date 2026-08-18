@@ -18,8 +18,8 @@ import {
   createEnvKeySource,
   findConfigFile,
   KEY_BYTES,
-  parameterId,
   PenvError,
+  parameterId,
   recordsDir,
   sealValue,
 } from "@penvhq/core";
@@ -109,7 +109,7 @@ function seal(file: ValueFile, value: string): string {
   );
 }
 
-function valueOf(cwd: string, environment: string, parameter: string): string | undefined {
+function resolvedValue(cwd: string, environment: string, parameter: string): string | undefined {
   const { values } = resolveSync({ cwd, environment });
   return values.find(({ ref }: { ref: ParameterRef }) => parameterId(ref) === parameter)?.value;
 }
@@ -127,33 +127,33 @@ describe("the cascade", () => {
   it("prefers .local over .<env> over the unscoped default", () => {
     const cwd = makeProject(FULL_TREE);
 
-    expect(valueOf(cwd, "production", "database-url")).toBe("postgres://local/app");
+    expect(resolvedValue(cwd, "production", "database-url")).toBe("postgres://local/app");
   });
 
   it("falls back to .<env> when there is no .local", () => {
     const { "database-url.local": _local, ...withoutLocal } = FULL_TREE;
     const cwd = makeProject(withoutLocal);
 
-    expect(valueOf(cwd, "production", "database-url")).toBe("postgres://production/app");
+    expect(resolvedValue(cwd, "production", "database-url")).toBe("postgres://production/app");
   });
 
   it("falls back to the unscoped default when there is no scoped value", () => {
     const cwd = makeProject({ "database-url": "postgres://default/app", "redis/host": "1.2.3.4" });
 
-    expect(valueOf(cwd, "production", "database-url")).toBe("postgres://default/app");
+    expect(resolvedValue(cwd, "production", "database-url")).toBe("postgres://default/app");
   });
 
   it("skips .local entirely in the test environment", () => {
     const cwd = makeProject(FULL_TREE);
 
     // The same tree that resolves to `.local` for production must not in test.
-    expect(valueOf(cwd, "test", "database-url")).toBe("postgres://default/app");
+    expect(resolvedValue(cwd, "test", "database-url")).toBe("postgres://default/app");
   });
 
   it("reads a namespace as its own parameter", () => {
     const cwd = makeProject(FULL_TREE);
 
-    expect(valueOf(cwd, "production", "redis.password")).toBe("prod-secret");
+    expect(resolvedValue(cwd, "production", "redis.password")).toBe("prod-secret");
   });
 });
 
@@ -179,7 +179,7 @@ describe("encrypted values", () => {
       KEY_CONFIG,
     );
 
-    expect(valueOf(cwd, "development", "database-url")).toBe("postgres://sealed/app");
+    expect(resolvedValue(cwd, "development", "database-url")).toBe("postgres://sealed/app");
   });
 
   it("throws VALUE_UNDECRYPTABLE naming the parameter and the file when no key is exported", () => {
@@ -228,7 +228,7 @@ describe("encrypted values", () => {
     expect(readFileSync(join(recordsDir(cwd), "database-url"), "utf8")).toBe(
       "postgres://default/app",
     );
-    expect(valueOf(cwd, "development", "database-url")).toBe("postgres://default/app");
+    expect(resolvedValue(cwd, "development", "database-url")).toBe("postgres://default/app");
 
     let thrown: unknown;
     try {

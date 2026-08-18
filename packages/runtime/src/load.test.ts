@@ -21,12 +21,7 @@ import {
 } from "@penvhq/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import {
-  DELIVERY_VARIABLE,
-  ENVIRONMENT_VARIABLE,
-  RUN_MARKER,
-  resetDelivery,
-} from "./child-env.js";
+import { DELIVERY_VARIABLE, ENVIRONMENT_VARIABLE, RUN_MARKER, resetDelivery } from "./child-env.js";
 import { load } from "./load.js";
 
 const created: string[] = [];
@@ -149,9 +144,7 @@ describe("load", () => {
     created.push(cwd);
     const spy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
     try {
-      expect(load(schema, { env: injected(COMPLETE) }).databaseUrl).toBe(
-        "postgres://default/app",
-      );
+      expect(load(schema, { env: injected(COMPLETE) }).databaseUrl).toBe("postgres://default/app");
     } finally {
       spy.mockRestore();
     }

@@ -122,8 +122,8 @@ describe("a direct start, outside penv run", () => {
    */
   it("is not what a complete environment gets", () => {
     expect(
-      load(schema, { env: { DATABASE_URL: "postgres://local/app", REDIS_HOST: "127.0.0.1" } })
-        .redis.host,
+      load(schema, { env: { DATABASE_URL: "postgres://local/app", REDIS_HOST: "127.0.0.1" } }).redis
+        .host,
     ).toBe("127.0.0.1");
   });
 });
