@@ -346,27 +346,26 @@ function readSnapshot(path: string): string {
  */
 function openSnapshot(artifact: Artifact, path: string): DeliveredValue[] {
   const keys = keySourceFrom(artifact.keySource, artifact.environment);
-  const values: DeliveredValue[] = [];
-  for (const parameter of Object.keys(artifact.values).sort()) {
-    const entry = artifact.values[parameter];
-    if (entry === undefined || entry.kind === "absent") {
-      values.push({ parameter, variable: entry?.variable ?? "" });
-      continue;
-    }
-    if (entry.kind === "plain") {
-      values.push({ parameter, variable: entry.variable, value: entry.value });
-      continue;
-    }
-    const opened = openSealed(entry.address, entry.sealed, keys);
-    if (opened.kind === "failed") {
-      throw new UndecryptableValueError(parameter, artifact.environment, entry.address, {
-        ...opened.failure,
-        detail: `${opened.failure.detail} (from ${path})`,
-      });
-    }
-    values.push({ parameter, variable: entry.variable, value: opened.value });
-  }
-  return values.filter(({ variable }) => variable.length > 0);
+  return Object.entries(artifact.values)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([parameter, entry]): DeliveredValue => {
+      if (entry.kind === "absent") {
+        return { parameter, variable: entry.variable };
+      }
+      if (entry.kind === "plain") {
+        return { parameter, variable: entry.variable, value: entry.value };
+      }
+      const opened = openSealed(entry.address, entry.sealed, keys);
+      if (opened.kind === "failed") {
+        throw new UndecryptableValueError(
+          parameter,
+          artifact.environment,
+          `${entry.address} in ${path}`,
+          opened.failure,
+        );
+      }
+      return { parameter, variable: entry.variable, value: opened.value };
+    });
 }
 
 /**
