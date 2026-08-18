@@ -115,7 +115,9 @@ That is the whole daily form. `--source` defaults to the local project tree, and
 
 **Wrap outside the script, not inside it.** `penv run -- pnpm dev` runs your package manager under penv, so `predev` and `postdev` see penv's environment too. Writing the wrapper *inside* a `package.json` script is supported and entirely yours to author, with one difference to know: a script's `pre*` and `post*` hooks run outside the script body, so they start before penv's environment exists. An outer wrapper meeting an in-script one is refused, naming both invocations, rather than nesting two owned environments.
 
-**The child environment is penv's, deliberately.** Every schema-declared parameter is written to the child under its generated name — or *deleted* from the child when it is optional and absent, so a stale variable in your shell cannot stand in for a value penv resolved to nothing. Unrelated variables like `PATH` are left alone. penv's own key variables, provider credentials, and internal control variables are stripped before your command starts.
+**The child environment is penv's, deliberately.** Every schema-declared parameter is written to the child under its generated name — or *deleted* from the child when it is optional and absent, so a stale variable in your shell cannot stand in for a value penv resolved to nothing. Unrelated variables like `PATH` are left alone. penv's own key variables, provider credentials, launcher state, and the internal control variables addressed to penv itself are stripped before your command starts.
+
+**Three variables stay, and each has a reader.** `PENV_ENV` is the environment penv resolved — what your bridge validates against and what every refusal names. `PENV_DELIVERY` is the parameter→variable map your bridge reads names from, because `override` makes that unguessable from the schema alone. `PENV_RUN` is the marker that lets a `penv run` inside your command see the one outside it and refuse, rather than nesting two owned environments. Your bridge takes the last two back out of `process.env` on its first `load`, so your own code never sees penv talking to penv.
 
 **`penv run` never contacts a provider.** It reads what is already materialised locally — the project tree, or a sealed artifact — and a missing materialisation is a named failure with the `penv pull` line to run, not an invitation to fetch. A remote provider being down is not a reason your application cannot start. The one exception is opt-in and never production: `penv run --watch -- pnpm dev` refreshes from the configured provider, preserves your `.local` overrides, validates the complete next state, and only then restarts the child — a failed pull or a failed validation leaves your running child exactly where it was.
 
@@ -490,6 +492,16 @@ penv push --env production          # to the platform's environment store, via i
 ```
 
 The platform then supplies `process.env` exactly as it always has, and your typed bridge validates that environment on the way in. This is delivery, not a fallback: an artifact placed in a build output does not make a platform read it, so penv does not pretend one is the serverless answer.
+
+**Set the two control variables the platform cannot know.** `penv run` writes them for its child; here the platform starts the process, so they belong in its environment store beside the values. `PENV_ENV=production` pins the environment your bridge resolves against, so a preview deployment cannot claim to be production. `PENV_DELIVERY` is the naming contract — parameter id to variable name — and any project with an `override` **requires** it: without the map the bridge looks under the default generated name, and reports a required parameter missing while its value sits in `process.env` under the overridden one.
+
+Capture the contract penv itself produces rather than writing one by hand:
+
+```bash
+penv run --env production -- node -e "console.log(process.env.PENV_DELIVERY)"
+```
+
+Set that one line as `PENV_DELIVERY`, and capture it again whenever a parameter is added, renamed, or an `override` changes — it is the names, so it moves when the names do.
 
 ## Configuration reference
 
