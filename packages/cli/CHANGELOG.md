@@ -1,5 +1,18 @@
 # @penvhq/cli
 
+## 0.9.2
+
+### Patch Changes
+
+- 6dce6c4: The 0.9.1 launcher pinned engine bytes npm does not hold — the release rebuilt between packing and
+  publishing, and the release's own verification caught it. Pack and publish now share one build:
+  the embed step packs the engine, rewrites the pin, rebuilds only the launcher, and publish uploads
+  the dist it packed.
+  - @penvhq/core@0.9.2
+  - @penvhq/provider-filesystem@0.9.2
+  - @penvhq/provider-mock@0.9.2
+  - @penvhq/runtime@0.9.2
+
 ## 0.9.1
 
 ### Patch Changes
