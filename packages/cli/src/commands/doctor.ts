@@ -67,6 +67,7 @@ import {
   isSecret,
   isStuck,
   openValue,
+  RECORDS_PATH,
   resolveAll,
   rotationOf,
   tryParseDuration,
@@ -118,6 +119,7 @@ export type DoctorCheck =
   | "weak"
   | "unused"
   | "unscoped-fallback"
+  | "secrecy-undeclared"
   | "plaintext-secret"
   | "public-secret"
   | "encryption"
@@ -271,6 +273,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     findings.push(...unusedFindings(drift));
   }
   findings.push(...fallbackFindings(subjects, environment));
+  findings.push(...secrecyFindings(subjects, environment));
   findings.push(...plaintextSecretFindings(subjects, environment));
   findings.push(...publicSecretFindings(subjects, environment, project.config));
   findings.push(...encryptionFindings(subjects, environment));
@@ -474,6 +477,49 @@ function fallbackFindings(subjects: readonly Subject[], environment: string): Do
       severity: "pass",
       label: "Scoped resolution",
       subject: `no parameter falls back to the unscoped default for ${environment}`,
+    },
+  ];
+}
+
+/**
+ * The question the encryption checks are answers to, asked of the meta itself.
+ *
+ * Encryption is policy-driven (invariant 14): meta declares what must be sealed
+ * and the filename is never the authority. So a parameter whose meta says
+ * nothing about secrecy is not "not a secret" — it is one penv has never been
+ * told about, and `plaintext-secret` reporting a clean run over it is a promise
+ * made from an empty file. That is what the fourth verdict is for.
+ *
+ * Summarized once. Twenty-five parameters with no meta is one fact about the
+ * project, and twenty-five identical rows would bury every other check.
+ */
+function secrecyFindings(subjects: readonly Subject[], environment: string): DoctorFinding[] {
+  const undeclared = subjects.filter(
+    ({ meta }) => effectiveMeta(meta, environment).secret === undefined,
+  );
+
+  if (undeclared.length === 0) {
+    return [
+      {
+        check: "secrecy-undeclared",
+        severity: "pass",
+        label: "Secrecy policy",
+        subject:
+          subjects.length === 0
+            ? `no parameter resolves for ${environment}`
+            : `every parameter declares whether it is secret for ${environment}`,
+      },
+    ];
+  }
+
+  return [
+    {
+      check: "secrecy-undeclared",
+      severity: "unknown",
+      label: "Secrecy policy",
+      subject: `${undeclared.length} of ${subjects.length} declare neither way for ${environment}`,
+      detail: "penv was never told which of these values must be encrypted",
+      remedy: `declare \`"secret": true\` or \`"secret": false\` in a parameter's meta file, ${RECORDS_PATH}/<name>.json`,
     },
   ];
 }

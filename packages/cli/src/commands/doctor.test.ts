@@ -454,6 +454,62 @@ describe("unscoped-fallback", () => {
   });
 });
 
+describe("secrecy-undeclared", () => {
+  it("fires once over every parameter whose meta declares no secrecy", async () => {
+    const root = makeProject({
+      schema: "dbPassword: z.string(), apiUrl: z.string()",
+      tree: {
+        "db-password.production": "hunter2",
+        "api-url.production": "https://api.example.com",
+      },
+    });
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+    const fired = firedFor(report.findings, "secrecy-undeclared");
+
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.severity).toBe("unknown");
+    expect(fired[0]?.label).toBe("Secrecy policy");
+    expect(fired[0]?.subject).toBe("2 of 2 declare neither way for production");
+    expect(fired[0]?.remedy).toContain('"secret": true');
+    // Nothing was found wrong — penv could not look. A `?` never fails the run.
+    expect(report.ok).toBe(true);
+  });
+
+  /** Declared either way is declared: `false` is an answer, not an absence. */
+  it("stays quiet when every parameter declares secrecy, secret or not", async () => {
+    const root = makeProject({
+      schema: "dbPassword: z.string(), apiUrl: z.string()",
+      tree: {
+        "db-password.production.enc": "AAAA-ciphertext",
+        "db-password.json": JSON.stringify({ secret: true }),
+        "api-url.production": "https://api.example.com",
+        "api-url.json": JSON.stringify({ secret: false }),
+      },
+    });
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+
+    expect(firedFor(report.findings, "secrecy-undeclared")).toEqual([]);
+    expect(severityOf(report.findings, "secrecy-undeclared")).toBe("pass");
+  });
+
+  /** Meta merges base→env, so an environment block declaring it counts for that environment. */
+  it("stays quiet where the environment's own block declares it", async () => {
+    const root = makeProject({
+      schema: "dbPassword: z.string()",
+      tree: {
+        "db-password.production.enc": "AAAA-ciphertext",
+        "db-password.json": JSON.stringify({ environments: { production: { secret: true } } }),
+      },
+    });
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+
+    expect(firedFor(report.findings, "secrecy-undeclared")).toEqual([]);
+  });
+});
+
 describe("plaintext-secret", () => {
   it("fires when meta declares a secret and the winning value file is plaintext", async () => {
     const root = makeProject({
@@ -755,7 +811,12 @@ describe("the report", () => {
   it("prints a passing line for every check when nothing is wrong", async () => {
     const root = makeProject({
       schema: "apiUrl: z.string()",
-      tree: { "api-url.production": "https://api.example.com" },
+      tree: {
+        "api-url.production": "https://api.example.com",
+        // Declared so the secrecy check reaches a real `pass` too: an empty meta
+        // is a policy penv was never told, not a policy that is satisfied.
+        "api-url.json": JSON.stringify({ secret: false }),
+      },
       // Declared so the browser-exposure check reaches a real `pass` rather than
       // the `unknown` it now returns when it has no prefixes to check against.
       config: { publicPrefixes: ["NEXT_PUBLIC_"] },
@@ -771,6 +832,7 @@ describe("the report", () => {
       "weak",
       "unused",
       "unscoped-fallback",
+      "secrecy-undeclared",
       "plaintext-secret",
       "public-secret",
       "encryption",

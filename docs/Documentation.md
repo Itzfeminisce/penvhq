@@ -770,6 +770,7 @@ $ penv doctor
 ⚠ Undecryptable value       redis/password.production.enc PENV_KEY_PROD is not set
 ⚠ Secret exposed to browser NEXT_PUBLIC_STRIPE_KEY meta declares this a secret, and the prefix makes it public
 ⚠ Edited outside penv       DATABASE_URL        github's copy is newer than penv's last push
+? Secrecy policy            3 of 25 declare neither way for production
 ? Value drift               github              not checked — secrets cannot be read back
 ✓ Provider                  vault
 ✓ Destination               @penvhq/provider-github · acme/api
@@ -777,7 +778,7 @@ $ penv doctor
   penv set app/api-key --env production
 ```
 
-**Four verdicts, not three.** `✓` is a check that looked and found nothing wrong. `⚠` is a check that looked and found something. `?` is a check that **could not look** — and it is deliberately not a `✓`. penv cannot read a GitHub Actions secret back, so it can never tell you your CI values match your tree; saying so in words, in its own glyph, is the only honest report available. A check that did not run must never be indistinguishable from a check that passed. The same verdict covers a browser check with no `publicPrefixes` declared, and any check a failed schema load made impossible.
+**Four verdicts, not three.** `✓` is a check that looked and found nothing wrong. `⚠` is a check that looked and found something. `?` is a check that **could not look** — and it is deliberately not a `✓`. penv cannot read a GitHub Actions secret back, so it can never tell you your CI values match your tree; saying so in words, in its own glyph, is the only honest report available. A check that did not run must never be indistinguishable from a check that passed. The same verdict covers a browser check with no `publicPrefixes` declared, a project whose meta declares no secrecy at all — encryption is policy, so with no policy there is nothing to check the tree against — and any check a failed schema load made impossible.
 
 **The browser check is the one nothing else can make.** To your framework, `NEXT_PUBLIC_` *is* the intent — it inlines the value into every page and cannot know you consider it a secret. Your app's own env module cannot know either. penv holds the policy and the name at once, which is the only vantage point from which the contradiction is visible. It needs `publicPrefixes` declared; without it penv says it could not check, rather than reporting a clean run it never made.
 
