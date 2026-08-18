@@ -16,7 +16,8 @@
     "lint:fix": "biome check --write .",
     "changeset": "changeset",
     "release": "pnpm build && changeset publish",
-    "test:artifact": "vitest run --config vitest.artifact.config.ts"
+    "test:artifact": "vitest run --config vitest.artifact.config.ts",
+    "release:pinned": "node --experimental-strip-types scripts/engine-pin.ts embed && pnpm release"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",

@@ -30,13 +30,17 @@ import { runCommand } from "./commands/run.js";
 import { setCommand } from "./commands/set.js";
 import { validateCommand } from "./commands/validate.js";
 import { watchCommand } from "./commands/watch.js";
+import { engineVersion } from "./install.js";
 import { defaultKeychain } from "./keychain.js";
 
 export const main = defineCommand({
-  meta: {
+  // Lazy, so reading the engine's own version off disk is something `--version`
+  // does rather than something importing this module does.
+  meta: () => ({
     name: "penv",
     description: "Configuration that shares a data model with your production secret manager",
-  },
+    version: engineVersion(),
+  }),
   subCommands: {
     init: initCommand,
     import: importCommand,

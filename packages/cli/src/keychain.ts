@@ -10,11 +10,17 @@
  *
  * The native module is required lazily, so it loads only when a keychain key is
  * actually read or written — never merely because the CLI started, and never on
- * an env-source path that has no business touching it.
+ * an env-source path that has no business touching it. That laziness is load
+ * bearing twice over: an engine installed from an npm tarball into `$PENV_HOME`
+ * has no `node_modules`, so the binding is genuinely absent there, and every
+ * command that is not a keychain command must still work.
  */
 
 import { createRequire } from "node:module";
-import type { Keychain } from "@penvhq/core";
+import { type Keychain, PenvError } from "@penvhq/core";
+
+/** The native package this binding is. Named in the refusal, so it is a constant. */
+export const KEYRING_MODULE = "@napi-rs/keyring";
 
 /** The synchronous slice of `@napi-rs/keyring`'s `Entry` this binding uses. */
 interface Entry {
@@ -23,14 +29,28 @@ interface Entry {
 }
 type EntryConstructor = new (service: string, account: string) => Entry;
 
-let cached: EntryConstructor | undefined;
+/** How the native module is reached. Injected in tests; nothing else replaces it. */
+export type NativeLoader = (id: string) => unknown;
 
-function entryConstructor(): EntryConstructor {
-  if (cached === undefined) {
-    const require = createRequire(import.meta.url);
-    cached = (require("@napi-rs/keyring") as { Entry: EntryConstructor }).Entry;
-  }
-  return cached;
+const nodeRequire: NativeLoader = (id) => createRequire(import.meta.url)(id);
+
+/** Node appends a require stack to a resolution failure; the sentence is the useful part. */
+function firstLine(cause: unknown): string {
+  return (cause instanceof Error ? cause.message : String(cause)).split("\n")[0] ?? "";
+}
+
+/**
+ * The binding is missing, which is neither "the keychain is locked" nor "there is
+ * no such key" — it is penv having no way to ask at all, and it has one cause.
+ */
+function keyringMissing(cause: unknown): PenvError {
+  return new PenvError(
+    "KEYCHAIN_BINDING_MISSING",
+    `penv could not load ${KEYRING_MODULE}, the native binding it reads your OS keychain through`,
+    `This penv engine was installed as a plain tarball, which carries no native modules. ` +
+      `Install penv with \`npm install -g @penvhq/launcher\`, or declare \`source: "env"\` for ` +
+      `this environment and export its key. Original error: ${firstLine(cause)}`,
+  );
 }
 
 /**
@@ -39,13 +59,32 @@ function entryConstructor(): EntryConstructor {
  * throws only when the keychain genuinely cannot be read — which the core source
  * turns into `unavailable`, not `absent`.
  */
-export const defaultKeychain: Keychain = {
-  getPassword(service, account) {
-    const Entry = entryConstructor();
-    return new Entry(service, account).getPassword();
-  },
-  setPassword(service, account, password) {
-    const Entry = entryConstructor();
-    new Entry(service, account).setPassword(password);
-  },
-};
+export function createKeychain(load: NativeLoader = nodeRequire): Keychain {
+  let cached: EntryConstructor | undefined;
+
+  const entryConstructor = (): EntryConstructor => {
+    if (cached === undefined) {
+      let module: { Entry: EntryConstructor };
+      try {
+        module = load(KEYRING_MODULE) as { Entry: EntryConstructor };
+      } catch (cause) {
+        throw keyringMissing(cause);
+      }
+      cached = module.Entry;
+    }
+    return cached;
+  };
+
+  return {
+    getPassword(service, account) {
+      const Entry = entryConstructor();
+      return new Entry(service, account).getPassword();
+    },
+    setPassword(service, account, password) {
+      const Entry = entryConstructor();
+      new Entry(service, account).setPassword(password);
+    },
+  };
+}
+
+export const defaultKeychain: Keychain = createKeychain();

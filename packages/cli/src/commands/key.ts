@@ -73,6 +73,12 @@ export function runKeyCreate(options: KeyCreateOptions): KeyCreateResult {
       try {
         existing = keychain.getPassword(KEYCHAIN_SERVICE, declared.id);
       } catch (cause) {
+        // The binding being absent already carries its own remedy, and it is not
+        // "unlock your keychain" — that advice would send the user to a keychain
+        // penv never reached.
+        if (cause instanceof PenvError) {
+          throw cause;
+        }
         throw new PenvError(
           "KEYCHAIN_UNAVAILABLE",
           `penv could not read your OS keychain to check for an existing key \`${declared.id}\``,

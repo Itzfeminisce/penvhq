@@ -18,6 +18,7 @@ export {
   serializeArtifact,
   UnsupportedArtifactFormatError,
 } from "./artifact.js";
+export type { JitiApi } from "./config.js";
 export {
   assertEnvironment,
   defineConfig,
@@ -29,6 +30,7 @@ export {
   resolveEnvironment,
   SCHEMA_HARVEST_ENV,
   schemaHarvestActive,
+  setJitiApi,
   validateConfig,
 } from "./config.js";
 export type { DecryptResult } from "./crypto.js";

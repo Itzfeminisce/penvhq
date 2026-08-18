@@ -8,7 +8,7 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "penv-engine": "./dist/bin.js"
+    "penv-engine": "./dist/bin.cjs"
   },
   "exports": {
     ".": {
