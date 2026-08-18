@@ -30,8 +30,9 @@
 
 import type { FSWatcher } from "node:fs";
 import { existsSync, readFileSync, watch } from "node:fs";
-import { basename, dirname } from "node:path";
-import type { Artifact, ParameterRef, Resolution } from "@penvhq/core";
+import { createRequire } from "node:module";
+import { basename, dirname, join, resolve } from "node:path";
+import type { Artifact, ParameterRef, PenvConfig, Resolution } from "@penvhq/core";
 import {
   ARTIFACT_BUILD_COMMAND,
   assertArtifactFor,
@@ -40,13 +41,14 @@ import {
   keySourceFrom,
   MissingMaterializationError,
   openSealed,
+  own,
   PenvError,
   parseArtifact,
   RECORDS_PATH,
   UndecryptableValueError,
   variableName,
 } from "@penvhq/core";
-import type { DeliveredValue } from "@penvhq/runtime";
+import type { DeclaredCredentials, DeliveredValue } from "@penvhq/runtime";
 import {
   childEnvironment,
   declaredRefs,
@@ -57,7 +59,7 @@ import {
 } from "@penvhq/runtime";
 import { defineCommand } from "citty";
 import type { z } from "zod";
-import type { ChildResult, StartChild } from "../child.js";
+import type { ChildHandle, ChildResult, StartChild } from "../child.js";
 import { noCommand, startChild } from "../child.js";
 import { activeDotenvFiles } from "../dotenv-files.js";
 import { shorthandCandidates } from "../env-flags.js";
@@ -78,6 +80,9 @@ const SOURCES: readonly RunSource[] = ["project", "snapshot"];
 /** How long a change waits for its neighbours before `--watch` acts on it. */
 const DEBOUNCE_MS = 100;
 
+/** How long a child a restart is replacing has to leave before it is made to. */
+const STOP_GRACE_MS = 5_000;
+
 export interface RunOptions {
   readonly cwd: string;
   readonly environment?: string;
@@ -97,6 +102,8 @@ export interface RunOptions {
   readonly pull?: (options: PullOptions) => Promise<PullResult>;
   /** Injected in tests: what tells `--watch` something changed. */
   readonly changes?: (onChange: () => void) => { close(): void };
+  /** How long a replaced child has to leave before `--watch` insists. Defaults to 5s. */
+  readonly stopGraceMs?: number;
 }
 
 export interface RunResult {
@@ -265,6 +272,90 @@ function assertNoActiveDotenv(project: Project): void {
   );
 }
 
+/** A generated variable name — the only thing a credential declaration may hold. */
+const VARIABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The `package.json` of an installed package, found the way the project's own
+ * code would find the package: resolved from the project root, then walked up to
+ * the manifest that names it. Absent when the package is not installed — the
+ * providers penv ships resolve from inside the CLI and have no manifest to read
+ * here, which is why they are known rather than asked.
+ */
+function packageManifest(specifier: string, root: string): Record<string, unknown> | undefined {
+  let directory: string;
+  try {
+    directory = dirname(createRequire(resolve(root, "noop.js")).resolve(specifier));
+  } catch {
+    return undefined;
+  }
+  for (;;) {
+    const file = join(directory, "package.json");
+    if (existsSync(file)) {
+      try {
+        const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+        if (isPlainObject(parsed) && parsed.name === specifier) {
+          return parsed;
+        }
+      } catch {
+        return undefined;
+      }
+    }
+    const parent = dirname(directory);
+    if (parent === directory) {
+      return undefined;
+    }
+    directory = parent;
+  }
+}
+
+/**
+ * What the providers this config names authenticate with, as each package
+ * declares it.
+ *
+ * penv owns no credential of its own, so a provider's are ambient variables and
+ * the only way to keep them out of the child is to name them. The four providers
+ * penv ships are named in the runtime, which is where their delivery is decided;
+ * every other extension names its own in `penv.credentials` in its package.json
+ * — symmetric with `penv.types` — and this reads the declaration off the package
+ * the project actually installed, for the providers the config actually names.
+ *
+ * A declaration that is not a list of variable names is refused rather than
+ * skipped. Skipping it would hand that extension's credentials to the
+ * application without saying so, which is the one outcome the declaration exists
+ * to prevent.
+ */
+export function declaredCredentials(config: PenvConfig, root: string): DeclaredCredentials {
+  const declared: Record<string, readonly string[]> = {};
+  for (const provider of Object.values(config.providers)) {
+    if (own(declared, provider.type) !== undefined) {
+      continue;
+    }
+    const penv = packageManifest(provider.type, root)?.penv;
+    const credentials = isPlainObject(penv) ? penv.credentials : undefined;
+    if (credentials === undefined) {
+      continue;
+    }
+    if (
+      !Array.isArray(credentials) ||
+      credentials.some((name) => typeof name !== "string" || !VARIABLE.test(name))
+    ) {
+      throw new PenvError(
+        "PROVIDER_CREDENTIALS_INVALID",
+        `\`${provider.type}\` declares \`penv.credentials\`, and it is not a list of variable names`,
+        `Its package.json should read \`"penv": { "credentials": ["ACME_TOKEN"] }\` — penv strips ` +
+          "exactly what an extension declares, so it will not guess at a declaration it cannot read.",
+      );
+    }
+    declared[provider.type] = credentials;
+  }
+  return declared;
+}
+
 async function prepare(
   project: Project,
   environment: string,
@@ -298,6 +389,7 @@ async function prepare(
     schema,
     values: valuesOf(check.resolutions),
     ...(check.validated === undefined ? {} : { validated: check.validated }),
+    credentials: declaredCredentials(project.config, project.root),
     invocation: inner,
   });
   return { env, written, deleted, stripped };
@@ -429,6 +521,24 @@ async function sync(
   }
 }
 
+/**
+ * Stopping the child a restart is replacing: asked, then made to.
+ *
+ * SIGTERM is the ask, and a dev server that traps it and never leaves would hold
+ * the restart open forever — waiting on a child that has decided not to end is a
+ * developer watching nothing happen. So the ask is bounded and the escalation is
+ * a signal the process cannot decline.
+ */
+async function stop(child: ChildHandle, graceMs: number): Promise<void> {
+  child.kill("SIGTERM");
+  const escalation = setTimeout(() => child.kill("SIGKILL"), graceMs);
+  try {
+    await child.ended;
+  } finally {
+    clearTimeout(escalation);
+  }
+}
+
 /** The default change signal: the records tree and the config file, debounced. */
 function watchProject(project: Project, onChange: () => void): { close(): void } {
   const watchers = new Set<FSWatcher>();
@@ -528,6 +638,10 @@ export async function runRun(options: RunOptions): Promise<RunResult> {
 
   let current = start({ command, env: first.env, cwd: project.root });
 
+  // What the running child was given, which is what the run reports: after a
+  // restart the first environment is history, and reporting it would count
+  // variables nothing is using.
+  let latest = first;
   let restarts = 0;
   let restarting: Promise<void> | undefined;
   let closed = false;
@@ -556,10 +670,9 @@ export async function runRun(options: RunOptions): Promise<RunResult> {
       if (closed) {
         return;
       }
-      const previous = current;
-      previous.kill("SIGTERM");
-      await previous.ended;
+      await stop(current, options.stopGraceMs ?? STOP_GRACE_MS);
       current = start({ command, env: next.env, cwd: project.root });
+      latest = next;
       restarts += 1;
     })().finally(() => {
       restarting = undefined;
@@ -576,7 +689,7 @@ export async function runRun(options: RunOptions): Promise<RunResult> {
         continue;
       }
       closed = true;
-      return report(environment, source, command, first, ended, restarts);
+      return report(environment, source, command, latest, ended, restarts);
     }
   } finally {
     closed = true;

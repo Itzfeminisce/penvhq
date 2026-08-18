@@ -111,6 +111,49 @@ describe("the delivery digest", () => {
       }),
     ).not.toBe(base);
   });
+
+  /**
+   * The address travels with the ciphertext, so moving the pair satisfies the
+   * AAD wherever it lands: the database password parses, opens, and arrives as
+   * `ANALYTICS_TOKEN`. Only the digest can notice, and only if the address is in
+   * it.
+   */
+  it("changes when a sealed pair is moved to another parameter", () => {
+    const password = VALUES["database-url"];
+    if (password?.kind !== "sealed") {
+      throw new Error("the fixture's sealed entry is the point of this test");
+    }
+    const moved: Artifact["values"] = {
+      ...VALUES,
+      "analytics.token": {
+        kind: "sealed",
+        variable: "ANALYTICS_TOKEN",
+        address: password.address,
+        sealed: password.sealed,
+      },
+    };
+
+    expect(deliveryDigest(moved)).not.toBe(
+      deliveryDigest({
+        ...VALUES,
+        "analytics.token": { kind: "absent", variable: "ANALYTICS_TOKEN" },
+      }),
+    );
+  });
+
+  it("is the same after a re-seal at the same scope", () => {
+    const resealed: Artifact["values"] = {
+      ...VALUES,
+      "database-url": {
+        kind: "sealed",
+        variable: "DATABASE_URL",
+        address: "database-url.production.enc",
+        sealed: "penv:1:prod:CCCCCCCCCCCCCCCC:DDDDDDDDDDDDDDDDDDDDDDDD",
+      },
+    };
+
+    expect(deliveryDigest(resealed)).toBe(deliveryDigest(VALUES));
+  });
 });
 
 describe("the reader", () => {
@@ -205,6 +248,26 @@ describe("the reader", () => {
 
     expect(error.code).toBe("ARTIFACT_DIGEST_MISMATCH");
     expect(error.message).toContain("written once and read unchanged");
+  });
+
+  /**
+   * The relocation: a sealed pair lifted out of one parameter and dropped into
+   * another. Invariant 17 does not stop it — the address travels with the
+   * ciphertext, so the AAD still matches and the value still opens — and what
+   * arrives is `database-url`'s secret under `REGION`.
+   */
+  it("refuses a sealed pair moved to another parameter", () => {
+    const error = refusalFrom(() =>
+      parseArtifact(
+        damaged((raw) => {
+          const values = raw.values as Record<string, unknown>;
+          values.region = { ...(values["database-url"] as object), variable: "REGION" };
+        }),
+        "artifact.json",
+      ),
+    );
+
+    expect(error.code).toBe("ARTIFACT_DIGEST_MISMATCH");
   });
 
   /** The negative case: an untouched artifact is read without complaint. */

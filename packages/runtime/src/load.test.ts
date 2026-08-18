@@ -127,12 +127,67 @@ describe("load", () => {
     expect(env.databaseUrl).toBe("postgres://renamed/app");
   });
 
-  it("refuses a delivery contract that is not the one penv writes", () => {
-    expect(() =>
-      load(schema, {
-        env: { ...injected(COMPLETE), [DELIVERY_VARIABLE]: "not json" },
-      }),
-    ).toThrowError(/DELIVERY|delivery contract/);
+  /**
+   * The contract is penv's own channel, written one line before it is read, so a
+   * contract that is not one was tampered with. What makes the refusal worth
+   * testing twice is that reading it *consumes* it: a refusal that only fired
+   * once would leave the second `load` with no contract at all, guessing the
+   * default names and delivering whatever variable happened to match — the one
+   * outcome this channel exists to prevent.
+   */
+  describe("a delivery contract that is not the one penv writes", () => {
+    const refuses = (contract: string): void => {
+      const env = { ...injected(COMPLETE), [DELIVERY_VARIABLE]: contract };
+
+      expect(() => load(schema, { env })).toThrowError(
+        expect.objectContaining({ code: "DELIVERY_CONTRACT_INVALID" }),
+      );
+    };
+
+    it("is refused when it is not JSON", () => {
+      refuses("not json");
+    });
+
+    it("is refused when it is a JSON array", () => {
+      refuses('["database-url"]');
+    });
+
+    it("is refused when a mapping is not a variable name", () => {
+      refuses('{"database-url":42}');
+    });
+
+    it("is refused again on the next load, not silently guessed", () => {
+      const env = { ...injected(COMPLETE), [DELIVERY_VARIABLE]: "not json" };
+
+      expect(() => load(schema, { env })).toThrowError(
+        expect.objectContaining({ code: "DELIVERY_CONTRACT_INVALID" }),
+      );
+      expect(() => load(schema, { env })).toThrowError(
+        expect.objectContaining({ code: "DELIVERY_CONTRACT_INVALID" }),
+      );
+    });
+
+    it("stays quiet for the contract penv actually writes, read twice", () => {
+      const env = injected(COMPLETE);
+
+      expect(load(schema, { env }).databaseUrl).toBe("postgres://default/app");
+      expect(load(schema, { env }).databaseUrl).toBe("postgres://default/app");
+    });
+  });
+
+  /**
+   * A contract names variables, and `constructor` is a variable name like any
+   * other — read through the prototype it would deliver a function to the schema.
+   */
+  it("reads a delivered variable off the environment's own keys", () => {
+    const optional = z.object({ databaseUrl: z.string().optional() });
+    const env = {
+      [ENVIRONMENT_VARIABLE]: "development",
+      [DELIVERY_VARIABLE]: JSON.stringify({ "database-url": "constructor" }),
+      [RUN_MARKER]: INVOCATION,
+    };
+
+    expect(load(optional, { env }).databaseUrl).toBeUndefined();
   });
 
   /**

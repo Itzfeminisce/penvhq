@@ -37,7 +37,7 @@ import {
   serializeArtifact,
   variableName,
 } from "@penvhq/core";
-import { declaredRefs } from "@penvhq/runtime";
+import { assertDeliverableNames, declaredRefs } from "@penvhq/runtime";
 import { defineCommand } from "citty";
 import { engineVersion } from "../install.js";
 import type { Project } from "../project.js";
@@ -166,6 +166,9 @@ export async function runArtifactBuild(
   }
 
   const refs = declaredRefs(schema);
+  // The same check delivery makes, made here: an artifact whose entries collide
+  // would deliver last-wins in a container, where nothing is left to notice.
+  assertDeliverableNames(refs, project.config);
   await assertNoPublicSecret(project, environment, refs, retry);
 
   const values: Record<string, ArtifactEntry> = {};

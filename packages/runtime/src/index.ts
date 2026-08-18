@@ -22,6 +22,7 @@ export {
 export type {
   ChildEnvironment,
   ChildEnvironmentInput,
+  DeclaredCredentials,
   DeliveredEnvironmentInput,
   DeliveredValue,
   Delivery,
@@ -37,6 +38,7 @@ export {
   SNAPSHOT_VARIABLE,
   strippedVariables,
 } from "./child-env.js";
+export { assertDeliverableNames } from "./control.js";
 export type { InjectResult } from "./inject.js";
 export { declaredRefs, inject } from "./inject.js";
 export type { LoadOptions, LoadOptionsFor } from "./load.js";

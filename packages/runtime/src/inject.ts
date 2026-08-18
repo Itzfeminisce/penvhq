@@ -23,14 +23,9 @@
  */
 
 import type { ParameterRef, PenvConfig } from "@penvhq/core";
-import {
-  accessPath,
-  checkNameCollisions,
-  parameterId,
-  refFromAccessPath,
-  variableName,
-} from "@penvhq/core";
+import { accessPath, parameterId, refFromAccessPath, variableName } from "@penvhq/core";
 import { toJSONSchema, type z } from "zod";
+import { assertDeliverableNames } from "./control.js";
 
 /** A JSON Schema node, the shape `z.toJSONSchema` emits — only the parts the walk reads. */
 interface JsonSchemaNode {
@@ -169,17 +164,14 @@ export function inject(input: InjectInput): InjectResult {
       ? declared
       : declared.filter((r) => allow.has(slashId(r)) || allow.has(parameterId(r)));
 
-  // Invariant 12, over the parameters this call actually injects: two of them
-  // mapping to one variable would write first-wins and drop the other silently.
-  // The check is scoped to `injected`, not the whole schema — a clash between
-  // parameters the allowlist excludes writes neither, so it cannot drop anything
-  // here and must not crash an otherwise-valid selective inject (a latent
-  // schema-wide clash is `doctor`'s to surface, not this delivery step's). Refuse
-  // before touching the target — a half-injected environment is worse than none.
-  const collision = checkNameCollisions(injected, config)[0];
-  if (collision !== undefined) {
-    throw collision;
-  }
+  // Invariant 12 and penv's own names, over the parameters this call actually
+  // injects. The check is scoped to `injected`, not the whole schema — a clash
+  // between parameters the allowlist excludes writes neither, so it cannot drop
+  // anything here and must not crash an otherwise-valid selective inject (a
+  // latent schema-wide clash is `doctor`'s to surface, not this delivery step's).
+  // Refuse before touching the target — a half-injected environment is worse
+  // than none.
+  assertDeliverableNames(injected, config);
 
   const rawById = new Map<string, string>();
   for (const { ref, value } of values) {
