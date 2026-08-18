@@ -157,11 +157,32 @@ export class StrayCodeFileError extends PenvError {
       "STRAY_CODE_FILE",
       `${filename} looks like a code module, not a value file`,
       `Value files are named \`<key>.<environment>\`, but \`.${extension}\` is a source-file ` +
-        "extension. Move the code out of `.penv/`, or declare it as `schemaFile` in " +
+        "extension. Move the code out of the records tree, or declare it as `schemaFile` in " +
         "penv.config.ts.",
     );
     this.filename = filename;
     this.extension = extension;
+  }
+}
+
+/**
+ * The project still keeps its records directly under `.penv/`.
+ *
+ * penv reads one layout, so this is the whole of what an unmigrated project
+ * hears — every command refuses the same way, naming the one command that
+ * converts it. A second search path would be an engine with two truths about
+ * where a project's values live.
+ */
+export class OldLayoutError extends PenvError {
+  override readonly name = "OldLayoutError";
+
+  constructor() {
+    super(
+      "OLD_LAYOUT",
+      "This project keeps its records directly under `.penv/`, and penv reads `.penv/state/records/`",
+      "Run `penv migrate` — it previews the move first, and leaves penv.schema.ts, " +
+        "penv.config.ts and .penv/env.ts byte-identical.",
+    );
   }
 }
 

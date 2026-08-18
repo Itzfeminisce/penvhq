@@ -6,9 +6,9 @@
  * from a shared default has nowhere to hide.
  */
 
-import { PenvError, requireValue, resolveParameter } from "@penvhq/core";
+import { PenvError, recordPath, requireValue, resolveParameter } from "@penvhq/core";
 import { defineCommand } from "citty";
-import { keySourceFor, openProject, PENV_DIR, refFromKey, targetEnvironment } from "../project.js";
+import { keySourceFor, openProject, refFromKey, targetEnvironment } from "../project.js";
 import { out } from "../style.js";
 import { CROSS, columns, guard, write } from "../ui.js";
 
@@ -113,8 +113,7 @@ export async function runExplain(options: GetOptions): Promise<GetExplanation> {
 }
 
 export function renderExplain(explanation: GetExplanation): string[] {
-  const target =
-    explanation.location === undefined ? "nothing" : `${PENV_DIR}/${explanation.location}`;
+  const target = explanation.location === undefined ? "nothing" : recordPath(explanation.location);
 
   // Candidates stay in the order the cascade considered them: the answer to
   // "why this file" is the list above it that did not win. The winner is the one

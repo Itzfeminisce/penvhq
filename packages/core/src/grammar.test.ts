@@ -398,7 +398,7 @@ describe("parseFilename — stray code files", () => {
     expect(error.extension).toBe("ts");
     // Names the offending file and the two remedies.
     expect(error.message).toMatch(/schema\.ts looks like a code module/);
-    expect(error.message).toMatch(/Move the code out of `\.penv\/`/);
+    expect(error.message).toMatch(/Move the code out of the records tree/);
     expect(error.message).toMatch(/declare it as `schemaFile`/);
   });
 
@@ -566,12 +566,9 @@ describe("parseFilename — reserved parameter names", () => {
 });
 
 describe("isParameterFile", () => {
-  it.each([".DS_Store", ".gitignore", ".penvignore", "redis/.DS_Store", "env.ts"])(
-    "ignores `%s`",
-    (path) => {
-      expect(isParameterFile(path, config)).toBe(false);
-    },
-  );
+  it.each([".DS_Store", ".gitignore", ".penvignore", "redis/.DS_Store"])("ignores `%s`", (path) => {
+    expect(isParameterFile(path, config)).toBe(false);
+  });
 
   it.each(["password", "redis/password.production", "redis/password.json", "app/jwt-secret.local"])(
     "accepts `%s`",
@@ -598,15 +595,16 @@ describe("isParameterFile", () => {
 
   /**
    * The schema is skipped for living where the config says, not for being called
-   * `env.ts`. A project that moved it out has nothing here to skip — so `env.ts`
-   * in the tree becomes an ordinary parameter named `env`, because that is what
-   * it would be.
+   * `env.ts`. The scaffolded loader sits beside the tree rather than in it, so
+   * an `env.ts` the walker does meet is an ordinary code module — which is what
+   * `parseFilename` then says it is.
    */
-  describe("when the project moved its schema out of the tree", () => {
+  describe("when the schema lives outside the tree", () => {
     const moved: PenvConfig = { ...config, schemaFile: "src/env.ts" };
 
-    it("stops skipping `env.ts` in the tree", () => {
+    it("does not skip `env.ts` in the tree", () => {
       expect(isParameterFile("env.ts", moved)).toBe(true);
+      expect(isParameterFile("env.ts", config)).toBe(true);
     });
 
     it("still ignores the files penv never wrote", () => {
@@ -616,7 +614,7 @@ describe("isParameterFile", () => {
   });
 
   it("skips the schema wherever inside the tree the config puts it", () => {
-    const renamed: PenvConfig = { ...config, schemaFile: ".penv/schema.ts" };
+    const renamed: PenvConfig = { ...config, schemaFile: ".penv/state/records/schema.ts" };
 
     expect(isParameterFile("schema.ts", renamed)).toBe(false);
     // And `env.ts` is no longer special, because nothing declares it.
@@ -625,7 +623,7 @@ describe("isParameterFile", () => {
 
   /** A nested schema is one path, not one basename: only that path is skipped. */
   it("skips a namespaced schema by its whole path", () => {
-    const nested: PenvConfig = { ...config, schemaFile: ".penv/config/env.ts" };
+    const nested: PenvConfig = { ...config, schemaFile: ".penv/state/records/config/env.ts" };
 
     expect(isParameterFile("config/env.ts", nested)).toBe(false);
     expect(isParameterFile("other/env.ts", nested)).toBe(true);

@@ -38,6 +38,7 @@ import {
   checkNameCollisions,
   holdsProjection,
   PenvError,
+  recordPath,
   requireValue,
   variableName,
 } from "@penvhq/core";
@@ -50,7 +51,6 @@ import {
   keySourceFor,
   localTree,
   openProject,
-  PENV_DIR,
   refsFrom,
   resolveAllSync,
   targetEnvironment,
@@ -129,7 +129,7 @@ async function destinationFor(
     const provider =
       options.provider ??
       (await createSourceProvider(options.destination, {
-        root: project.penvDir,
+        root: project.root,
         config: project.config,
         providerConfig,
         environment,
@@ -142,7 +142,7 @@ async function destinationFor(
   if (declared === undefined || declared.type === LOCAL_TREE_TYPE) {
     throw new PenvError(
       "NO_DESTINATION",
-      `Environment ${environment}'s provider is the local .penv tree itself, so penv has nowhere to push`,
+      `Environment ${environment}'s provider is the local records tree itself, so penv has nowhere to push`,
       `Declare a provider for it in penv.config.ts — e.g. \`${environment}: { type: "@penvhq/provider-github", location: "owner/repo" }\` — ` +
         `or push somewhere once with \`penv push --env ${environment} --destination <package> --location <place>\`.`,
     );
@@ -151,7 +151,7 @@ async function destinationFor(
     return { provider: options.provider, location };
   }
   const provider = await createSourceProvider(declared.type, {
-    root: project.penvDir,
+    root: project.root,
     config: project.config,
     providerConfig: declared,
     environment,
@@ -182,7 +182,7 @@ function plan(
       if (!allowDecrypt) {
         throw new PenvError(
           "ENCRYPTED_VALUE_REFUSED",
-          `Parameter ${resolution.parameter} for environment ${environment} resolves to the encrypted value file ${PENV_DIR}/${winner.location}, and a push sends plaintext for the destination to re-seal`,
+          `Parameter ${resolution.parameter} for environment ${environment} resolves to the encrypted value file ${recordPath(winner.location)}, and a push sends plaintext for the destination to re-seal`,
           "Re-run with `--allow-decrypt` to decrypt it locally and push it, or push an environment " +
             "whose values are plaintext. penv's encryption stops at the projection; the destination " +
             "seals it under its own key.",

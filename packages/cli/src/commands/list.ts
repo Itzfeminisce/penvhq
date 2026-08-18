@@ -6,9 +6,9 @@
  */
 
 import type { Scope } from "@penvhq/core";
-import { assertNever, resolveAll, variableName } from "@penvhq/core";
+import { assertNever, RECORDS_PATH, resolveAll, variableName } from "@penvhq/core";
 import { defineCommand } from "citty";
-import { keySourceFor, openProject, PENV_DIR, targetEnvironment } from "../project.js";
+import { keySourceFor, openProject, targetEnvironment } from "../project.js";
 import { out } from "../style.js";
 import { columns, guard, heading, tip, write } from "../ui.js";
 
@@ -23,7 +23,7 @@ export interface ListEntry {
   readonly variable: string;
   /** `<env>.local`, `local`, an environment name, `default`, or `absent`. */
   readonly scope: string;
-  /** The winning value file relative to `.penv/`, or `undefined` when nothing wins. */
+  /** The winning value file relative to the records tree, or `undefined` when nothing wins. */
   readonly location: string | undefined;
   readonly encrypted: boolean;
   readonly viaUnscopedFallback: boolean;
@@ -95,7 +95,7 @@ function paintScope(entry: ListEntry): string {
 export function renderList(result: ListResult): string[] {
   if (result.parameters.length === 0) {
     return [
-      `No parameters in ${PENV_DIR}/ for environment ${result.environment}.`,
+      `No parameters in ${RECORDS_PATH}/ for environment ${result.environment}.`,
       tip(`penv set <key> --env ${result.environment}`),
     ];
   }

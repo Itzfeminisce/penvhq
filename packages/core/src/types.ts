@@ -153,12 +153,17 @@ export interface ProviderConfig {
 
 /**
  * What penv hands a provider package's `penvProviderFactory` to build a provider
- * rooted at one project's `.penv`. Declared here because it is the seam every
- * provider package builds against — the CLI supplies it, the package consumes
- * it, and neither imports the other's internals.
+ * for one project. Declared here because it is the seam every provider package
+ * builds against — the CLI supplies it, the package consumes it, and neither
+ * imports the other's internals.
  */
 export interface ProviderFactoryContext {
-  /** The `.penv/` directory, absolute. */
+  /**
+   * The project root — the directory holding `penv.config.ts` — absolute. It is
+   * the project rather than any directory inside it because where penv keeps its
+   * own state is penv's business: a provider that needs a path derives it from
+   * the root, and one that needs none is unaffected when the layout moves.
+   */
   readonly root: string;
   /**
    * Required because a provider parses environment segments, and a segment is an

@@ -254,7 +254,7 @@ export function runWatch(options: WatchOptions): WatchHandle {
     watchers.add(watcher);
   }
 
-  addWatcher(project.penvDir, true);
+  addWatcher(project.recordsDir, true);
   addWatcher(dirname(project.configFile), false, configFile);
 
   // The schema shape declares what must exist, so an edit to it — a newly declared

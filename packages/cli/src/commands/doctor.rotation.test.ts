@@ -10,7 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Meta, Provider, ValueFile } from "@penvhq/core";
-import { createEnvKeySource, sealValue } from "@penvhq/core";
+import { createEnvKeySource, recordsDir, sealValue } from "@penvhq/core";
 import { createMockProvider } from "@penvhq/provider-mock";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DoctorCheck, DoctorFinding, DoctorSeverity } from "./doctor.js";
@@ -50,14 +50,14 @@ function makeProject(fixture: Fixture): string {
     `export default ${JSON.stringify({ ...CONFIG, ...fixture.config })};\n`,
     "utf8",
   );
-  mkdirSync(join(root, ".penv"), { recursive: true });
+  mkdirSync(recordsDir(root), { recursive: true });
   writeFileSync(
     join(root, ".penv", "env.ts"),
     `import { z } from "zod";\nexport const schema = z.object({${fixture.schema ?? ""}});\n`,
     "utf8",
   );
   for (const [name, contents] of Object.entries(fixture.tree ?? {})) {
-    const file = join(root, ".penv", name);
+    const file = join(recordsDir(root), name);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, contents, "utf8");
   }
@@ -489,7 +489,7 @@ describe("provider-value-drift", () => {
     try {
       const root = makeProject({ schema: "apiKey: z.string()", config: ENC_CONFIG });
       writeFileSync(
-        join(root, ".penv", "api-key.production.enc"),
+        join(recordsDir(root), "api-key.production.enc"),
         sealApiKey("shared-secret"),
         "utf8",
       );
@@ -510,7 +510,7 @@ describe("provider-value-drift", () => {
     try {
       const root = makeProject({ schema: "apiKey: z.string()", config: ENC_CONFIG });
       writeFileSync(
-        join(root, ".penv", "api-key.production.enc"),
+        join(recordsDir(root), "api-key.production.enc"),
         sealApiKey("local-secret"),
         "utf8",
       );

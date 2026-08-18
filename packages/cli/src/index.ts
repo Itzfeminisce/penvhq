@@ -18,6 +18,7 @@ import { importCommand } from "./commands/import.js";
 import { initCommand } from "./commands/init.js";
 import { keyCommand } from "./commands/key.js";
 import { listCommand } from "./commands/list.js";
+import { migrateCommand } from "./commands/migrate.js";
 import { mvCommand } from "./commands/mv.js";
 import { pullCommand } from "./commands/pull.js";
 import { pushCommand } from "./commands/push.js";
@@ -46,6 +47,7 @@ export const main = defineCommand({
     rotate: rotateCommand,
     remove: removeCommand,
     list: listCommand,
+    migrate: migrateCommand,
     encrypt: encryptCommand,
     decrypt: decryptCommand,
     key: keyCommand,
@@ -84,6 +86,8 @@ export type { InitResult, InitStep } from "./commands/init.js";
 export { insertEnvAlias, runInit } from "./commands/init.js";
 export type { ListResult } from "./commands/list.js";
 export { runList } from "./commands/list.js";
+export type { MigrateMove, MigratePlan, MigrateResult, MigrateStatus } from "./commands/migrate.js";
+export { applyMigrate, planMigrate, renderMigrate, runMigrate } from "./commands/migrate.js";
 export type { MoveResult } from "./commands/mv.js";
 export { renderMove, runMove } from "./commands/mv.js";
 export type { PullOptions, PullResult } from "./commands/pull.js";

@@ -39,6 +39,7 @@ export {
   IllegalEnvironmentNameError,
   MissingParameterError,
   NameCollisionError,
+  OldLayoutError,
   PenvError,
   ReservedTokenError,
   StrayCodeFileError,
@@ -48,6 +49,7 @@ export {
 export {
   formatMetaFile,
   formatValueFile,
+  isCodeModule,
   isLegalEnvironmentName,
   isParameterFile,
   isReservedToken,
@@ -67,6 +69,23 @@ export {
   setKeychain,
   validateKeys,
 } from "./keys.js";
+export {
+  assertMigrated,
+  CUTOVER_PATH,
+  EXTENSIONS_PATH,
+  MANIFEST_PATH,
+  oldLayoutEntries,
+  PENV_DIR,
+  penvDir,
+  RECORDS_PATH,
+  ROLLBACK_PATH,
+  recordPath,
+  recordsDir,
+  renderStateGitignore,
+  STATE_GITIGNORE_PATH,
+  STATE_PATH,
+  stateDir,
+} from "./layout.js";
 export type {
   LauncherUpdate,
   Manifest,
@@ -77,7 +96,6 @@ export type {
 export {
   ENGINE_PACKAGE,
   MANIFEST_FORMAT,
-  MANIFEST_PATH,
   ManifestError,
   OFFICIAL_SCOPE,
   parseManifest,

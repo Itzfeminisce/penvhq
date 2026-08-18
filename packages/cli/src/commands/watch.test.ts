@@ -8,6 +8,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { recordsDir } from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ValidateResult } from "./validate.js";
 import type { WatchHandle } from "./watch.js";
@@ -81,7 +82,7 @@ function makeSplitProject(shape: string, tree: Readonly<Record<string, string>>)
     `export default ${JSON.stringify(CONFIG)};\n`,
     "utf8",
   );
-  mkdirSync(join(root, ".penv"), { recursive: true });
+  mkdirSync(recordsDir(root), { recursive: true });
   writeShape(root, shape);
   writeFileSync(
     join(root, ".penv", "env.ts"),
@@ -89,7 +90,7 @@ function makeSplitProject(shape: string, tree: Readonly<Record<string, string>>)
     "utf8",
   );
   for (const [name, contents] of Object.entries(tree)) {
-    const file = join(root, ".penv", name);
+    const file = join(recordsDir(root), name);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, contents, "utf8");
   }
@@ -108,12 +109,12 @@ function makeProject(fixture: Fixture): string {
     `export default ${JSON.stringify(config)};\n`,
     "utf8",
   );
-  mkdirSync(join(root, ".penv"), { recursive: true });
+  mkdirSync(recordsDir(root), { recursive: true });
   // Only at its declared path: a stray `.penv/env.ts` beside a schema that has
   // moved is a file the grammar would read as a parameter.
   writeSchema(root, fixture.schemaFile ?? DEFAULT_SCHEMA_FILE, fixture.schema ?? "");
   for (const [name, contents] of Object.entries(fixture.tree ?? {})) {
-    const file = join(root, ".penv", name);
+    const file = join(recordsDir(root), name);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, contents, "utf8");
   }
@@ -183,7 +184,7 @@ describe("watch mode", () => {
     const { results } = watching(root);
     await until(() => results.length >= 1);
 
-    writeFileSync(join(root, ".penv", "database-url"), "not-a-url-at-all\n", "utf8");
+    writeFileSync(join(recordsDir(root), "database-url"), "not-a-url-at-all\n", "utf8");
 
     await until(() => results.length >= 2);
     // The fresh answer, not a repeat of the first one.
@@ -200,7 +201,7 @@ describe("watch mode", () => {
     await until(() => results.length >= 1);
     expect(results[0]?.ok).toBe(false);
 
-    writeFileSync(join(root, ".penv", "database-url"), "postgres://localhost/app\n", "utf8");
+    writeFileSync(join(recordsDir(root), "database-url"), "postgres://localhost/app\n", "utf8");
 
     await until(() => results.some((result) => result.ok));
   });
@@ -309,11 +310,11 @@ describe("watch mode", () => {
     const { results } = watching(root);
     await until(() => results.length >= 1);
 
-    rmSync(join(root, ".penv", "api-key"));
+    rmSync(join(recordsDir(root), "api-key"));
     await until(() => results.length >= 2);
 
     // Still watching, and still answering.
-    writeFileSync(join(root, ".penv", "api-key"), "k2\n", "utf8");
+    writeFileSync(join(recordsDir(root), "api-key"), "k2\n", "utf8");
     await until(() => results.length >= 3);
     expect(results[results.length - 1]?.ok).toBe(true);
   });
@@ -363,13 +364,13 @@ describe("watch mode", () => {
     rmSync(join(root, ".penv"), { recursive: true, force: true });
     await until(() => results.some((result) => !result.ok));
 
-    mkdirSync(join(root, ".penv"), { recursive: true });
+    mkdirSync(recordsDir(root), { recursive: true });
     writeFileSync(
       join(root, ".penv", "env.ts"),
       `import { z } from "zod";\nexport const schema = z.object({databaseUrl: z.url()});\n`,
       "utf8",
     );
-    writeFileSync(join(root, ".penv", "database-url"), "postgres://localhost/app\n", "utf8");
+    writeFileSync(join(recordsDir(root), "database-url"), "postgres://localhost/app\n", "utf8");
 
     // A watch that stopped at the deletion would report nothing ever again.
     await until(() => results[results.length - 1]?.ok === true);
@@ -386,7 +387,11 @@ describe("watch mode", () => {
     const initial = results.length;
 
     for (let i = 0; i < 10; i += 1) {
-      writeFileSync(join(root, ".penv", "database-url"), `postgres://localhost/app${i}\n`, "utf8");
+      writeFileSync(
+        join(recordsDir(root), "database-url"),
+        `postgres://localhost/app${i}\n`,
+        "utf8",
+      );
     }
 
     await until(() => results.length > initial);
@@ -405,7 +410,7 @@ describe("watch mode", () => {
 
     handle.close();
     const afterClose = results.length;
-    writeFileSync(join(root, ".penv", "database-url"), "postgres://localhost/other\n", "utf8");
+    writeFileSync(join(recordsDir(root), "database-url"), "postgres://localhost/other\n", "utf8");
     await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS * 10));
 
     expect(results.length).toBe(afterClose);
@@ -478,7 +483,7 @@ describe("drift", () => {
     expect(results[0]?.drift.declared).toHaveLength(1);
 
     writeFileSync(
-      join(root, ".penv", "database-url.production"),
+      join(recordsDir(root), "database-url.production"),
       "postgres://localhost/app",
       "utf8",
     );

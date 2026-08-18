@@ -23,12 +23,14 @@ import {
   DEFAULT_SCHEMA_FILE,
   isLegalEnvironmentName,
   loadConfigFrom,
+  PENV_DIR,
   type PenvConfig,
   PenvError,
   RESERVED_TOKENS,
+  renderStateGitignore,
   SCHEMA_SHAPE_FILE,
+  STATE_GITIGNORE_PATH,
   schemaFileOf,
-  schemaInsideTree,
   validateSchemaFile,
 } from "@penvhq/core";
 import { defineCommand } from "citty";
@@ -58,16 +60,11 @@ export const SCHEMA_FILE = "env.ts";
  * *wrapper* (see {@link writeEnvFile}), and the shape is the one file every
  * consumer derives from wherever the wrapper is kept.
  *
- * `schemaFile` stays on the wrapper `.penv/env.ts` — it is not moved to point at
- * this shape module — for one deciding reason beyond the harvester. `schemaFile`
- * is what the value-file walker excludes from the tree (core's `schemaInsideTree`
- * un-marks exactly that path); the wrapper lives inside `.penv/`, so with
- * `schemaFile` on it the walker keeps skipping `.penv/env.ts`. Pointing
- * `schemaFile` at this root-level shape instead would make `schemaInsideTree`
- * answer "nothing to skip", and the walker would then read `.penv/env.ts` as a
- * parameter file and break `list`. The wrapper re-exports `schema`, so the
- * harvester (loadSchema) still reads one `schema` export from `schemaFile` — the
- * wrapper choice costs it nothing and keeps every other consumer working.
+ * `schemaFile` stays on the wrapper `.penv/env.ts` rather than being pointed at
+ * this shape module: the wrapper is what `load` runs, and the harvester
+ * (loadSchema) reads one `schema` export from `schemaFile`, which the wrapper
+ * re-exports. Neither module sits in the records tree, so the walker meets
+ * neither.
  *
  * The path itself (`penv.schema.ts`, at the root) is core's — `watch` watches it,
  * the grammar excludes it, and one authority answers where it is.
@@ -79,8 +76,6 @@ const SCHEMA_SHAPE_BASENAME = "penv.schema";
 
 export const CONFIG_FILE = "penv.config.ts";
 export const TSCONFIG_FILE = "tsconfig.json";
-export const GITIGNORE_FILE = ".gitignore";
-export const PENV_DIR = ".penv";
 
 /**
  * The alias forms penv can write, and the only two a specifier can take that is
@@ -723,29 +718,6 @@ export function renderConfigModule(decisions: InitDecisions): string {
   return `import { defineConfig } from "@penvhq/penv";\n\nexport default defineConfig({\n${body}});\n`;
 }
 
-/**
- * Invariant 17: value files are never committed; structure, the schema, meta,
- * and config are. The negated directory pattern keeps git descending into
- * namespace folders, which an excluded directory would otherwise hide entirely.
- *
- * The schema is un-ignored by name only when it lives in the tree. Outside it,
- * this file has no opinion on it at all, and a `!env.ts` naming nothing is a
- * line the next reader has to work out is dead.
- */
-export function renderGitignore(decisions: InitDecisions): string {
-  const inside = schemaInsideTree(configOf(decisions));
-  const listed = inside === undefined ? "" : `${inside}, `;
-  return (
-    `# Written by penv. Value files hold configuration values and are never\n` +
-    `# committed; only the structure, ${listed}meta, and config are.\n` +
-    `*\n` +
-    `!*/\n` +
-    `!.gitignore\n` +
-    `${inside === undefined ? "" : `!${inside}\n`}` +
-    `!*.json\n`
-  );
-}
-
 /*
  * The tsconfig.json edit.
  *
@@ -1182,27 +1154,27 @@ export function writeTsconfigAlias(
 }
 
 /**
- * The ignore file lives inside `.penv/`, where the value files are: penv owns it
- * outright, so it is rewritten when it drifts. A weakened ignore file is how a
- * plaintext secret gets committed, which invariant 17 exists to prevent.
+ * The ignore file lives at the top of `state/`, over everything penv manages:
+ * penv owns it outright, so it is rewritten when it drifts. A weakened ignore
+ * file is how a plaintext secret gets committed, which invariant 20 exists to
+ * prevent.
  */
 export function writeGitignore(
   root: string,
   decisions: InitDecisions = DEFAULT_DECISIONS,
 ): InitStep {
-  const file = join(root, PENV_DIR, GITIGNORE_FILE);
-  const relative = `${PENV_DIR}/${GITIGNORE_FILE}`;
-  const wanted = renderGitignore(decisions);
+  const file = join(root, ...STATE_GITIGNORE_PATH.split("/"));
+  const wanted = renderStateGitignore(configOf(decisions));
   const existing = existsSync(file) ? readFileSync(file, "utf8") : undefined;
   if (existing === wanted) {
-    return { target: "gitignore", action: "kept", text: `Kept ${relative}` };
+    return { target: "gitignore", action: "kept", text: `Kept ${STATE_GITIGNORE_PATH}` };
   }
-  mkdirSync(join(root, PENV_DIR), { recursive: true });
+  mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, wanted, "utf8");
   return {
     target: "gitignore",
     action: existing === undefined ? "created" : "updated",
-    text: `${existing === undefined ? "Created" : "Updated"} ${relative}`,
+    text: `${existing === undefined ? "Created" : "Updated"} ${STATE_GITIGNORE_PATH}`,
   };
 }
 

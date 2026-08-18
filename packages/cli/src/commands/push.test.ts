@@ -23,7 +23,7 @@ import type {
   SecretScope,
   ValueFile,
 } from "@penvhq/core";
-import { formatValueFile, parameterId } from "@penvhq/core";
+import { formatValueFile, parameterId, recordsDir } from "@penvhq/core";
 import { checkGithubNames } from "@penvhq/provider-github";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LAST_PUSHED_KEY, runPush } from "./push.js";
@@ -78,11 +78,11 @@ function makeProject(fixture: Fixture): string {
     `export default ${JSON.stringify({ ...CONFIG, ...fixture.config })};\n`,
     "utf8",
   );
-  mkdirSync(join(root, ".penv"), { recursive: true });
+  mkdirSync(recordsDir(root), { recursive: true });
   writeFileSync(join(root, ".penv", "env.ts"), "export const schema = {};\n", "utf8");
 
   for (const [name, contents] of Object.entries(fixture.tree ?? {})) {
-    const file = join(root, ".penv", name);
+    const file = join(recordsDir(root), name);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, contents, "utf8");
   }
@@ -159,7 +159,7 @@ function fakeRecords(): {
 }
 
 function metaOf(root: string, location: string): Record<string, unknown> | undefined {
-  const file = join(root, ".penv", location);
+  const file = join(recordsDir(root), location);
   return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : undefined;
 }
 

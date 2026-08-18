@@ -41,6 +41,21 @@ const LOCAL = "local";
  */
 const CODE_FILE_EXTENSIONS = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"]);
 
+/**
+ * True when a filename's terminal segment marks a code module rather than a
+ * value file. `migrate` asks the same question of `.penv/env.ts` and an
+ * injection seam before it moves anything, so the answer lives in one place.
+ */
+export function isCodeModule(filename: string, config: PenvConfig): boolean {
+  const segments = filename.split(".");
+  const extension = segments[segments.length - 1];
+  return (
+    extension !== undefined &&
+    CODE_FILE_EXTENSIONS.has(extension) &&
+    !config.environments.includes(extension)
+  );
+}
+
 /** The only meta format penv parses. `.toml`/`.yml` are reserved, not implemented. */
 const SUPPORTED_META_FORMAT: MetaFormat = "json";
 
@@ -248,7 +263,7 @@ export function parseFilename(relativePath: string, config: PenvConfig): ParsedF
       throw new FilenameGrammarError(
         relativePath,
         "`..` is not a namespace",
-        "Namespaces are plain folders below `.penv/`, e.g. `redis/password`. Remove the `..` segment.",
+        "Namespaces are plain folders in the records tree, e.g. `redis/password`. Remove the `..` segment.",
       );
     }
   }
@@ -274,11 +289,7 @@ export function parseFilename(relativePath: string, config: PenvConfig): ParsedF
   // `<key>.ts` a legal value file (invariant 10), so the check is skipped when
   // the extension is a declared environment.
   const extension = segments[segments.length - 1];
-  if (
-    extension !== undefined &&
-    CODE_FILE_EXTENSIONS.has(extension) &&
-    !config.environments.includes(extension)
-  ) {
+  if (extension !== undefined && isCodeModule(filename, config)) {
     throw new StrayCodeFileError(relativePath, extension);
   }
 
