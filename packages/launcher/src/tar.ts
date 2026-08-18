@@ -89,8 +89,14 @@ export function readTarball(gzipped: Uint8Array, subject: ArchiveSubject): TarEn
       break;
     }
     const size = octal(header, SIZE.start, SIZE.length);
-    const flag = String.fromCharCode(header[TYPE_FLAG] ?? 0);
     const dataStart = offset + BLOCK;
+    // A size that is not a whole count of bytes inside this archive is refused
+    // rather than clamped: NaN or a negative walked the offset off the end and
+    // returned the entries read so far, which is a truncated package that passed.
+    if (!Number.isSafeInteger(size) || size < 0 || dataStart + size > archive.length) {
+      throw new ArchiveError(subject.name, subject.version, name);
+    }
+    const flag = String.fromCharCode(header[TYPE_FLAG] ?? 0);
     const data = archive.subarray(dataStart, dataStart + size);
     offset += Math.ceil(size / BLOCK) * BLOCK;
 

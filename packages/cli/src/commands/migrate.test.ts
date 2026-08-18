@@ -168,10 +168,75 @@ describe("penv migrate", () => {
 
     expect(thrown).toBeInstanceOf(PenvError);
     expect((thrown as PenvError).code).toBe("HALF_MIGRATED");
+    expect((thrown as PenvError).message).toContain("`api-key` is in both");
     // The user's own copy is still there — a refusal that wrote would be worse
     // than no refusal at all.
     expect(read(root, ".penv", "state", "records", "api-key")).toBe("a second answer\n");
     expect(read(root, ".penv", "api-key")).toBe(RECORDS["api-key"]);
+  });
+
+  /**
+   * The negative case, and the reason the refusal is keyed off names rather than
+   * off both sides holding something: a migration interrupted between two renames
+   * leaves exactly this, and every other command answers it by naming `migrate`.
+   */
+  it("resumes a migration that was interrupted partway", () => {
+    const root = makeOldProject();
+    // What a crash after the first rename leaves: one record moved, the rest not.
+    mkdirSync(recordsDir(root), { recursive: true });
+    writeFileSync(join(recordsDir(root), "api-key"), RECORDS["api-key"] ?? "", "utf8");
+    rmSync(join(root, ".penv", "api-key"));
+
+    const result = runMigrate({ cwd: root, yes: true });
+
+    expect(result.status).toBe("migrated");
+    expect(read(root, ".penv", "state", "records", "api-key")).toBe(RECORDS["api-key"]);
+    expect(read(root, ".penv", "state", "records", "redis", "password.production")).toBe(
+      RECORDS["redis/password.production"],
+    );
+    expect(runMigrate({ cwd: root, yes: true }).status).toBe("current");
+  });
+
+  /** A name that differs only in case is the same file on Windows and macOS, so it collides. */
+  it("refuses a record the tree already holds under another casing", () => {
+    const root = makeOldProject();
+    mkdirSync(recordsDir(root), { recursive: true });
+    writeFileSync(join(recordsDir(root), "API-KEY"), "a second answer\n", "utf8");
+
+    let thrown: unknown;
+    try {
+      planMigrate(root);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as PenvError).code).toBe("HALF_MIGRATED");
+  });
+
+  /**
+   * Invariant 20: the records this command just moved are never unignored, not
+   * even for the instant between two writes. Proved by failing the write of the
+   * new boundary — the old one has to still be there.
+   */
+  it("writes the new boundary before it drops the old one", () => {
+    const root = makeOldProject();
+    const plan = planMigrate(root);
+    // A directory where the file goes, so writing the new boundary throws.
+    mkdirSync(join(root, ".penv", "state", ".gitignore"), { recursive: true });
+
+    expect(() => applyMigrate(plan)).toThrow();
+
+    expect(read(root, ".penv", ".gitignore")).toBe(OLD_IGNORE);
+  });
+
+  /** The negative case: when the new boundary lands, the old one goes. */
+  it("drops the old boundary once the new one is written", () => {
+    const root = makeOldProject();
+
+    applyMigrate(planMigrate(root));
+
+    expect(existsSync(join(root, ".penv", ".gitignore"))).toBe(false);
+    expect(read(root, ".penv", "state", ".gitignore")).toContain("!.gitignore\n");
   });
 
   it("plans nothing for a project that never held records", () => {

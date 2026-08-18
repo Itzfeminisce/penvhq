@@ -85,11 +85,19 @@ const STATE_DIR_NAME = STATE_PATH.slice(PENV_DIR.length + 1);
  * seam), and `state/` is the new layout itself. Empty means there is nothing of
  * the old layout left, so this is both the old-layout test and the list
  * `penv migrate` moves.
+ *
+ * The exclusions match case-insensitively, because on Windows and macOS a `State`
+ * directory *is* `.penv/state` — read as an old-layout record it would make every
+ * command refuse an already-migrated project and send `penv migrate` to move the
+ * new tree into itself.
  */
 export function oldLayoutEntries(projectRoot: string, config: PenvConfig): string[] {
   const schema = schemaFileOf(config);
   const prefix = `${PENV_DIR}/`;
-  const schemaInPenvDir = schema.startsWith(prefix) ? schema.slice(prefix.length) : undefined;
+  const schemaInPenvDir = schema.startsWith(prefix)
+    ? schema.slice(prefix.length).toLowerCase()
+    : undefined;
+  const stateDirName = STATE_DIR_NAME.toLowerCase();
 
   let entries: string[];
   try {
@@ -99,13 +107,15 @@ export function oldLayoutEntries(projectRoot: string, config: PenvConfig): strin
   }
 
   return entries
-    .filter(
-      (entry) =>
+    .filter((entry) => {
+      const folded = entry.toLowerCase();
+      return (
         !entry.startsWith(".") &&
-        entry !== STATE_DIR_NAME &&
-        entry !== schemaInPenvDir &&
-        !isCodeModule(entry, config),
-    )
+        folded !== stateDirName &&
+        folded !== schemaInPenvDir &&
+        !isCodeModule(folded, config)
+      );
+    })
     .sort();
 }
 

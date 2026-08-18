@@ -87,12 +87,16 @@ export function planMigrate(cwd: string): MigratePlan {
   const entries = oldLayoutEntries(root, config);
   const tree = recordsDir(root);
 
-  // Two trees, and only the user knows which copy of a parameter is current.
-  // Merging them would answer that silently, in favour of whichever rename won.
-  if (entries.length > 0 && existsSync(tree) && readdirSync(tree).length > 0) {
+  // Only a name on both sides is a question penv cannot answer: two copies of one
+  // record, and moving would pick a winner silently. Entries the tree does not
+  // hold are simply the rest of the migration — an interruption between two
+  // renames leaves exactly that, and refusing it wedged the project, since every
+  // other command answers an old-layout tree by naming this one.
+  const collisions = collidingEntries(entries, tree);
+  if (collisions.length > 0) {
     throw new PenvError(
       "HALF_MIGRATED",
-      `This project holds records in both \`${PENV_DIR}/\` and \`${RECORDS_PATH}/\`, and penv cannot tell which copy is current`,
+      `${describe(collisions)} in both \`${PENV_DIR}/\` and \`${RECORDS_PATH}/\`, and penv cannot tell which copy is current`,
       `Move what is left under \`${PENV_DIR}/\` into \`${RECORDS_PATH}/\` yourself, keeping the copy you want, then run \`penv validate\`.`,
     );
   }
@@ -122,6 +126,29 @@ function readIfPresent(file: string): string | undefined {
   return existsSync(file) ? readFileSync(file, "utf8") : undefined;
 }
 
+/**
+ * The names the move would land on top of, sorted.
+ *
+ * Folded to lower case, because on a case-insensitive filesystem `DB` and `db`
+ * are one name and the rename would overwrite rather than collide.
+ */
+function collidingEntries(entries: readonly string[], tree: string): string[] {
+  let held: string[];
+  try {
+    held = readdirSync(tree);
+  } catch {
+    return [];
+  }
+  const taken = new Set(held.map((name) => name.toLowerCase()));
+  return entries.filter((entry) => taken.has(entry.toLowerCase())).sort();
+}
+
+function describe(names: readonly string[]): string {
+  return names.length === 1
+    ? `\`${names[0]}\` is`
+    : `${names.map((name) => `\`${name}\``).join(", ")} are`;
+}
+
 /** True when a plan would change nothing at all. */
 export function isNoop(plan: MigratePlan): boolean {
   return plan.moves.length === 0 && plan.creates.length === 0 && plan.removes.length === 0;
@@ -145,16 +172,18 @@ export function applyMigrate(plan: MigratePlan): MigrateResult {
     }
   }
 
-  // The old boundary goes before the new one is written: left in place it would
-  // keep ignoring `.penv/env.ts`, which the new layout commits.
-  for (const removed of plan.removes) {
-    rmSync(join(plan.root, ...removed.split("/")), { force: true });
-  }
-
+  // The new boundary is written before the old one goes, so the records this
+  // command just moved are never unignored for an instant. The old one still has
+  // to go: left in place it would keep ignoring `.penv/env.ts`, which the new
+  // layout commits.
   if (plan.creates.includes(STATE_GITIGNORE_PATH)) {
     const ignore = join(plan.root, ...STATE_GITIGNORE_PATH.split("/"));
     mkdirSync(dirname(ignore), { recursive: true });
     writeFileSync(ignore, renderStateGitignore(config), "utf8");
+  }
+
+  for (const removed of plan.removes) {
+    rmSync(join(plan.root, ...removed.split("/")), { force: true });
   }
 
   return { ...plan, status: "migrated" };

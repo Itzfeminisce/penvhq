@@ -3,7 +3,7 @@
  * else's file into penv's tree. Two of its failures are destructive rather than
  * merely wrong, so both are tested for what the tree looks like *afterwards*:
  *
- *  - A reserved name (invariant 11) written as `.penv/enc` re-parses as a scope
+ *  - A reserved name (invariant 11) written as `.penv/state/records/enc` re-parses as a scope
  *    segment, so every later `list()` throws and the project cannot be read,
  *    repaired, or even `remove`d through penv. Reporting it afterwards is too
  *    late; the file must never exist.
@@ -146,7 +146,7 @@ afterEach(() => {
 describe("a variable that is a reserved token", () => {
   /**
    * Invariant 11, and the whole reason this is an error rather than a warning:
-   * `.penv/enc` is not a bad import, it is an unreadable project.
+   * `.penv/state/records/enc` is not a bad import, it is an unreadable project.
    */
   it("fails, naming the variable as the .env spells it", () => {
     const root = makeProject({ dotenv: "ENC=some-secret\n", config: CONFIG });
@@ -178,7 +178,7 @@ describe("a variable that is a reserved token", () => {
   /**
    * Shared decision (A): the reserved set is every declared environment plus the
    * static tokens, so `PRODUCTION=1` collides exactly the way `ENC=1` does —
-   * `.penv/production` would re-parse as a scope segment with no parameter.
+   * `.penv/state/records/production` would re-parse as a scope segment with no parameter.
    */
   it("refuses a variable named after a declared environment", () => {
     const root = makeProject({ dotenv: "PRODUCTION=eu-west-1\n", config: CONFIG });

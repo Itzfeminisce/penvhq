@@ -85,6 +85,28 @@ describe("oldLayoutEntries", () => {
     expect(() => assertMigrated(root, config)).not.toThrow();
   });
 
+  /**
+   * On a case-insensitive filesystem these ARE `state/` and `env.ts`, and reading
+   * them as records would refuse an already-migrated project from every command.
+   */
+  it("recognises penv's own names whatever their casing", () => {
+    const root = mkdtempSync(join(tmpdir(), "penv-layout-"));
+    created.push(root);
+    mkdirSync(join(root, ".penv", "State"), { recursive: true });
+    writeFileSync(join(root, ".penv", "Env.TS"), "export const schema = {};\n", "utf8");
+
+    expect(oldLayoutEntries(root, config)).toEqual([]);
+    expect(() => assertMigrated(root, config)).not.toThrow();
+  });
+
+  /** The negative case: a record whose name merely resembles one of them still moves. */
+  it("keeps a record that only looks like one of them", () => {
+    const root = makeProject();
+    writeFileSync(join(root, ".penv", "state-url"), "postgres://localhost\n", "utf8");
+
+    expect(oldLayoutEntries(root, config)).toEqual(["state-url"]);
+  });
+
   it("is empty on a project with no .penv/ at all", () => {
     const root = mkdtempSync(join(tmpdir(), "penv-layout-"));
     created.push(root);

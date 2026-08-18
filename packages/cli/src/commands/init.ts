@@ -58,7 +58,7 @@ import {
 } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { assertNoCollisions, refsForEntries, writeEntries } from "../adopt.js";
-import { bundleDotenvFiles, readCutover, runUndo } from "../cutover.js";
+import { bundleDotenvFiles, bundleUnresolved, runUndo } from "../cutover.js";
 import {
   DEFAULT_ALIAS,
   type Detected,
@@ -1687,15 +1687,21 @@ function assertCascadeComplete(
   }
 }
 
-/** A second migration over an unresolved bundle would bury the first one's files. */
+/**
+ * A second migration over an unresolved bundle would bury the first one's files.
+ *
+ * The bundle decides, not the record: an interrupted cutover can leave files in
+ * it, and keying this off `cutover.json` alone let a re-run write a fresh record
+ * naming only the files that had not moved yet.
+ */
 function assertBundleResolved(root: string): void {
-  if (readCutover(root) === undefined) {
+  if (!bundleUnresolved(root)) {
     return;
   }
   throw new PenvError(
     "INIT_BUNDLE_UNRESOLVED",
     `The dotenv files from the last cutover are still in ${ROLLBACK_DOTENV_PATH}/, and penv will not migrate a second time over them`,
-    "Run `penv cleanup` to drop that bundle once you are happy with the migration.",
+    "Run `penv init undo` to put them back, or `penv cleanup` to drop them once you are happy with the migration.",
   );
 }
 
@@ -2211,16 +2217,29 @@ function runUndoAction(root: string, action: string): void {
   }
   const result = runUndo({ cwd: root });
   write([
-    ...formatSteps(
-      result.restored.map((name) => ({
+    ...formatSteps([
+      ...result.restored.map((name) => ({
         glyph: CHECK,
         text: `Restored ${name}`,
         note: `from ${ROLLBACK_DOTENV_PATH}/`,
       })),
-    ),
+      ...result.alreadyBack.map((name) => ({
+        glyph: CHECK,
+        text: `${name} was already back`,
+        note: "put there by an earlier undo",
+      })),
+      ...result.missing.map((name) => ({
+        glyph: WARN,
+        text: `${name} is gone`,
+        note: "not in the bundle, not at the project root",
+      })),
+    ]),
     "",
-    `${out.green(CHECK)} ${out.bold("Undone.")} Your dotenv files are back exactly as they were, and ` +
-      `${CUTOVER_PATH} is gone.`,
+    result.missing.length === 0
+      ? `${out.green(CHECK)} ${out.bold("Undone.")} Your dotenv files are back exactly as they were, and ` +
+        `${CUTOVER_PATH} is gone.`
+      : `${out.yellow(WARN)} ${out.bold("Undone as far as penv could.")} Everything still in the bundle is back, and ` +
+        `${CUTOVER_PATH} is gone.`,
     `penv's records are still in ${RECORDS_PATH}/ — nothing penv scaffolded is yours to lose.`,
   ]);
 }

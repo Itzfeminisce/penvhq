@@ -29,6 +29,7 @@ import type { Spawner } from "./delegate.js";
 import { type Engine, engineAt } from "./engine.js";
 import {
   InstallDeclinedError,
+  ManifestEntriesUnreadableError,
   NoProjectError,
   PackageCorruptError,
   PackageMissingError,
@@ -45,6 +46,7 @@ import type { LauncherIo } from "./io.js";
 import { releaseEnginePin } from "./pins.js";
 import type { Project } from "./project.js";
 import { findAdoptedRoot, findProject } from "./project.js";
+import { type RepairableManifest, readManifestForRepair } from "./repair.js";
 import { inspectInstall, installPin, type Pin } from "./store.js";
 
 export interface LauncherOptions {
@@ -134,23 +136,47 @@ function pinsOf(manifest: Manifest): PinnedPackage[] {
 }
 
 /**
- * The manifest, and the one refusal that admits penv is two programs.
+ * The one refusal that admits penv is two programs, with its blanks filled.
  *
  * Core writes that error; the launcher is the only place that knows how this
- * installation updates and what the user typed, so it fills both in here.
+ * installation updates and what the user typed.
  */
-function readManifest(manifestFile: string, home: string, argv: readonly string[]): Manifest {
-  const text = readFileSync(manifestFile, "utf8");
-  try {
-    return parseManifest(text);
-  } catch (error) {
-    if (error instanceof UnsupportedManifestFormatError) {
-      throw error.withLauncherUpdate({
+function reportable(error: unknown, home: string, argv: readonly string[]): unknown {
+  return error instanceof UnsupportedManifestFormatError
+    ? error.withLauncherUpdate({
         updateCommand: launcherUpdateCommand(home),
         invokedCommand: invokedCommand(argv),
-      });
-    }
-    throw error;
+      })
+    : error;
+}
+
+function readManifest(manifestFile: string, home: string, argv: readonly string[]): Manifest {
+  try {
+    return parseManifest(readFileSync(manifestFile, "utf8"));
+  } catch (error) {
+    throw reportable(error, home, argv);
+  }
+}
+
+/**
+ * The manifest as `install` and `add` read it: every entry that validates, and
+ * the names of the ones that do not.
+ *
+ * These two are the commands every other refusal names as its remedy, so they are
+ * the two that must survive the file they are meant to repair. Nothing outside
+ * the extension entries is relaxed — the format gate and the engine pin still
+ * refuse outright, because an entry repaired in a manifest penv could not run
+ * afterwards is not a repair.
+ */
+function readManifestToRepair(
+  manifestFile: string,
+  home: string,
+  argv: readonly string[],
+): RepairableManifest {
+  try {
+    return readManifestForRepair(readFileSync(manifestFile, "utf8"));
+  } catch (error) {
+    throw reportable(error, home, argv);
   }
 }
 
@@ -198,18 +224,21 @@ async function launch(options: LauncherOptions): Promise<number> {
     throw new NoProjectError(cwd);
   }
 
-  const manifest = readManifest(project.manifestFile, home, argv);
-  if (first !== undefined && VERSION_FLAGS.has(first)) {
-    io.out(`penv ${manifest.engine.version}`);
-    return 0;
-  }
-
+  // The two repair commands read the manifest ahead of the strict parse, so a
+  // refusal that names one of them leaves that one runnable.
   if (first === INSTALL) {
-    return install(options, pinsOf(manifest), home);
+    const { manifest, broken } = readManifestToRepair(project.manifestFile, home, argv);
+    return install(options, pinsOf(manifest), home, broken);
   }
 
   if (first === ADD) {
     return addExtension(options, project, home, forwarded.slice(1), noDownload);
+  }
+
+  const manifest = readManifest(project.manifestFile, home, argv);
+  if (first !== undefined && VERSION_FLAGS.has(first)) {
+    io.out(`penv ${manifest.engine.version}`);
+    return 0;
   }
 
   const enginePin = enginePinOf(manifest);
@@ -289,11 +318,19 @@ async function ensure(
   return installPin({ home, kind, pin, fetcher });
 }
 
-/** `penv install`: the preinstall step, which is the one command that may download. */
+/**
+ * `penv install`: the preinstall step, which is the one command that may download.
+ *
+ * Entries it could not read are installed around rather than refused on: the
+ * engine and the readable extensions land, and each broken entry is reported with
+ * the `penv add` that rewrites it. The exit code is still a failure, because what
+ * the manifest names is not all on the machine.
+ */
 async function install(
   options: LauncherOptions,
   pins: readonly PinnedPackage[],
   home: string,
+  broken: readonly string[],
 ): Promise<number> {
   for (const { kind, pin } of pins) {
     const { dir, state } = inspectInstall(home, kind, pin);
@@ -306,6 +343,10 @@ async function install(
     }
     await installPin({ home, kind, pin, fetcher: options.fetcher });
     options.io.out(`✓ ${pin.name} ${pin.version} installed`);
+  }
+  if (broken.length > 0) {
+    report(new ManifestEntriesUnreadableError(broken), options.io);
+    return 1;
   }
   return 0;
 }
@@ -331,6 +372,8 @@ async function addExtension(
     home,
     io: options.io,
     fetcher: options.fetcher,
+    noDownload,
+    ci: isCi(options.env),
   });
   if (onboard === undefined) {
     return 0;

@@ -45,14 +45,19 @@ export function penvHome(env: Environment): string {
  * out of the store, so the containment check is the second lock rather than the
  * first: this function is also reached from `penv add`, where the name is
  * whatever the user typed.
+ *
+ * Containment is measured against the bucket, not against `$PENV_HOME`. A name
+ * of `../extensions/x` stays inside the store while landing an engine among the
+ * extensions, and a store where the two are not separated is a store where the
+ * kind a caller asked for is not the kind it gets.
  */
 export function packageDir(home: string, kind: PackageKind, name: string, version: string): string {
-  const root = resolve(home);
-  const dir = resolve(root, kind, ...name.split("/"), version);
-  if (!dir.startsWith(root + sep)) {
+  const bucket = resolve(home, kind);
+  const dir = resolve(bucket, ...name.split("/"), version);
+  if (!dir.startsWith(bucket + sep)) {
     throw new PenvError(
       "PENV_HOME_ESCAPE",
-      `\`${name}\` at \`${version}\` resolves to ${dir}, which is outside ${root}`,
+      `\`${name}\` at \`${version}\` resolves to ${dir}, which is outside ${bucket}`,
       "Name the package exactly as npm does, e.g. `@penvhq/provider-vault`.",
     );
   }

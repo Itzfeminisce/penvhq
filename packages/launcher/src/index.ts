@@ -24,6 +24,8 @@ export type { Engine } from "./engine.js";
 export { bundledEngine, ENGINE_BIN, engineAt } from "./engine.js";
 export {
   AddFlagError,
+  AddNoDownloadError,
+  AddNotInteractiveError,
   AddPackageNameError,
   AddRegistryError,
   AddSubjectError,
@@ -48,7 +50,6 @@ export {
   ReleaseIncompleteError,
   TRUST_YOUNG_FLAG,
   TrustDeclinedError,
-  TrustPromptNeededError,
   TrustPublisherMissingError,
   TrustReasonMissingError,
   VersionUnknownError,

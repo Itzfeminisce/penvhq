@@ -276,7 +276,7 @@ describe("penv fill", () => {
   /**
    * The namespace path: `redis: { password }` is the parameter `redis/password`,
    * and the prompt carries that slashed key — never `redis.password` — so the
-   * value lands at `.penv/redis/password.<env>` where the cascade reads it.
+   * value lands at `.penv/state/records/redis/password.<env>` where the cascade reads it.
    */
   it("fills a namespaced parameter under its slashed key", async () => {
     const root = makeProject({ schema: "redis: z.object({ password: z.string() })" });

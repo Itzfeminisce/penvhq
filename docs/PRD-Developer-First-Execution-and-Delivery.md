@@ -199,10 +199,11 @@ other runtime. Because the package manager remains the child, it retains sole ow
 `pre*`/main/`post*` lifecycle behavior and all shell language in its scripts. Penv never rewrites
 scripts, detects operators, renames lifecycle hooks, or creates generated backing scripts.
 
-`--source project` reads only the local journal records. `--source snapshot` reads only the path
-provided by `PENV_SNAPSHOT`. Public scripts always name a source explicitly; no `provider` source
-exists. Internal runtime APIs may keep an `auto` compatibility mode only where required by existing
-library behavior.
+`--source project` reads only the local `.penv/state/records/` tree. `--source snapshot` reads only
+the path provided by `PENV_SNAPSHOT`. `--source` defaults to `project` and `snapshot` is always
+named (seal 2), so naming a source in a script is recommended rather than required; no `provider`
+source exists. Internal runtime APIs may keep an `auto` compatibility mode only where required by
+existing library behavior.
 
 Before spawning, Penv resolves the existing cascade, validates against the schema, applies explicit
 variable mappings, checks public-prefix policy, and prepares an owned child environment. Every
@@ -211,7 +212,7 @@ if optional/absent. Unrelated host variables such as `PATH` remain intact. Penv 
 variables, provider credentials, and internal control variables before starting the application.
 
 The application's typed bridge validates the injected environment only. It does not reopen the
-journal or snapshot, and never calls a provider. Starting an adopted app directly outside
+records tree or the artifact, and never calls a provider. Starting an adopted app directly outside
 `penv run` fails with a parameter-named remediation command.
 
 `penv run` is network-forbidden. A missing project materialization or snapshot is a named failure,
@@ -330,8 +331,8 @@ explicitly approved deployment target. It must never infer production from the `
 ### 9. Existing project migration
 
 Existing projects continue to work under their current layout. A deliberate `penv migrate` previews
-and on approval adds the journal manifest, relocates the parameter tree, updates the exact runtime
-dependency and lockfile, and leaves `penv.schema.ts`, `.penv/env.ts`, and legacy
+and on approval adds the `.penv/state/` manifest, relocates the parameter tree, updates the exact
+runtime dependency and lockfile, and leaves `penv.schema.ts`, `.penv/env.ts`, and legacy
 `penv.snapshot.ts` untouched. The legacy snapshot may be cleaned up only by a separate explicit
 command.
 
