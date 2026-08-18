@@ -1,6 +1,6 @@
 {
   "name": "@penvhq/penv",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Configuration that shares a data model with your production secret manager.",
   "license": "MIT",
   "type": "module",
