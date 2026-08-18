@@ -55,4 +55,53 @@ the Penv Cloud extension itself (lives in the penv-cloud repo).
 
 ## Decisions log
 
-(append here)
+- **`add` lives at `packages/launcher/src/add.ts`, not `commands/add.ts`.** The launcher package is
+  flat; a one-file `commands/` directory beside eleven siblings would be a layout that exists only
+  because this ticket was drafted against the CLI's shape.
+
+- **Provenance is recorded where a reviewer reads it, not in the manifest.** The manifest is a
+  closed shape and a new key is a format bump, which is out of scope here. `add` checks the
+  packument for `dist.attestations`, prints the answer, and writes it into the header comment of
+  the generated declaration — a committed file, so the record lands in the diff either way.
+  **Pre-launch TODO: real sigstore verification.** Today penv records *that npm holds an
+  attestation*, never that it verified one. Nothing in the code pretends otherwise — there is no
+  stub — but shipping the official scope as "verified silently" is only honest once the bundle is
+  actually checked against the Rekor entry and the expected source repository.
+
+- **The private tier is decided by `--registry`, not by a separate flag.** A package from a
+  registry that is not npmjs is private; one from npmjs outside `@penvhq/*` is third-party. The
+  manifest already records exactly this distinction (`registry` present or absent), so a second
+  flag would be a second way to say one thing.
+
+- **`@penvhq/*` from a non-default registry is refused.** The official scope is the one that asks
+  no trust question; taking those bytes from a registry the user named on the command line would
+  make "official" a claim anyone can make about any bytes. An org proxying npm configures it in
+  `.npmrc`, which penv's fetcher does not override.
+
+- **The age gate applies to the third-party tier only.** A private package is usually published by
+  the team adding it, minutes earlier; waiting seven days for your own release would make the gate
+  a thing people learn to route around.
+
+- **`penv.types` is the field a provider names its declaration with**, symmetrical with the settled
+  `penv.onboard`. It points at a self-contained file inside the package, whose text `add` commits
+  verbatim under a generated header. A specifier other than `@penvhq/core` is a refusal, not a
+  warning: the file lands in a repository where the adapter is not installed, so anything else
+  resolves to nothing. A package shipping none gets the open base shape keyed by its own name,
+  which still makes the `type` in `penv.config.ts` a checked value.
+
+- **The config edit is a per-environment offer.** `penv.config.ts` is scanned rather than parsed —
+  the same technique `init` uses on `tsconfig.json` — and `add` offers, per environment already in
+  the `providers` block, to repoint that entry's `type`. A config penv cannot read textually gets
+  the one line to add, printed, and is never rewritten.
+
+- **The accepted onboarding step runs through the engine.** `add` returns the argv; the launcher
+  ensures the pinned engine and delegates, so the offer runs the same command the user would have
+  typed and its exit code is `add`'s. Declining prints the command.
+
+- **`LauncherIo` moved to `io.ts` and gained `ask`.** A trust reason is prompted, never invented,
+  and `confirm` cannot carry a sentence. The interface no longer lives inside the protocol module
+  because `add` needs it and the protocol imports `add`.
+
+- **Follow-ups, out of scope here.** `penv remove` (nothing un-pins an extension; hand-editing the
+  manifest is the only route today) and `penv upgrade <extension>` (re-running `add` re-resolves
+  and re-asks, which is correct but re-prompts the trust ceremony for an already-trusted package).

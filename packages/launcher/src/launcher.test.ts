@@ -9,7 +9,7 @@
  * called at all.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { MANIFEST_PATH } from "@penvhq/core";
@@ -20,7 +20,8 @@ import type { Engine } from "./engine.js";
 import type { Fetcher } from "./fetcher.js";
 import { INTEGRITY_FILE, PENV_HOME_VAR, packageDir } from "./home.js";
 import { integrityOf } from "./integrity.js";
-import { type LauncherIo, type LauncherOptions, runLauncher } from "./launcher.js";
+import type { LauncherIo } from "./io.js";
+import { type LauncherOptions, runLauncher } from "./launcher.js";
 import { installPin, type Pin } from "./store.js";
 import { enginePackage, packTar } from "./tarball.fixtures.js";
 
@@ -116,7 +117,8 @@ function harness(overrides: {
   home: string;
   env?: Readonly<Record<string, string | undefined>>;
   interactive?: boolean;
-  consent?: boolean;
+  /** One answer, or one per question in the order they are asked. */
+  consent?: boolean | readonly boolean[];
   exitCode?: number;
   serve?: Readonly<Record<string, Uint8Array>>;
 }): Harness {
@@ -125,6 +127,7 @@ function harness(overrides: {
   const asked: string[] = [];
   const questions: string[] = [];
   const spawned: Delegation[] = [];
+  const consents = Array.isArray(overrides.consent) ? [...overrides.consent] : undefined;
 
   const io: LauncherIo = {
     out: (line) => {
@@ -136,7 +139,13 @@ function harness(overrides: {
     interactive: overrides.interactive ?? false,
     confirm: (question) => {
       questions.push(question);
-      return Promise.resolve(overrides.consent ?? false);
+      return Promise.resolve(
+        consents === undefined ? overrides.consent === true : consents.shift() === true,
+      );
+    },
+    ask: (question) => {
+      questions.push(question);
+      return Promise.resolve("Reviewed the source.");
     },
   };
 
@@ -483,6 +492,80 @@ describe("penv install", () => {
     expect(await runLauncher(test.options)).toBe(0);
     expect(test.asked).toEqual([]);
     expect(test.out).toEqual(["✓ @penvhq/cli 0.9.0 already installed"]);
+  });
+});
+
+describe("penv add", () => {
+  const CONSUL = "@acme/provider-consul";
+  const CONSUL_TARBALL = packTar([
+    { path: "package/", typeflag: "5" },
+    {
+      path: "package/package.json",
+      content: `${JSON.stringify({
+        name: CONSUL,
+        version: "1.0.0",
+        penv: { onboard: "cloud login" },
+      })}\n`,
+    },
+    { path: "package/index.js", content: "" },
+  ]);
+  const ADD_REGISTRY: Readonly<Record<string, Uint8Array>> = {
+    ...REGISTRY,
+    [`https://registry.npmjs.org/${CONSUL}`]: new TextEncoder().encode(
+      JSON.stringify({
+        name: CONSUL,
+        "dist-tags": { latest: "1.0.0" },
+        time: { "1.0.0": "2020-01-01T00:00:00.000Z" },
+        versions: {
+          "1.0.0": {
+            name: CONSUL,
+            version: "1.0.0",
+            _npmUser: { name: "acme-oss" },
+            dist: { integrity: integrityOf(CONSUL_TARBALL) },
+          },
+        },
+      }),
+    ),
+    [`https://registry.npmjs.org/${CONSUL}/-/provider-consul-1.0.0.tgz`]: CONSUL_TARBALL,
+  };
+
+  it("runs in the project, records the pin, and never reaches the engine", async () => {
+    const home = scratch("penv-home-");
+    const root = projectAt();
+    const test = harness({
+      argv: ["add", CONSUL],
+      cwd: root,
+      home,
+      interactive: true,
+      consent: [true, false],
+      serve: ADD_REGISTRY,
+    });
+
+    expect(await runLauncher(test.options)).toBe(0);
+    expect(test.spawned).toEqual([]);
+    const manifest = JSON.parse(readFileSync(join(root, ...MANIFEST_PATH.split("/")), "utf8"));
+    expect(manifest.extensions[CONSUL]).toMatchObject({
+      version: "1.0.0",
+      trust: { tier: "third-party", publisher: "acme-oss" },
+    });
+  });
+
+  it("delegates the accepted onboarding step to the project's engine", async () => {
+    const home = scratch("penv-home-");
+    const dir = await install(home, ENGINE_PIN, ENGINE_TARBALL);
+    const root = projectAt();
+    const test = harness({
+      argv: ["add", CONSUL],
+      cwd: root,
+      home,
+      interactive: true,
+      consent: true,
+      serve: ADD_REGISTRY,
+    });
+
+    expect(await runLauncher(test.options)).toBe(0);
+    expect(test.spawned).toHaveLength(1);
+    expect(test.spawned[0]?.args).toEqual([join(dir, "bin.js"), "cloud", "login"]);
   });
 });
 

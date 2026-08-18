@@ -10,7 +10,8 @@
 import { nodeSpawner } from "./delegate.js";
 import { bundledEngine } from "./engine.js";
 import { httpFetcher } from "./fetcher.js";
-import { type LauncherIo, runLauncher } from "./launcher.js";
+import type { LauncherIo } from "./io.js";
+import { runLauncher } from "./launcher.js";
 
 function readLine(): Promise<string> {
   return new Promise((settle) => {
@@ -37,6 +38,10 @@ const io: LauncherIo = {
     process.stderr.write(`${question} [y/N] `);
     const answer = (await readLine()).trim().toLowerCase();
     return answer === "y" || answer === "yes";
+  },
+  async ask(question) {
+    process.stderr.write(`${question}\n> `);
+    return (await readLine()).trim();
   },
 };
 

@@ -606,6 +606,10 @@ penv add @penvhq/provider-vault
 | Public third-party | A seven-day minimum package age. Adding a younger one takes an explicit override, which commits a trust block naming the publisher, the exact integrity, the timestamp, and your reason in your own words. |
 | Private or custom | An explicit trust acknowledgement, recorded the same way. The registry URL is committed; credentials never are — your `.npmrc` owns those. |
 
+`add` takes two flags and no others: `--registry <https-url>` names a private registry, which is what puts a package in the private tier, and `--trust-young` is the override for the seven-day age gate. Pin a version with `penv add <package>@<version>`; without one, `add` takes what `latest` points at and records the exact version it resolved.
+
+**What a provider declares about itself.** Two optional fields in the extension's own `package.json`, under a `penv` key. `penv.types` names a self-contained declaration file inside the package — `add` commits its text as the type declaration, so your config entry is checked against the provider's own definition; a provider that ships none gets the open base shape under its package name. `penv.onboard` names the engine command that finishes setup — `"cloud login"` becomes the `penv cloud login` that `add` offers to run. A declaration reaching for any module other than `@penvhq/core` is refused rather than committed: it would resolve to nothing in a repository where the adapter is not installed.
+
 **Integrity is not trust, and penv does not confuse the two.** A hash proves the bytes you install are the bytes that were published; it says nothing about what that code does. So an extension is loaded only for an explicit provider operation — `pull`, `push`, `doctor` against a live store — and never because an application started. When it runs, it receives the credentials its own configuration declares, not the environment of whoever invoked it. The declaration it contributes to your repository is types only: no adapter code, no credentials, no values, no key material.
 
 ## Projection providers (GitHub Actions Secrets)
@@ -784,7 +788,7 @@ Reporting is all it does. penv will not materialise a value file from a declarat
 | `penv cleanup` | Close a finished migration — removes the rollback bundle and its cutover state, and nothing else. |
 | `penv run -- <command>` | Resolve, validate, and start `<command>` in a penv-owned child environment. `--source` defaults to `project`; `--env` falls back to `defaultEnvironment`; `--watch` opts into provider-backed restarts. |
 | `penv migrate` | Convert a project written under an earlier layout to `.penv/state/`. Previews first, moves records on approval, leaves your schema, config, and loader byte-identical. |
-| `penv add <package>` | Add a provider extension: record it in the manifest with its integrity, install it into the launcher's cache, generate its type declaration, offer the config edit and any onboarding step. |
+| `penv add <package>[@<version>]` | Add a provider extension: record it in the manifest with its integrity, install it into the launcher's cache, generate its type declaration, offer the config edit and any onboarding step. `--registry <url>` for a private registry; `--trust-young` overrides the seven-day age gate. |
 | `penv upgrade [version]` | Move the pinned engine and the project's `@penvhq/penv` dependency together. |
 | `penv install` | Install the exact engine and extensions the manifest pins. The preinstall step for CI and production, which never download during a run. |
 | `penv import <file>` | Import an existing dotenv file; it becomes the source of truth. The filename names the scope the values are written at (`.env.production` → `<name>.production`); `--env` names it for a file that doesn't, and contradicting the filename is an error. |
