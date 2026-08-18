@@ -1473,8 +1473,15 @@ export interface CutoverPlan {
   readonly root: string;
   readonly selected: readonly DotenvFile[];
   readonly adopted: readonly Adopted[];
-  /** The environments this cutover declares or is declared against. */
+  /** The whitelist after this cutover — what the config declares, or is about to. */
   readonly environments: readonly string[];
+  /**
+   * The environments this cutover is *about*: the ones its files name. Narrower
+   * than the whitelist on a project that already declared more, and the ones the
+   * draft is judged against and the import is validated for — an environment
+   * this cutover did not touch must not fail it for a state it was already in.
+   */
+  readonly adopting: readonly string[];
   readonly decisions: InitDecisions;
   readonly fields: readonly DraftField[];
   readonly variables: number;
@@ -1585,6 +1592,7 @@ export function planCutover(input: CutoverInput): CutoverPlan {
     selected,
     adopted,
     environments,
+    adopting: chosen,
     decisions,
     fields,
     variables,
@@ -1747,10 +1755,11 @@ export async function applyCutover(
     writeEntries(tree, adopted.entries, adopted.refs, adopted.scope);
   }
 
-  // Every adopted environment, not just the daily one: the draft is the weakest
-  // shape all of them satisfy, so if one of them does not, the draft is wrong
-  // and the files must stay where they are.
-  for (const environment of plan.environments) {
+  // Every environment this cutover adopted, not just the daily one: the draft is
+  // the weakest shape all of them satisfy, so if one of them does not, the draft
+  // is wrong and the files must stay where they are. An environment the cutover
+  // did not touch is not judged here — it was already in whatever state it was in.
+  for (const environment of plan.adopting) {
     const check = await checkEnvironment(project, environment);
     if (!check.result.ok) {
       throw invalidAfterImport(check.result);
@@ -1762,7 +1771,7 @@ export async function applyCutover(
     plan.selected.map((file) => file.name),
     plan.environments,
   );
-  return { plan, steps, moved: cutover.files, validated: plan.environments };
+  return { plan, steps, moved: cutover.files, validated: plan.adopting };
 }
 
 function invalidAfterImport(result: ValidateResult): PenvError {

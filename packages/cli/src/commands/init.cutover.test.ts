@@ -945,6 +945,40 @@ describe("the conversation", () => {
   });
 });
 
+/**
+ * Adopting one more file into a project that already declared more environments
+ * than this cutover touches. The environment it did not touch is not judged by
+ * it: refusing here would fail a migration for a state the project was already
+ * in, and the files would stay put for a reason the reader cannot act on.
+ */
+describe("a cutover narrower than the whitelist", () => {
+  it("validates what it adopted, not every environment the config declares", async () => {
+    const root = makeProject({ files: { ".env.development": "DEBUG=true\n" } });
+    await cutover(root);
+    runCleanup({ cwd: root });
+    // production is declared and has no values at all — nothing this cutover did.
+    writeFileSync(
+      join(root, "penv.config.ts"),
+      `export default ${JSON.stringify({
+        environments: ["development", "production"],
+        providers: {
+          development: { type: "@penvhq/provider-filesystem" },
+          production: { type: "@penvhq/provider-filesystem" },
+        },
+        defaultEnvironment: "development",
+      })};\n`,
+      "utf8",
+    );
+    writeFileSync(join(root, ".env.local"), "EXTRA=1\n", "utf8");
+
+    const result = await cutover(root, { selected: [".env.local"], environment: "development" });
+
+    expect(result.plan.environments).toEqual(["development", "production"]);
+    expect(result.validated).toEqual(["development"]);
+    expect(result.moved).toEqual([".env.local"]);
+  });
+});
+
 describe("the install", () => {
   it("performs no cutover when the install fails", async () => {
     const root = makeProject({
