@@ -9,10 +9,11 @@
  * called at all.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { MANIFEST_PATH } from "@penvhq/core";
+import type { ManifestEngine } from "@penvhq/core";
+import { MANIFEST_PATH, parseManifest, STATE_PATH, serializeManifest } from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Delegation } from "./delegate.js";
 import { nodeSpawner } from "./delegate.js";
@@ -22,6 +23,7 @@ import { INTEGRITY_FILE, PENV_HOME_VAR, packageDir } from "./home.js";
 import { integrityOf } from "./integrity.js";
 import type { LauncherIo } from "./io.js";
 import { type LauncherOptions, runLauncher } from "./launcher.js";
+import { BUNDLED_ENGINE_PIN } from "./pins.js";
 import { installPin, type Pin } from "./store.js";
 import { enginePackage, packTar } from "./tarball.fixtures.js";
 
@@ -54,6 +56,13 @@ const EXTENSION_PIN: Pin = {
 };
 
 const BUNDLED_VERSION = "0.10.0";
+
+/** What a released launcher carries: the SSRI npm recorded for the engine beside it. */
+const BUNDLED_PIN: ManifestEngine = {
+  package: "@penvhq/cli",
+  version: BUNDLED_VERSION,
+  integrity: integrityOf(packTar(enginePackage("@penvhq/cli", BUNDLED_VERSION))),
+};
 
 function manifestText(options: { format?: number; extension?: boolean } = {}): string {
   return `${JSON.stringify(
@@ -121,6 +130,9 @@ function harness(overrides: {
   consent?: boolean | readonly boolean[];
   exitCode?: number;
   serve?: Readonly<Record<string, Uint8Array>>;
+  pin?: ManifestEngine;
+  /** What the delegated child leaves on disk before it exits. */
+  onSpawn?: () => void;
 }): Harness {
   const out: string[] = [];
   const err: string[] = [];
@@ -174,9 +186,11 @@ function harness(overrides: {
       fetcher,
       spawn: (delegation) => {
         spawned.push(delegation);
+        overrides.onSpawn?.();
         return Promise.resolve(overrides.exitCode ?? 0);
       },
       bundledEngine: bundled,
+      bundledPin: overrides.pin ?? BUNDLED_PIN,
     },
   };
 }
@@ -228,6 +242,152 @@ describe("outside a project", () => {
       `✗ penv found no ${MANIFEST_PATH} in ${cwd} or any parent directory`,
       "  → Run `penv init` here to adopt this project.",
     ]);
+  });
+});
+
+describe("the manifest an adoption leaves behind", () => {
+  /** What a delegated `init` or `migrate` writes: the state directory, and no manifest. */
+  function scaffold(root: string): void {
+    mkdirSync(join(root, ...STATE_PATH.split("/")), { recursive: true });
+  }
+
+  function manifestOf(root: string): string {
+    return join(root, ...MANIFEST_PATH.split("/"));
+  }
+
+  it("pins the engine that adopted the project", async () => {
+    const cwd = scratch("penv-adopt-");
+    const test = harness({
+      argv: ["init", "--yes"],
+      cwd,
+      home: scratch("penv-home-"),
+      onSpawn: () => {
+        scaffold(cwd);
+      },
+    });
+
+    expect(await runLauncher(test.options)).toBe(0);
+    expect(JSON.parse(readFileSync(manifestOf(cwd), "utf8"))).toEqual({
+      format: 1,
+      engine: BUNDLED_PIN,
+      extensions: {},
+    });
+    expect(test.out).toEqual([`✓ ${MANIFEST_PATH} pins @penvhq/cli ${BUNDLED_VERSION}`]);
+  });
+
+  it("writes what parseManifest reads back and serializeManifest writes again", async () => {
+    const cwd = scratch("penv-adopt-");
+    const test = harness({
+      argv: ["init", "--yes"],
+      cwd,
+      home: scratch("penv-home-"),
+      onSpawn: () => {
+        scaffold(cwd);
+      },
+    });
+
+    expect(await runLauncher(test.options)).toBe(0);
+    const text = readFileSync(manifestOf(cwd), "utf8");
+    expect(serializeManifest(parseManifest(text))).toBe(text);
+  });
+
+  it("pins a migrated project from wherever migrate was run", async () => {
+    const root = scratch("penv-migrated-");
+    const cwd = join(root, "apps", "api");
+    mkdirSync(cwd, { recursive: true });
+    const test = harness({
+      argv: ["migrate", "--yes"],
+      cwd,
+      home: scratch("penv-home-"),
+      onSpawn: () => {
+        scaffold(root);
+      },
+    });
+
+    expect(await runLauncher(test.options)).toBe(0);
+    expect(JSON.parse(readFileSync(manifestOf(root), "utf8")).engine).toEqual(BUNDLED_PIN);
+  });
+
+  it("never writes over a manifest that is already there", async () => {
+    const cwd = scratch("penv-adopt-");
+    const existing = manifestText();
+    const test = harness({
+      argv: ["init"],
+      cwd,
+      home: scratch("penv-home-"),
+      onSpawn: () => {
+        scaffold(cwd);
+        writeFileSync(manifestOf(cwd), existing);
+      },
+    });
+
+    expect(await runLauncher(test.options)).toBe(0);
+    expect(readFileSync(manifestOf(cwd), "utf8")).toBe(existing);
+    expect(test.out).toEqual([]);
+  });
+
+  it("writes nothing when the adoption failed", async () => {
+    const cwd = scratch("penv-adopt-");
+    const test = harness({
+      argv: ["init"],
+      cwd,
+      home: scratch("penv-home-"),
+      exitCode: 4,
+      onSpawn: () => {
+        scaffold(cwd);
+      },
+    });
+
+    expect(await runLauncher(test.options)).toBe(4);
+    expect(existsSync(manifestOf(cwd))).toBe(false);
+  });
+
+  it("writes nothing when the command adopted nothing", async () => {
+    const cwd = scratch("penv-nowhere-");
+    const test = harness({ argv: ["migrate"], cwd, home: scratch("penv-home-") });
+
+    expect(await runLauncher(test.options)).toBe(0);
+    expect(existsSync(join(cwd, ".penv"))).toBe(false);
+    expect(test.out).toEqual([]);
+  });
+
+  it("refuses to pin a project with a launcher built from source", async () => {
+    const cwd = scratch("penv-adopt-");
+    const test = harness({
+      argv: ["init", "--yes"],
+      cwd,
+      home: scratch("penv-home-"),
+      pin: BUNDLED_ENGINE_PIN,
+      onSpawn: () => {
+        scaffold(cwd);
+      },
+    });
+
+    expect(await runLauncher(test.options)).toBe(1);
+    expect(existsSync(manifestOf(cwd))).toBe(false);
+    expect(test.err).toEqual([
+      `✗ This penv was built from source, so it carries no published integrity for @penvhq/cli to write into ${MANIFEST_PATH}`,
+      "  → Install penv from npm with `npm install -g penv` and run the command again — a released launcher ships the integrity of the engine it ships.",
+    ]);
+  });
+
+  it("refuses to pin a version other than the one that ran", async () => {
+    const cwd = scratch("penv-adopt-");
+    const test = harness({
+      argv: ["init", "--yes"],
+      cwd,
+      home: scratch("penv-home-"),
+      pin: { ...BUNDLED_PIN, version: "0.9.0" },
+      onSpawn: () => {
+        scaffold(cwd);
+      },
+    });
+
+    expect(await runLauncher(test.options)).toBe(1);
+    expect(existsSync(manifestOf(cwd))).toBe(false);
+    expect(test.err[0]).toBe(
+      `✗ This penv carries the integrity of @penvhq/cli 0.9.0 and just ran ${BUNDLED_VERSION}, so it cannot record which bytes scaffolded this project`,
+    );
   });
 });
 

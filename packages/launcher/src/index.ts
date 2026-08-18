@@ -33,6 +33,8 @@ export {
   DownloadFailedError,
   DownloadIntegrityError,
   EngineEntryError,
+  EnginePinMismatchError,
+  EnginePinUnreleasedError,
   INSTALL_COMMAND,
   InstallDeclinedError,
   MIN_PACKAGE_AGE_DAYS,
@@ -67,8 +69,15 @@ export { integrityOf } from "./integrity.js";
 export type { LauncherIo } from "./io.js";
 export type { LauncherOptions } from "./launcher.js";
 export { runLauncher } from "./launcher.js";
+export {
+  assertReleasePin,
+  BUNDLED_ENGINE_PIN,
+  DEV_PIN_INTEGRITY,
+  DEV_PIN_VERSION,
+  releaseEnginePin,
+} from "./pins.js";
 export type { Project } from "./project.js";
-export { findProject } from "./project.js";
+export { findAdoptedRoot, findProject } from "./project.js";
 export type { Release, ReleaseQuery } from "./registry.js";
 export { fetchRelease, packumentUrl } from "./registry.js";
 export type { Installation, InstallOptions, InstallState, Pin } from "./store.js";
