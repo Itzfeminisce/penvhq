@@ -8,7 +8,7 @@
 
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { MANIFEST_PATH } from "@penvhq/core";
+import { MANIFEST_PATH, stateDir } from "@penvhq/core";
 
 export interface Project {
   /** The directory holding `.penv/`. */
@@ -19,13 +19,11 @@ export interface Project {
 
 const MANIFEST_SEGMENTS = MANIFEST_PATH.split("/");
 
-/** The nearest project at or above `cwd`, or `undefined` outside one. */
-export function findProject(cwd: string): Project | undefined {
+function findUp(cwd: string, matches: (dir: string) => boolean): string | undefined {
   let dir = resolve(cwd);
   for (;;) {
-    const manifestFile = join(dir, ...MANIFEST_SEGMENTS);
-    if (existsSync(manifestFile)) {
-      return { root: dir, manifestFile };
+    if (matches(dir)) {
+      return dir;
     }
     const parent = dirname(dir);
     if (parent === dir) {
@@ -33,4 +31,21 @@ export function findProject(cwd: string): Project | undefined {
     }
     dir = parent;
   }
+}
+
+/** The nearest project at or above `cwd`, or `undefined` outside one. */
+export function findProject(cwd: string): Project | undefined {
+  const root = findUp(cwd, (dir) => existsSync(join(dir, ...MANIFEST_SEGMENTS)));
+  return root === undefined ? undefined : { root, manifestFile: join(root, ...MANIFEST_SEGMENTS) };
+}
+
+/**
+ * The project a delegated `init` or `migrate` left behind, recognised by the
+ * state directory rather than the manifest it does not have yet.
+ *
+ * A command that previewed and wrote nothing leaves none, which is what keeps a
+ * `penv migrate` typed in an ordinary directory from being handed a manifest.
+ */
+export function findAdoptedRoot(cwd: string): string | undefined {
+  return findUp(cwd, (dir) => existsSync(stateDir(dir)));
 }

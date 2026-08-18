@@ -51,4 +51,42 @@ manifest module, ISSUE-07's init report section in its issue file, PRD §2.
 
 ## Decisions log
 
-(append here)
+**The pin is a TypeScript module, `packages/launcher/src/pins.ts`, not `pins.json`.** The issue
+allows "or equivalent". A JSON file needs `resolveJsonModule`, sits outside the package's `rootDir`,
+and has to be either bundled in or added to `files` — and the launcher publishes two formats, so a
+runtime read relative to `import.meta.url` has a CJS case to get wrong. One typed module is read by
+`tsc`, by vitest and by tsup identically, and a release step that rewrites three literals in it is
+the same step that would rewrite three keys in JSON.
+
+**`migrate` joined `init` as a command the launcher runs outside a project.** A project on the old
+layout is precisely a project with no manifest, so `penv migrate` reached `NoProjectError` and the
+one command that fixes the layout could never be run. It is delegated to the bundled engine on the
+same route `init` takes.
+
+**An adoption is recognised by `.penv/state/`, not by an exit code.** `init` with neither a terminal
+nor `--yes` previews and writes nothing, and `migrate` in an ordinary directory says there is nothing
+to migrate — both exit 0. The state directory is what the two commands actually create, and it is the
+directory the manifest goes in, so the launcher writes only where it found one. `migrate`'s root can
+be above `cwd`, so the search walks up, exactly as the manifest search does.
+
+**The pin carries the engine's version, and it is checked against the engine that ran.** An SSRI
+describes one published tarball. Taking the integrity from the pin and the version from the resolved
+engine would let a stale pin write a manifest naming bytes nobody can install; recording the pin's
+own version would break "pins the engine that just scaffolded the project". They must agree, and
+`PENV_ENGINE_PIN_MISMATCH` says so when they do not.
+
+**A launcher built from source refuses, loudly, after a successful adoption.** The alternative was
+skipping the write when the pin is the development value, which is the shipped bug this issue closes,
+silently. `PENV_ENGINE_PIN_UNRELEASED` names npm as the one remedy. The check runs after the manifest
+and state-directory guards, so a run that adopted nothing never mentions the pin.
+
+**The launcher prints one line for the file it wrote.** `✓ .penv/state/manifest.json pins @penvhq/cli
+<version>`, in `penv add`'s form. The manifest is committed and the engine's own summary cannot
+mention it, so silence would leave the file for the reviewer to find in the diff.
+
+### Flagged, not built
+
+**`penv upgrade` has nothing to write with.** It rewrites the engine pin, which means resolving a
+version and its integrity from the registry — a different seam from this one (a release-time
+constant, no network). The launcher owns that command for the same reason it owns this write; no
+issue in the set has it.

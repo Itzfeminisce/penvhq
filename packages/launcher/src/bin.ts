@@ -12,6 +12,7 @@ import { bundledEngine } from "./engine.js";
 import { httpFetcher } from "./fetcher.js";
 import type { LauncherIo } from "./io.js";
 import { runLauncher } from "./launcher.js";
+import { BUNDLED_ENGINE_PIN } from "./pins.js";
 
 function readLine(): Promise<string> {
   return new Promise((settle) => {
@@ -53,6 +54,7 @@ void runLauncher({
   fetcher: httpFetcher(),
   spawn: nodeSpawner(),
   bundledEngine,
+  bundledPin: BUNDLED_ENGINE_PIN,
 }).then((code) => {
   process.exitCode = code;
 });

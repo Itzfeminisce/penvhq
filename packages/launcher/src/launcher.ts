@@ -13,9 +13,17 @@
  * production start that can fail for a reason nobody chose.
  */
 
-import { readFileSync } from "node:fs";
-import type { Manifest } from "@penvhq/core";
-import { PenvError, parseManifest, UnsupportedManifestFormatError } from "@penvhq/core";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Manifest, ManifestEngine } from "@penvhq/core";
+import {
+  MANIFEST_FORMAT,
+  MANIFEST_PATH,
+  PenvError,
+  parseManifest,
+  serializeManifest,
+  UnsupportedManifestFormatError,
+} from "@penvhq/core";
 import { add } from "./add.js";
 import type { Spawner } from "./delegate.js";
 import { type Engine, engineAt } from "./engine.js";
@@ -34,8 +42,9 @@ import {
   penvHome,
 } from "./home.js";
 import type { LauncherIo } from "./io.js";
+import { releaseEnginePin } from "./pins.js";
 import type { Project } from "./project.js";
-import { findProject } from "./project.js";
+import { findAdoptedRoot, findProject } from "./project.js";
 import { inspectInstall, installPin, type Pin } from "./store.js";
 
 export interface LauncherOptions {
@@ -48,6 +57,8 @@ export interface LauncherOptions {
   readonly spawn: Spawner;
   /** The engine that shipped with this launcher, resolved only when it is needed. */
   readonly bundledEngine: () => Engine;
+  /** That engine's published identity, embedded at release time. */
+  readonly bundledPin: ManifestEngine;
 }
 
 /** The launcher's own commands. Everything else belongs to the engine. */
@@ -57,8 +68,8 @@ const VERSION_FLAGS = new Set(["--version", "-v"]);
 const HELP_FLAGS = new Set(["--help", "-h"]);
 const NO_DOWNLOAD = "--no-download";
 
-/** What runs outside a project, on the engine that shipped with the launcher. */
-const OUTSIDE_PROJECT = new Set(["init"]);
+/** What runs outside a project, on the engine that shipped with the launcher — and leaves one behind. */
+const ADOPTS = new Set(["init", "migrate"]);
 
 interface PinnedPackage {
   readonly kind: PackageKind;
@@ -178,8 +189,11 @@ async function launch(options: LauncherOptions): Promise<number> {
       io.out(`penv ${options.bundledEngine().version}`);
       return 0;
     }
-    if (first === undefined || HELP_FLAGS.has(first) || OUTSIDE_PROJECT.has(first)) {
+    if (first === undefined || HELP_FLAGS.has(first)) {
       return delegate(options, options.bundledEngine(), forwarded, home, cwd);
+    }
+    if (ADOPTS.has(first)) {
+      return adopt(options, forwarded, home, cwd);
     }
     throw new NoProjectError(cwd);
   }
@@ -205,6 +219,46 @@ async function launch(options: LauncherOptions): Promise<number> {
   }
   const engine = engineAt(engineDir, enginePin.name, enginePin.version);
   return delegate(options, engine, forwarded, home, cwd);
+}
+
+/**
+ * `init` and `migrate` on the bundled engine, and the manifest recording which
+ * engine that was.
+ *
+ * The write belongs here because the pin does: an engine cannot compute the npm
+ * integrity of its own tarball, and neither command is allowed a network to go
+ * and read it. It happens only after the child succeeds, only where the child
+ * left a `.penv/state/` behind — a preview that wrote nothing is not an adoption
+ * — and never over a manifest that is already there, whoever wrote it.
+ */
+async function adopt(
+  options: LauncherOptions,
+  forwarded: readonly string[],
+  home: string,
+  cwd: string,
+): Promise<number> {
+  const engine = options.bundledEngine();
+  const code = await delegate(options, engine, forwarded, home, cwd);
+  if (code !== 0) {
+    return code;
+  }
+
+  const root = findAdoptedRoot(cwd);
+  if (root === undefined) {
+    return 0;
+  }
+  const manifestFile = join(root, ...MANIFEST_PATH.split("/"));
+  if (existsSync(manifestFile)) {
+    return 0;
+  }
+
+  const pin = releaseEnginePin(options.bundledPin, engine.version);
+  writeFileSync(
+    manifestFile,
+    serializeManifest({ format: MANIFEST_FORMAT, engine: pin, extensions: {} }),
+  );
+  options.io.out(`✓ ${MANIFEST_PATH} pins ${pin.package} ${pin.version}`);
+  return 0;
 }
 
 /** The pinned bytes on disk, or the refusal that says why they are not. */

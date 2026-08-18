@@ -7,7 +7,13 @@
  * surfaces in exactly one refusal, and core owns it.
  */
 
-import { EXTENSIONS_PATH, MANIFEST_PATH, OFFICIAL_SCOPE, PenvError } from "@penvhq/core";
+import {
+  ENGINE_PACKAGE,
+  EXTENSIONS_PATH,
+  MANIFEST_PATH,
+  OFFICIAL_SCOPE,
+  PenvError,
+} from "@penvhq/core";
 
 /** The command that materializes everything the manifest pins. */
 export const INSTALL_COMMAND = "penv install";
@@ -334,6 +340,35 @@ export class DeclarationNotSelfContainedError extends PenvError {
       `The declaration ${name} ships at \`${file}\` imports \`${specifier}\``,
       `Report it to ${name}. What penv commits to ${EXTENSIONS_PATH} is types and nothing else, ` +
         "so it can only carry a declaration that stands on its own.",
+    );
+  }
+}
+
+/** A launcher built from source, asked to record which bytes it just ran. */
+export class EnginePinUnreleasedError extends PenvError {
+  override readonly name = "EnginePinUnreleasedError";
+
+  constructor() {
+    super(
+      "PENV_ENGINE_PIN_UNRELEASED",
+      `This penv was built from source, so it carries no published integrity for ${ENGINE_PACKAGE} ` +
+        `to write into ${MANIFEST_PATH}`,
+      "Install penv from npm with `npm install -g penv` and run the command again — a released " +
+        "launcher ships the integrity of the engine it ships.",
+    );
+  }
+}
+
+/** The pin embedded at release time and the engine beside it are different versions. */
+export class EnginePinMismatchError extends PenvError {
+  override readonly name = "EnginePinMismatchError";
+
+  constructor(pinned: string, ran: string) {
+    super(
+      "PENV_ENGINE_PIN_MISMATCH",
+      `This penv carries the integrity of ${ENGINE_PACKAGE} ${pinned} and just ran ${ran}, so it ` +
+        "cannot record which bytes scaffolded this project",
+      "Reinstall the launcher with `npm install -g penv` — its pin and its engine ship together.",
     );
   }
 }
