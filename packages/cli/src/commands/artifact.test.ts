@@ -368,6 +368,46 @@ describe("the refusals", () => {
     expect(error.remedy).toContain("penv artifact build --env production");
   });
 
+  /**
+   * Invariant 12, at the other delivery. `inject` refuses this before it writes
+   * a child environment; the artifact has to refuse it too, or a container reads
+   * two mappings under one variable and takes whichever penv wrote last —
+   * silently, where there is nobody left to notice.
+   */
+  it("refuses an override that maps two parameters to one variable", async () => {
+    const root = makeProject({
+      config: { override: { "redis.password": "DATABASE_URL" } },
+      tree: {
+        "database-url.production": "postgres://production/app",
+        "redis/password.production": "prod-secret",
+      },
+    });
+    const out = outsideOf(root);
+
+    const error = await refusalFrom(
+      runArtifactBuild({ cwd: root, environment: "production", out }),
+    );
+
+    expect(error.code).toBe("NAME_COLLISION");
+    expect(error.message).toContain("DATABASE_URL");
+    expect(() => readFileSync(out, "utf8")).toThrow();
+  });
+
+  it("refuses an override that delivers into penv's own channel", async () => {
+    const root = makeProject({
+      config: { override: { "database-url": "PENV_RUN" } },
+      tree: { "database-url.production": "postgres://production/app" },
+    });
+    const out = outsideOf(root);
+
+    const error = await refusalFrom(
+      runArtifactBuild({ cwd: root, environment: "production", out }),
+    );
+
+    expect(error.code).toBe("DELIVERY_NAME_RESERVED");
+    expect(() => readFileSync(out, "utf8")).toThrow();
+  });
+
   it("refuses when the schema does not load, because it cannot tell what to deliver", async () => {
     const root = makeProject();
     writeFileSync(join(root, ".penv", "env.ts"), "export const schema = 42;\n", "utf8");
