@@ -24,6 +24,7 @@ import { pullCommand } from "./commands/pull.js";
 import { pushCommand } from "./commands/push.js";
 import { removeCommand } from "./commands/remove.js";
 import { rotateCommand } from "./commands/rotate.js";
+import { runCommand } from "./commands/run.js";
 import { setCommand } from "./commands/set.js";
 import { validateCommand } from "./commands/validate.js";
 import { watchCommand } from "./commands/watch.js";
@@ -45,6 +46,7 @@ export const main = defineCommand({
     pull: pullCommand,
     push: pushCommand,
     rotate: rotateCommand,
+    run: runCommand,
     remove: removeCommand,
     list: listCommand,
     migrate: migrateCommand,
@@ -98,9 +100,11 @@ export type { RemoveResult } from "./commands/remove.js";
 export { runRemove } from "./commands/remove.js";
 export type { RotateOptions, RotatePhase, RotateResult } from "./commands/rotate.js";
 export { renderRotate, runRotate } from "./commands/rotate.js";
+export type { RunOptions, RunResult, RunSource } from "./commands/run.js";
+export { runRun } from "./commands/run.js";
 export type { SetResult } from "./commands/set.js";
 export { runSet } from "./commands/set.js";
-export type { ValidateIssue, ValidateResult } from "./commands/validate.js";
-export { runValidate } from "./commands/validate.js";
+export type { EnvironmentCheck, ValidateIssue, ValidateResult } from "./commands/validate.js";
+export { checkEnvironment, runValidate } from "./commands/validate.js";
 export type { WatchHandle, WatchOptions } from "./commands/watch.js";
 export { renderWatch, runWatch } from "./commands/watch.js";
