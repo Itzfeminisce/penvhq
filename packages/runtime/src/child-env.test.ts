@@ -14,7 +14,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { DeclaredCredentials } from "./child-env.js";
-import { childEnvironment, RUN_MARKER, strippedVariables } from "./child-env.js";
+import {
+  childEnvironment,
+  DELIVERY_VARIABLE,
+  ENVIRONMENT_VARIABLE,
+  LAUNCHER_HOME,
+  RUN_MARKER,
+  strippedVariables,
+} from "./child-env.js";
 
 const CONFIG = {
   environments: ["development"],
@@ -154,9 +161,33 @@ describe("the variables penv strips", () => {
     expect(env.PENV_SNAPSHOT).toBeUndefined();
   });
 
+  it("removes the launcher's own PENV_HOME", () => {
+    const { env, stripped } = build({ [LAUNCHER_HOME]: "/home/dev/.penv", PATH: "/usr/bin" });
+
+    expect(env[LAUNCHER_HOME]).toBeUndefined();
+    expect(stripped).toContain(LAUNCHER_HOME);
+  });
+
+  /**
+   * The quiet half of the same claim. Three variables are the deliberate control
+   * channel and each has a reader — the bridge takes the delivery contract and
+   * the marker back out itself, and a nested `penv run` needs the marker to see
+   * the wrapper it is inside.
+   */
+  it("keeps the three channels a reader downstream depends on", () => {
+    const { env } = build({ [LAUNCHER_HOME]: "/home/dev/.penv" });
+
+    expect(env[ENVIRONMENT_VARIABLE]).toBe("development");
+    expect(JSON.parse(env[DELIVERY_VARIABLE] ?? "")).toMatchObject({
+      "database-url": "DATABASE_URL",
+    });
+    expect(env[RUN_MARKER]).toBe("penv run -- pnpm dev");
+  });
+
   it("names what it would strip without needing the host to carry it", () => {
     expect(strippedVariables({}, VAULT_CONFIG)).toContain("VAULT_TOKEN");
     expect(strippedVariables({}, CONFIG)).not.toContain("VAULT_TOKEN");
+    expect(strippedVariables({}, CONFIG)).toContain(LAUNCHER_HOME);
   });
 });
 

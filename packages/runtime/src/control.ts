@@ -43,16 +43,33 @@ export const DELIVERY_VARIABLE = "PENV_DELIVERY";
 export const SNAPSHOT_VARIABLE = "PENV_SNAPSHOT";
 
 /**
- * penv's internal channels. They are penv's business with itself, and an
- * application that inherited one would be reading a message addressed to
- * somewhere else — `PENV_SNAPSHOT` above all, whose whole point is that the
- * artifact is opened once, in the parent, and never again.
+ * Where the launcher keeps the engines and extensions it resolved, set for the
+ * engine it delegates to.
+ *
+ * It is launcher plumbing rather than a channel to the application — the engine
+ * has already found everything it needed by the time a child starts — so it is
+ * stripped like the rest of penv's own, and the child inherits none of it.
+ */
+export const LAUNCHER_HOME = "PENV_HOME";
+
+/**
+ * penv's own names, none of which the application is addressed by. They are
+ * penv's business with itself, and an application that inherited one would be
+ * reading a message meant for somewhere else — `PENV_SNAPSHOT` above all, whose
+ * whole point is that the artifact is opened once, in the parent, and never
+ * again, and `PENV_HOME`, which is the launcher's answer to a question the
+ * engine has already finished asking.
+ *
+ * The three that do stay in the child — `PENV_ENV`, `PENV_DELIVERY` and
+ * `PENV_RUN` — are deliberate and each has a reader: see their declarations
+ * above.
  */
 export const CONTROL_VARIABLES = [
   RUN_MARKER,
   DELIVERY_VARIABLE,
   SCHEMA_HARVEST_ENV,
   SNAPSHOT_VARIABLE,
+  LAUNCHER_HOME,
 ] as const;
 
 /**
