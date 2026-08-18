@@ -27,6 +27,9 @@ import { own } from "./types.js";
 
 const CONFIG_FILENAMES = ["penv.config.ts", "penv.config.js", "penv.config.mjs"] as const;
 
+/** The slice of jiti this module uses, and the whole of what a caller may supply. */
+export type JitiApi = Pick<typeof import("jiti"), "createJiti">;
+
 /**
  * jiti is a TypeScript loader, and only evaluating a `penv.config.ts` needs one.
  * A static import would put jiti in the import graph of every bundle that reaches
@@ -38,10 +41,22 @@ const CONFIG_FILENAMES = ["penv.config.ts", "penv.config.js", "penv.config.mjs"]
  * must stay so (invariant 3). It resolves from this module's own package, where
  * jiti is a declared dependency.
  */
-let jitiModule: typeof import("jiti") | undefined;
+let jitiModule: JitiApi | undefined;
 
-function jitiApi(): typeof import("jiti") {
-  jitiModule ??= createRequire(import.meta.url)("jiti") as typeof import("jiti");
+/**
+ * Hands core the loader to use instead of resolving one.
+ *
+ * The engine's executable is a single bundled file extracted from an npm tarball,
+ * so there is no `node_modules` beside it to resolve `jiti` from — it bundles its
+ * own copy and registers it here. Everywhere else jiti is a real dependency and
+ * nothing calls this.
+ */
+export function setJitiApi(api: JitiApi): void {
+  jitiModule = api;
+}
+
+function jitiApi(): JitiApi {
+  jitiModule ??= createRequire(import.meta.url)("jiti") as JitiApi;
   return jitiModule;
 }
 
