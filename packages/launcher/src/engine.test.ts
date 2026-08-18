@@ -81,7 +81,11 @@ describe("engineAt", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, "package.json"),
-      JSON.stringify({ name: "@penvhq/cli", version: "0.9.0", bin: { "penv-engine": "../../escape.js" } }),
+      JSON.stringify({
+        name: "@penvhq/cli",
+        version: "0.9.0",
+        bin: { "penv-engine": "../../escape.js" },
+      }),
     );
     writeFileSync(join(root, "escape.js"), "");
 
