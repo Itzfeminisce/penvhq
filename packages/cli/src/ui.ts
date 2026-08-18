@@ -166,14 +166,9 @@ export function writeError(lines: readonly string[]): void {
  */
 export function reportError(error: unknown): void {
   if (error instanceof PenvError) {
-    // The constructor folds the remedy into `message`; unfold it so the remedy
-    // can wear the tip shape instead of a bare indent.
-    const suffix = error.remedy === undefined ? undefined : `\n  ${error.remedy}`;
-    const message =
-      suffix !== undefined && error.message.endsWith(suffix)
-        ? error.message.slice(0, -suffix.length)
-        : error.message;
-    process.stderr.write(`${err.red(CROSS)} ${message}\n`);
+    // `summary` is the message without the remedy the constructor folds into it,
+    // so the remedy can wear the tip shape instead of a bare indent.
+    process.stderr.write(`${err.red(CROSS)} ${error.summary}\n`);
     if (error.remedy !== undefined) {
       process.stderr.write(`  ${err.cyan("→")} ${error.remedy}\n`);
     }

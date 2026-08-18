@@ -8,6 +8,7 @@
 
 export {
   ConfigError,
+  DeliveryContractMissingError,
   DirectStartError,
   defineConfig,
   FilenameGrammarError,

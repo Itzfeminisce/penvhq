@@ -50,6 +50,7 @@ export { formatEnvelope, NONCE_BYTES, parseEnvelope, TAG_BYTES } from "./envelop
 export type { ValidationWording } from "./errors.js";
 export {
   ConfigError,
+  DeliveryContractMissingError,
   DirectStartError,
   FilenameGrammarError,
   IllegalEnvironmentNameError,
