@@ -58,6 +58,14 @@ describe("packageDir", () => {
     expect(failure).toThrow(PenvError);
     expect(failure).toThrow(/outside/);
   });
+
+  /** Inside `$PENV_HOME` is not enough: an engine filed among the extensions is not an engine. */
+  it("refuses a name that lands in the other bucket", () => {
+    const failure = () => packageDir(scratch(), "engines", "../extensions/evil", "0.9.0");
+
+    expect(failure).toThrow(PenvError);
+    expect(failure).toThrow(/outside/);
+  });
 });
 
 describe("launcherUpdateCommand", () => {

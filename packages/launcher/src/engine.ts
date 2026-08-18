@@ -9,7 +9,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { ENGINE_PACKAGE, PenvError } from "@penvhq/core";
 import { EngineEntryError } from "./errors.js";
 
@@ -52,12 +52,20 @@ function binPath(bin: unknown): string | undefined {
   return chosen?.[1];
 }
 
-/** The engine installed at `dir`, or the refusal that says it is not runnable. */
+/**
+ * The engine installed at `dir`, or the refusal that says it is not runnable.
+ *
+ * `bin` comes out of the package's own `package.json`, so it is checked for
+ * containment like every other path the launcher resolves from something it did
+ * not write: a `bin` of `../../x.js` names a file penv would hand to node from
+ * outside the package the manifest pinned.
+ */
 export function engineAt(dir: string, name: string, version: string): Engine {
   const manifest = readPackageManifest(dir);
   const bin = manifest === undefined ? undefined : binPath(manifest.bin);
-  const entry = bin === undefined ? undefined : resolve(dir, bin);
-  if (entry === undefined || !existsSync(entry)) {
+  const root = resolve(dir);
+  const entry = bin === undefined ? undefined : resolve(root, bin);
+  if (entry === undefined || !entry.startsWith(root + sep) || !existsSync(entry)) {
     throw new EngineEntryError(name, version, dir);
   }
   return { name, version, dir, entry };

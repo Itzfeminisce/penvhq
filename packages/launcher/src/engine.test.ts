@@ -71,4 +71,19 @@ describe("engineAt", () => {
 
     expect(() => engineAt(empty, "@penvhq/cli", "0.9.0")).toThrow(EngineEntryError);
   });
+
+  /** `bin` is the package's own text, so it is checked like every other untrusted path. */
+  it("refuses a bin that climbs out of the package directory", () => {
+    const dir = scratch({ "penv-engine": "../../escape.js" });
+    writeFileSync(join(dir, "..", "..", "escape.js"), "");
+
+    expect(() => engineAt(dir, "@penvhq/cli", "0.9.0")).toThrow(EngineEntryError);
+  });
+
+  /** The negative case: a path with a `..` in it that still lands inside is fine. */
+  it("takes a bin that walks down and back into the package", () => {
+    const dir = scratch({ "penv-engine": "./lib/../bin.js" });
+
+    expect(engineAt(dir, "@penvhq/cli", "0.9.0").entry).toBe(join(dir, "bin.js"));
+  });
 });

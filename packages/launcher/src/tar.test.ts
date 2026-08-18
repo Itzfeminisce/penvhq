@@ -5,6 +5,7 @@
  * directory penv extracts into must never reach the filesystem.
  */
 
+import { gunzipSync, gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { ArchiveError } from "./errors.js";
 import { readTarball } from "./tar.js";
@@ -18,6 +19,13 @@ function read(sources: Parameters<typeof packTar>[0]) {
 
 function textOf(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
+}
+
+/** The same archive with the first header's 12-byte size field overwritten verbatim. */
+function repackWithSizeField(sources: Parameters<typeof packTar>[0], raw: string): Uint8Array {
+  const archive = new Uint8Array(gunzipSync(packTar(sources)));
+  archive.set(new TextEncoder().encode(raw.padEnd(12, " ").slice(0, 12)), 124);
+  return new Uint8Array(gzipSync(archive));
 }
 
 /** pax's `<length> <key>=<value>\n`, where the length counts its own digits. */
@@ -82,6 +90,30 @@ describe("readTarball", () => {
 
     expect(failure).toThrow(ArchiveError);
     expect(failure).toThrow(/package\/link/);
+  });
+
+  /**
+   * A size penv cannot read walked the offset off the end of the archive and
+   * returned the entries read so far — a truncated package that installed.
+   */
+  it("refuses a size field that is not a count of bytes", () => {
+    const withSize = (raw: string) => () =>
+      readTarball(
+        repackWithSizeField([{ path: "package/index.js", content: "export const x = 1;\n" }], raw),
+        SUBJECT,
+      );
+
+    expect(withSize("nonsense     ")).toThrow(ArchiveError);
+    expect(withSize("-0000000001 ")).toThrow(ArchiveError);
+    // A size the archive cannot hold is the same refusal: it truncated too.
+    expect(withSize("77777777777 ")).toThrow(ArchiveError);
+  });
+
+  /** The negative case: the size the packer wrote reads back exactly. */
+  it("reads an entry whose size field is untouched", () => {
+    const entries = read([{ path: "package/index.js", content: "export const x = 1;\n" }]);
+
+    expect(entries.map((entry) => textOf(entry.bytes))).toEqual(["export const x = 1;\n"]);
   });
 
   it("names the package and one remedy when it refuses", () => {
