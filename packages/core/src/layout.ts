@@ -38,11 +38,17 @@ export const MANIFEST_PATH = `${STATE_PATH}/manifest.json`;
 /** Committed, type-only provider declarations — `extensions/<name>.d.ts`. */
 export const EXTENSIONS_PATH = `${STATE_PATH}/extensions`;
 
+const CUTOVER_FILE = "cutover.json";
+const ROLLBACK_DIR = "rollback";
+
 /** Adoption recovery state, written when a project cuts over from dotenv. */
-export const CUTOVER_PATH = `${STATE_PATH}/cutover.json`;
+export const CUTOVER_PATH = `${STATE_PATH}/${CUTOVER_FILE}`;
 
 /** The ignored, temporary bundle of the dotenv files adoption moved aside. */
-export const ROLLBACK_PATH = `${STATE_PATH}/rollback`;
+export const ROLLBACK_PATH = `${STATE_PATH}/${ROLLBACK_DIR}`;
+
+/** Where in that bundle the moved dotenv files sit, keeping their exact names. */
+export const ROLLBACK_DOTENV_PATH = `${ROLLBACK_PATH}/dotenv`;
 
 /** The `.penv/` directory of `projectRoot`, absolute. */
 export function penvDir(projectRoot: string): string {
@@ -127,6 +133,12 @@ export function assertMigrated(projectRoot: string, config: PenvConfig): void {
  * it, because the adoption bundle is the one directory that never joins the
  * committed set.
  *
+ * `cutover.json` is re-excluded for the same reason, out of the `!*.json` that
+ * un-ignores meta and the manifest: it names this machine's rollback bundle, and
+ * a teammate who cloned it would be told a migration they never ran is still
+ * unresolved — `penv init` refused, `penv init undo` offering to restore files
+ * that are not there.
+ *
  * The schema is un-ignored by name only when it lives in the tree. Outside it,
  * this file has no opinion on it at all, and a `!env.ts` naming nothing is a
  * line the next reader has to work out is dead.
@@ -144,6 +156,7 @@ export function renderStateGitignore(config: PenvConfig): string {
     `${inside === undefined ? "" : `!${inside}\n`}` +
     `!*.json\n` +
     `!*.d.ts\n` +
-    `rollback/\n`
+    `/${CUTOVER_FILE}\n` +
+    `${ROLLBACK_DIR}/\n`
   );
 }

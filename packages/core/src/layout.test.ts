@@ -116,6 +116,18 @@ describe("renderStateGitignore", () => {
     expect(ignore.indexOf("rollback/")).toBeGreaterThan(ignore.indexOf("!*/"));
   });
 
+  /**
+   * `!*.json` is there for meta and the manifest. cutover.json is neither: it
+   * names this machine's rollback bundle, and committing it hands a teammate an
+   * unresolved migration they never ran.
+   */
+  it("keeps the adoption cutover state out of the committed set", () => {
+    const ignore = renderStateGitignore(config);
+
+    expect(ignore).toContain("/cutover.json\n");
+    expect(ignore.indexOf("/cutover.json")).toBeGreaterThan(ignore.indexOf("!*.json"));
+  });
+
   /** A `!env.ts` naming nothing is a line the next reader has to prove is dead. */
   it("un-ignores the schema only when it lives in the tree", () => {
     expect(renderStateGitignore(config)).not.toContain("!env.ts");
