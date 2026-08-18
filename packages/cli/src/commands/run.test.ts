@@ -13,13 +13,16 @@
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { recordsDir } from "@penvhq/core";
+import type { ValueFile } from "@penvhq/core";
+import { createEnvKeySource, KEY_BYTES, recordsDir, sealValue } from "@penvhq/core";
 import { RUN_MARKER } from "@penvhq/runtime";
 import { runCommand as runCittyCommand } from "citty";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChildHandle } from "../child.js";
+import { engineVersion } from "../install.js";
+import { runArtifactBuild } from "./artifact.js";
 import type { PullOptions, PullResult } from "./pull.js";
 import type { RunOptions, RunResult } from "./run.js";
 import { runCommand, runRun } from "./run.js";
@@ -170,6 +173,7 @@ afterEach(() => {
   if (originalNodeEnv !== undefined) {
     process.env.NODE_ENV = originalNodeEnv;
   }
+  delete process.env.PENV_KEY_PROD;
   constructions.count = 0;
   for (const dir of created.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -371,19 +375,6 @@ describe("--source", () => {
     expect(result.source).toBe("project");
   });
 
-  /** Seal 2: `snapshot` is grammar, and this engine says plainly that it cannot open one. */
-  it("refuses snapshot by naming the artifact, not by half-reading one", async () => {
-    const root = makeProject();
-
-    const error = await refusalFrom(
-      run({ cwd: root, environment: "development", source: "snapshot", command: ["node", "x.js"] }),
-    );
-
-    expect(error.code).toBe("RUN_SOURCE_SNAPSHOT");
-    expect(error.message).toContain("sealed deployment artifact");
-    expect(error.remedy).toContain("penv run --env development -- node x.js");
-  });
-
   it("refuses a source it has never heard of", async () => {
     const root = makeProject();
 
@@ -393,6 +384,233 @@ describe("--source", () => {
 
     expect(error.code).toBe("RUN_SOURCE_UNKNOWN");
     expect(error.remedy).toContain("`project`");
+  });
+});
+
+/**
+ * PRD §7: the sealed artifact is the whole input. A run from one opens no
+ * project, reads no tree, constructs no provider, and needs no source files —
+ * because a release container has none of them.
+ */
+describe("--source snapshot", () => {
+  const KEY_ID = "prod";
+  /** Not a real key — a real one is 32 random bytes, and this only has to be 32. */
+  const KEY = Buffer.alloc(KEY_BYTES, 7).toString("base64");
+
+  const SEALED_CONFIG = {
+    ...CONFIG,
+    keys: { production: { source: "env", id: KEY_ID } },
+  };
+
+  const DATABASE_URL_ENC: ValueFile = {
+    namespace: [],
+    name: "database-url",
+    scope: { kind: "environment", environment: "production" },
+    encrypted: true,
+  };
+
+  /** A project whose production database URL is sealed, and a plaintext redis password. */
+  function sealedProject(): string {
+    process.env.PENV_KEY_PROD = KEY;
+    const sealed = sealValue(
+      DATABASE_URL_ENC,
+      "postgres://production/app",
+      createEnvKeySource({ source: "env", id: KEY_ID }),
+      "database-url",
+      "production",
+    );
+    return makeProject({
+      config: SEALED_CONFIG,
+      tree: {
+        "database-url.production.enc": sealed,
+        "redis/password.production": "prod-secret",
+        // A personal override that must never reach a release.
+        "database-url.production.local": "postgres://laptop/app",
+      },
+    });
+  }
+
+  /** Builds the artifact outside the project, where a release would keep it. */
+  async function buildArtifact(root: string, environment = "production"): Promise<string> {
+    const out = join(dirname(root), `${basename(root)}.artifact.json`);
+    created.push(out);
+    await runArtifactBuild({ cwd: root, environment, out });
+    constructions.count = 0;
+    return out;
+  }
+
+  function editArtifact(path: string, edit: (artifact: Record<string, unknown>) => void): void {
+    const artifact = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    edit(artifact);
+    writeFileSync(path, JSON.stringify(artifact, null, 2), "utf8");
+  }
+
+  function snapshotRun(out: string, options: Partial<RunOptions> = {}): Promise<RunResult> {
+    return runRun({
+      cwd: dirname(out),
+      source: "snapshot",
+      command: ["node", "x.js"],
+      host: { PATH: process.env.PATH ?? "", PENV_SNAPSHOT: out },
+      ...options,
+    });
+  }
+
+  it("refuses when PENV_SNAPSHOT is not set, naming the build command", async () => {
+    const error = await refusalFrom(
+      run({ cwd: originalCwd, source: "snapshot", command: ["node", "x.js"] }),
+    );
+
+    expect(error.code).toBe("RUN_SNAPSHOT_UNSET");
+    expect(error.message).toBe(
+      "`--source snapshot` reads the sealed artifact PENV_SNAPSHOT names, and PENV_SNAPSHOT is not set\n" +
+        "  Build one with `penv artifact build --env <environment> --out <path>` and point PENV_SNAPSHOT at it.",
+    );
+  });
+
+  it("refuses when PENV_SNAPSHOT names nothing readable", async () => {
+    const error = await refusalFrom(
+      runRun({
+        cwd: originalCwd,
+        source: "snapshot",
+        command: ["node", "x.js"],
+        host: { PENV_SNAPSHOT: join(FIXTURE_PARENT, "not-there.json") },
+      }),
+    );
+
+    expect(error.code).toBe("RUN_SNAPSHOT_MISSING");
+    expect(error.remedy).toContain("penv artifact build");
+  });
+
+  it("starts the child from the artifact alone — no project, no provider", async () => {
+    const root = sealedProject();
+    const out = await buildArtifact(root);
+    const reportedTo = join(root, "reported.json");
+    // The project is gone: a release container has the artifact and nothing else.
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
+
+    const result = await snapshotRun(out, {
+      command: reporter(reportedTo),
+      host: {
+        PATH: process.env.PATH ?? "",
+        PENV_SNAPSHOT: out,
+        PENV_KEY_PROD: KEY,
+        EDITOR: "vim",
+        REDIS_PASSWORD: "left over from yesterday",
+      },
+    });
+
+    const { env } = reported(reportedTo);
+    // The sealed value was opened in memory, and the plaintext one travelled as it was.
+    expect(env.DATABASE_URL).toBe("postgres://production/app");
+    expect(env.REDIS_PASSWORD).toBe("prod-secret");
+    // Unrelated host variables are untouched; penv's key never reaches the child.
+    expect(env.EDITOR).toBe("vim");
+    expect(env.PENV_KEY_PROD).toBeUndefined();
+    expect(env.PENV_SNAPSHOT).toBeUndefined();
+    expect(env.PENV_ENV).toBe("production");
+    expect(result).toMatchObject({ environment: "production", source: "snapshot", exitCode: 0 });
+    expect(constructions.count).toBe(0);
+  });
+
+  it("never carries a .local value into the release", async () => {
+    const root = sealedProject();
+    const out = await buildArtifact(root);
+
+    expect(readFileSync(out, "utf8")).not.toContain("postgres://laptop/app");
+  });
+
+  it("deletes a declared variable the artifact has no value for", async () => {
+    const root = makeProject({ schema: SCHEMA, tree: TREE, config: CONFIG });
+    const out = await buildArtifact(root, "development");
+    const reportedTo = join(root, "reported.json");
+
+    const result = await snapshotRun(out, {
+      command: reporter(reportedTo),
+      host: {
+        PATH: process.env.PATH ?? "",
+        PENV_SNAPSHOT: out,
+        REDIS_PASSWORD: "left over from yesterday",
+      },
+    });
+
+    expect(reported(reportedTo).env.REDIS_PASSWORD).toBeUndefined();
+    expect(result.deleted).toBe(1);
+  });
+
+  it("refuses an artifact built for another environment", async () => {
+    const root = makeProject({ schema: SCHEMA, tree: TREE, config: CONFIG });
+    const out = await buildArtifact(root, "development");
+
+    const error = await refusalFrom(snapshotRun(out, { environment: "production" }));
+
+    expect(error.code).toBe("ARTIFACT_ENVIRONMENT_MISMATCH");
+    expect(error.message).toContain("carries environment development");
+    expect(error.message).toContain("asked for production");
+    expect(error.remedy).toContain("penv artifact build --env production");
+  });
+
+  it("refuses an artifact built by another engine", async () => {
+    const root = makeProject({ schema: SCHEMA, tree: TREE, config: CONFIG });
+    const out = await buildArtifact(root, "development");
+    editArtifact(out, (artifact) => {
+      artifact.engineVersion = "0.0.1";
+    });
+
+    const error = await refusalFrom(snapshotRun(out));
+
+    expect(error.code).toBe("ARTIFACT_ENGINE_MISMATCH");
+    expect(error.message).toContain("built by penv 0.0.1");
+    expect(error.message).toContain(engineVersion());
+    expect(error.remedy).toContain("penv artifact build --env development");
+  });
+
+  it("refuses an artifact whose delivery mappings were edited after it was built", async () => {
+    const root = makeProject({ schema: SCHEMA, tree: TREE, config: CONFIG });
+    const out = await buildArtifact(root, "development");
+    editArtifact(out, (artifact) => {
+      const values = artifact.values as Record<string, unknown>;
+      values["database-url"] = { kind: "plain", variable: "DATABASE_URL", value: "postgres://x/y" };
+      values.smuggled = { kind: "plain", variable: "SMUGGLED", value: "in" };
+    });
+
+    const error = await refusalFrom(snapshotRun(out));
+
+    expect(error.code).toBe("ARTIFACT_DIGEST_MISMATCH");
+    expect(error.remedy).toContain("penv artifact build");
+  });
+
+  it("refuses an artifact this format does not read", async () => {
+    const root = makeProject({ schema: SCHEMA, tree: TREE, config: CONFIG });
+    const out = await buildArtifact(root, "development");
+    editArtifact(out, (artifact) => {
+      artifact.format = 2;
+    });
+
+    const error = await refusalFrom(snapshotRun(out));
+
+    expect(error.code).toBe("ARTIFACT_FORMAT_UNSUPPORTED");
+    expect(error.message).toContain("is format 2");
+  });
+
+  it("refuses a sealed value it has no key for, rather than starting without it", async () => {
+    const root = sealedProject();
+    const out = await buildArtifact(root);
+    delete process.env.PENV_KEY_PROD;
+
+    const error = await refusalFrom(snapshotRun(out));
+
+    expect(error.code).toBe("VALUE_UNDECRYPTABLE");
+    expect(error.message).toContain("database-url.production.enc");
+  });
+
+  it("refuses --watch: there is no tree to watch", async () => {
+    const root = makeProject({ schema: SCHEMA, tree: TREE, config: CONFIG });
+    const out = await buildArtifact(root, "development");
+
+    const error = await refusalFrom(snapshotRun(out, { watch: true }));
+
+    expect(error.code).toBe("RUN_SNAPSHOT_WATCH");
   });
 });
 
