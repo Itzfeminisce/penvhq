@@ -1,7 +1,9 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts"],
+  // `bin` is the engine's spawnable entry: the launcher runs it as a child
+  // process, so it is a file on disk rather than an import.
+  entry: { index: "src/index.ts", bin: "src/bin.ts" },
   format: ["esm", "cjs"],
   dts: true,
   clean: true,
