@@ -402,7 +402,7 @@ export class EnginePinUnreleasedError extends PenvError {
       "PENV_ENGINE_PIN_UNRELEASED",
       `This penv was built from source, so it carries no published integrity for ${ENGINE_PACKAGE} ` +
         `to write into ${MANIFEST_PATH}`,
-      "Install penv from npm with `npm install -g penv` and run the command again — a released " +
+      "Install penv from npm with `npm install -g @penvhq/launcher` and run the command again — a released " +
         "launcher ships the integrity of the engine it ships.",
     );
   }
@@ -417,7 +417,7 @@ export class EnginePinMismatchError extends PenvError {
       "PENV_ENGINE_PIN_MISMATCH",
       `This penv carries the integrity of ${ENGINE_PACKAGE} ${pinned} and just ran ${ran}, so it ` +
         "cannot record which bytes scaffolded this project",
-      "Reinstall the launcher with `npm install -g penv` — its pin and its engine ship together.",
+      "Reinstall the launcher with `npm install -g @penvhq/launcher` — its pin and its engine ship together.",
     );
   }
 }

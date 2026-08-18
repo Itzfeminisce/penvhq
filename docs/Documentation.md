@@ -39,7 +39,7 @@ This is the reference for **penv as designed**: the complete system, every capab
 penv is two programs, and you install exactly one of them yourself:
 
 ```bash
-npm install -g penv
+npm install -g @penvhq/launcher
 ```
 
 That is the **launcher** — small, stable, and not the thing that runs your project. Inside a project it reads `.penv/state/manifest.json`, the committed file naming the exact **engine** and provider extensions the project pins, finds them in `$PENV_HOME`, verifies their integrity, and hands your command over. So CI runs the penv your repository pins, a newer launcher on your laptop changes nothing about your project, and `penv upgrade` is what moves the pin — together with the project's runtime dependency, never one without the other.

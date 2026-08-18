@@ -84,7 +84,7 @@ every mode, including at a terminal. Downloading over bytes that are not the pin
 erase the evidence of whatever wrote them.
 
 **`meta.json` is read for `updateCommand`.** `installMethod` is recorded for humans and installers;
-the launcher reads `updateCommand` and falls back to `npm install -g penv` when it is absent,
+the launcher reads `updateCommand` and falls back to `npm install -g @penvhq/launcher` when it is absent,
 unreadable, or not a string. A metadata file is never allowed to turn one refusal into two.
 
 **The tarball URL is built, not looked up.** A pin names an exact version, so
@@ -126,3 +126,9 @@ protocol tests pass an engine directory instead; the resolver itself is a five-l
 - **`@penvhq/penv` still declares a `penv` bin** from the pre-rebuild layout, where it was the CLI
   distribution. Under PRD §3 it is the typed runtime surface only, and the global name is the
   launcher's. Left for ISSUE-07's cutover rather than removed mid-wave.
+
+### Post-release amendment (2026-08-18)
+
+The unscoped npm name `penv` belongs to an unrelated 2022 package, so the 0.9.0 publish was
+refused. The launcher package is renamed **`@penvhq/launcher`** — inside the official scope the
+trust model already blesses. The installed command stays `penv`; only the install line changed.

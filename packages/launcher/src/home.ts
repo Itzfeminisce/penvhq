@@ -27,7 +27,7 @@ export const HOME_META_FILE = "meta.json";
 export const INTEGRITY_FILE = ".penv-integrity";
 
 /** The update command for a launcher whose installer recorded nothing. */
-export const NPM_UPDATE_COMMAND = "npm install -g penv";
+export const NPM_UPDATE_COMMAND = "npm install -g @penvhq/launcher";
 
 /** The store, from the environment. `~/.penv` unless `$PENV_HOME` says otherwise. */
 export function penvHome(env: Environment): string {

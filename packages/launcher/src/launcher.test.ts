@@ -379,7 +379,7 @@ describe("the manifest an adoption leaves behind", () => {
     expect(existsSync(manifestOf(cwd))).toBe(false);
     expect(test.err).toEqual([
       `✗ This penv was built from source, so it carries no published integrity for @penvhq/cli to write into ${MANIFEST_PATH}`,
-      "  → Install penv from npm with `npm install -g penv` and run the command again — a released launcher ships the integrity of the engine it ships.",
+      "  → Install penv from npm with `npm install -g @penvhq/launcher` and run the command again — a released launcher ships the integrity of the engine it ships.",
     ]);
   });
 
@@ -632,7 +632,7 @@ describe("a manifest this penv cannot read", () => {
     });
 
     expect(await runLauncher(test.options)).toBe(1);
-    expect(test.err[1]).toBe("  → Run `npm install -g penv`, then `penv list` again.");
+    expect(test.err[1]).toBe("  → Run `npm install -g @penvhq/launcher`, then `penv list` again.");
   });
 });
 

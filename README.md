@@ -45,7 +45,7 @@ That's the whole pitch. It's narrow on purpose.
 Install the launcher once, then adopt your project in one command:
 
 ```bash
-npm install -g penv
+npm install -g @penvhq/launcher
 penv init
 ```
 

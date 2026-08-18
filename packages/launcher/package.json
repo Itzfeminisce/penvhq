@@ -1,5 +1,5 @@
 {
-  "name": "penv",
+  "name": "@penvhq/launcher",
   "version": "0.9.0",
   "description": "The stable penv launcher: it verifies the engine your project pins and hands over the command.",
   "license": "MIT",

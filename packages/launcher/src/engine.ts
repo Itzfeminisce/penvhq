@@ -88,7 +88,7 @@ export function bundledEngine(): Engine {
     throw new PenvError(
       "PENV_NO_BUNDLED_ENGINE",
       `This penv installation is missing ${ENGINE_PACKAGE}, the engine it runs \`init\` with`,
-      "Reinstall the launcher with `npm install -g penv`.",
+      "Reinstall the launcher with `npm install -g @penvhq/launcher`.",
     );
   }
   const dir = dirname(manifestFile);
