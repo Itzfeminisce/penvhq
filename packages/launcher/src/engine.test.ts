@@ -4,7 +4,7 @@
  * cannot start is a package to reinstall, not a stack trace.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -74,8 +74,16 @@ describe("engineAt", () => {
 
   /** `bin` is the package's own text, so it is checked like every other untrusted path. */
   it("refuses a bin that climbs out of the package directory", () => {
-    const dir = scratch({ "penv-engine": "../../escape.js" });
-    writeFileSync(join(dir, "..", "..", "escape.js"), "");
+    // The climb must land somewhere writable, so the package sits two levels deep.
+    const root = mkdtempSync(join(tmpdir(), "penv-engine-"));
+    created.push(root);
+    const dir = join(root, "inner", "pkg");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "@penvhq/cli", version: "0.9.0", bin: { "penv-engine": "../../escape.js" } }),
+    );
+    writeFileSync(join(root, "escape.js"), "");
 
     expect(() => engineAt(dir, "@penvhq/cli", "0.9.0")).toThrow(EngineEntryError);
   });

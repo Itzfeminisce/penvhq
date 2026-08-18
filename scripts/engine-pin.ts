@@ -166,9 +166,12 @@ function packEngine(): Uint8Array {
 
 function embed(): void {
   const engine = manifestOf(enginePackageDir);
-  const source = readFileSync(pinsFile, "utf8");
   const pin: EnginePin = { version: engine.version, integrity: integrityOf(packEngine()) };
+  const source = readFileSync(pinsFile, "utf8");
   writeFileSync(pinsFile, embedPin(source, pin), "utf8");
+  // Only the launcher rebuilds — its dist bundles the pin. The engine's dist must
+  // stay the packed bytes, so publish must not build again after this step.
+  run("pnpm", ["--filter", "@penvhq/launcher", "build"], repoRoot);
   console.log(`✓ ${engine.name} ${pin.version} pinned in packages/launcher/src/pins.ts`);
   console.log(`  ${pin.integrity}`);
 }
