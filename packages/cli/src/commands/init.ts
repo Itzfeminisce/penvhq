@@ -78,6 +78,7 @@ import {
   renderInstallPlan,
 } from "../install.js";
 import { localTree, openProject, selfContainedSchemaModule } from "../project.js";
+import { captureScaffold, restoreScaffold } from "../scaffold-undo.js";
 import { type ScaffoldSeam, type Seam, seamFor } from "../seams.js";
 import { out } from "../style.js";
 import { CHECK, columns, formatSteps, guard, prompt, type Step, tip, WARN, write } from "../ui.js";
@@ -1412,6 +1413,38 @@ export function scaffold(
   return seam === undefined ? steps : [...steps, seam];
 }
 
+/**
+ * Every path {@link scaffold} may write, so a failure after it can put the
+ * project back exactly as it was. Listed here rather than discovered afterwards:
+ * a rollback that guessed at what init touched would be a second answer to the
+ * question this function already answers.
+ */
+export function scaffoldPaths(
+  root: string,
+  decisions: InitDecisions = DEFAULT_DECISIONS,
+  framework: string | undefined = detectFramework(root)?.name,
+): string[] {
+  const fileAt = (relative: string): string => join(root, ...relative.split("/"));
+  const seam = decisions.inject
+    ? seamFor(framework, {
+        alias: decisions.alias,
+        srcDir: srcPrefix(root),
+        schemaFile: decisions.schemaFile,
+      })
+    : undefined;
+  return [
+    fileAt(PENV_DIR),
+    fileAt(SCHEMA_SHAPE_FILE),
+    fileAt(decisions.schemaFile),
+    fileAt(CONFIG_FILE),
+    fileAt(TSCONFIG_FILE),
+    fileAt(PACKAGE_FILE),
+    ...(seam?.kind === "scaffold"
+      ? [fileAt(seam.file), ...(seam.also === undefined ? [] : [fileAt(seam.also.file)])]
+      : []),
+  ];
+}
+
 /*
  * The cutover.
  *
@@ -1745,6 +1778,13 @@ export interface CutoverOptions {
  * files aside. The order is the guarantee: every step before the move leaves a
  * project whose `.env` files are exactly where they were, so a refusal at any
  * of them costs a re-run and nothing else.
+ *
+ * The scaffold is snapshotted first, and rolled back when anything after it
+ * refuses. Without that, "a refusal costs a re-run" was only true of the dotenv
+ * files: a failed run still left a config, a draft schema, an edited tsconfig
+ * and an imported records tree behind, and the next run kept every one of them
+ * rather than starting clean. The install is not rolled back — it is the one
+ * step the developer consented to by itself, and a re-run finds it satisfied.
  */
 export async function applyCutover(
   plan: CutoverPlan,
@@ -1754,22 +1794,35 @@ export async function applyCutover(
     await (options.install ?? installWithPackageManager)(plan.install);
   }
 
-  const steps = scaffold(plan.root, plan.fields, true, plan.decisions, plan.framework);
-  const project = openProject(plan.root);
-  const tree = localTree(project);
-  for (const adopted of plan.adopted) {
-    writeEntries(tree, adopted.entries, adopted.refs, adopted.scope);
-  }
-
-  // Every environment this cutover adopted, not just the daily one: the draft is
-  // the weakest shape all of them satisfy, so if one of them does not, the draft
-  // is wrong and the files must stay where they are. An environment the cutover
-  // did not touch is not judged here — it was already in whatever state it was in.
-  for (const environment of plan.adopting) {
-    const check = await checkEnvironment(project, environment);
-    if (!check.result.ok) {
-      throw invalidAfterImport(check.result);
+  const undo = captureScaffold(plan.root, scaffoldPaths(plan.root, plan.decisions, plan.framework));
+  let steps: readonly InitStep[];
+  try {
+    steps = scaffold(plan.root, plan.fields, true, plan.decisions, plan.framework);
+    const project = openProject(plan.root);
+    const tree = localTree(project);
+    for (const adopted of plan.adopted) {
+      writeEntries(tree, adopted.entries, adopted.refs, adopted.scope);
     }
+
+    // Every environment this cutover adopted, not just the daily one: the draft
+    // is the weakest shape all of them satisfy, so if one of them does not, the
+    // draft is wrong and the files must stay where they are. An environment the
+    // cutover did not touch is not judged here — it was already in whatever
+    // state it was in.
+    for (const environment of plan.adopting) {
+      const check = await checkEnvironment(project, environment);
+      // The draft not loading and the values not fitting it are different
+      // answers: one is a verdict, the other is penv never having reached one.
+      if (check.schema === undefined) {
+        throw draftNotLoaded(check.result);
+      }
+      if (!check.result.ok) {
+        throw invalidAfterImport(check.result);
+      }
+    }
+  } catch (error) {
+    restoreScaffold(undo);
+    throw error;
   }
 
   const cutover = bundleDotenvFiles(
@@ -1780,12 +1833,33 @@ export async function applyCutover(
   return { plan, steps, moved: cutover.files, validated: plan.adopting };
 }
 
+function issueLines(result: ValidateResult): string {
+  return result.issues.map((issue) => `  ${issue.subject}: ${issue.message}`).join("\n");
+}
+
+/** Nothing was left behind, so every refusal after the scaffold ends the same way. */
+const SCAFFOLD_ROLLED_BACK =
+  "penv put the project back as it found it — your dotenv files and everything else are exactly where they were.";
+
 function invalidAfterImport(result: ValidateResult): PenvError {
-  const lines = result.issues.map((issue) => `  ${issue.subject}: ${issue.message}`).join("\n");
   return new PenvError(
     "INIT_CUTOVER_INVALID",
-    `The imported values do not satisfy the draft schema for ${result.environment}, so your dotenv files were left where they are:\n${lines}`,
-    `Correct ${SCHEMA_SHAPE_FILE} or the values above, then run \`penv init\` again.`,
+    `The imported values do not satisfy the draft schema for ${result.environment}:\n${issueLines(result)}`,
+    `Correct the values above, then run \`penv init\` again. ${SCAFFOLD_ROLLED_BACK}`,
+  );
+}
+
+/**
+ * The draft could not be evaluated at all — a missing dependency, a syntax
+ * error. Reporting that as "the imported values do not satisfy the draft schema"
+ * claims a check penv never ran, and sends the reader to correct values that
+ * were never looked at.
+ */
+function draftNotLoaded(result: ValidateResult): PenvError {
+  return new PenvError(
+    "INIT_DRAFT_NOT_LOADED",
+    `penv could not load the schema it drafted for ${result.environment}, so nothing was checked against it:\n${issueLines(result)}`,
+    `Fix the error above, then run \`penv init\` again. ${SCAFFOLD_ROLLED_BACK}`,
   );
 }
 

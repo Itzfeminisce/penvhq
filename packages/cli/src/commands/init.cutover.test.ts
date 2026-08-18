@@ -603,6 +603,110 @@ describe("the preflight", () => {
   });
 });
 
+/**
+ * The half of "all or nothing" that used to hold only for the dotenv files.
+ *
+ * The draft is written, the records are imported, and only then is the draft
+ * loaded — so a draft that cannot be loaded happens *after* the scaffold. The
+ * first user to hit it (a scaffolded `penv.schema.ts` importing a zod the
+ * install had not named) was told the imported values did not satisfy a schema
+ * that was never evaluated, and left with a config, a schema, an edited tsconfig
+ * and a records tree that made the next `penv init` a re-run of nothing.
+ */
+describe("a cutover that could not load the draft", () => {
+  /** A schema module of the user's that penv keeps, and that does not resolve. */
+  const UNRESOLVABLE =
+    'import { z } from "zod";\nimport "@penvhq/definitely-not-a-package";\nexport const schema = z.object({});\n';
+
+  /** A schema module of the user's that loads and rejects the adopted value. */
+  const REJECTS =
+    'import { z } from "zod";\nexport const schema = z.object({ databaseUrl: z.url() });\n';
+
+  const FIXTURE: Fixture = {
+    files: {
+      ".env": "DATABASE_URL=postgres://localhost/app\n",
+      ".env.development": "DEBUG=true\n",
+    },
+  };
+
+  /**
+   * Everything at the project root except what the install owns: the install
+   * happens before the scaffold, is separately consented to, and a re-run finds
+   * it satisfied — so it is deliberately not rolled back.
+   */
+  function snapshot(root: string): Record<string, string> {
+    const contents: Record<string, string> = {};
+    const walk = (dir: string, prefix: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+        a.name.localeCompare(b.name),
+      )) {
+        const name = `${prefix}${entry.name}`;
+        if (name === "node_modules" || name === "package.json") {
+          continue;
+        }
+        if (entry.isDirectory()) {
+          contents[`${name}/`] = "";
+          walk(join(dir, entry.name), `${name}/`);
+          continue;
+        }
+        contents[name] = readFileSync(join(dir, entry.name), "utf8");
+      }
+    };
+    walk(root, "");
+    return contents;
+  }
+
+  it("says the draft could not be loaded, not that the values do not fit it", async () => {
+    const root = makeProject(FIXTURE);
+    writeFileSync(join(root, "penv.schema.ts"), UNRESOLVABLE, "utf8");
+
+    const failure = await asyncRefusalFrom(cutover(root));
+
+    expect(failure.code).toBe("INIT_DRAFT_NOT_LOADED");
+    expect(failure.message).toContain("could not load the schema it drafted");
+    expect(failure.message).not.toContain("do not satisfy");
+  });
+
+  it("leaves the project exactly as it found it", async () => {
+    const root = makeProject(FIXTURE);
+    writeFileSync(join(root, "penv.schema.ts"), UNRESOLVABLE, "utf8");
+    const install = installer();
+    await install.seam(planFor(root).install);
+    const before = snapshot(root);
+
+    await asyncRefusalFrom(cutover(root, { install: install.seam }));
+
+    expect(snapshot(root)).toEqual(before);
+    expect(existsSync(join(root, "penv.config.ts"))).toBe(false);
+    expect(existsSync(join(root, ".penv"))).toBe(false);
+    // The one thing that stays: the dependency the developer already agreed to.
+    expect(readFileSync(join(root, "package.json"), "utf8")).toContain("@penvhq/penv");
+  });
+
+  /** The quiet case: values the schema rejects are still a verdict, and still say so. */
+  it("still reports a real mismatch as values that do not satisfy the draft", async () => {
+    const root = makeProject({ files: { ".env": "DATABASE_URL=not-a-url\n" } });
+    writeFileSync(join(root, "penv.schema.ts"), REJECTS, "utf8");
+
+    const failure = await asyncRefusalFrom(cutover(root, { environment: "development" }));
+
+    expect(failure.code).toBe("INIT_CUTOVER_INVALID");
+    expect(failure.message).toContain("do not satisfy the draft schema");
+  });
+
+  /** The other quiet case: a cutover that passes keeps everything it wrote. */
+  it("rolls nothing back when the cutover succeeds", async () => {
+    const root = makeProject(FIXTURE);
+
+    await cutover(root);
+
+    expect(existsSync(join(root, "penv.config.ts"))).toBe(true);
+    expect(existsSync(join(root, "penv.schema.ts"))).toBe(true);
+    expect(existsSync(join(root, ".penv", "env.ts"))).toBe(true);
+    expect(existsSync(join(root, ".penv", "state", "records"))).toBe(true);
+  });
+});
+
 describe("`--yes`", () => {
   /** PRD §6: it never decides what happens to another environment's fallback. */
   it("refuses when another environment leans on the shared .env", () => {
