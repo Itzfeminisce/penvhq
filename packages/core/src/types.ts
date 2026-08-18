@@ -327,6 +327,17 @@ export interface PenvConfig {
   readonly environments: readonly string[];
   readonly providers: Readonly<Record<string, ProviderConfig>>;
   /**
+   * The environment a command acts on when `--env` is absent and nothing in the
+   * environment says otherwise. It must be one of {@link environments}.
+   *
+   * A declared decision, not inference: invariant 10 is untouched, because the
+   * name still comes from this file rather than from a branch, a folder, or
+   * `NODE_ENV`. It exists so the daily command is `penv run -- pnpm dev` instead
+   * of a flag retyped all day. CI names `--env` anyway — a pipeline that leans on
+   * this key is one config edit away from deploying the wrong environment.
+   */
+  readonly defaultEnvironment?: string;
+  /**
    * Where the module holding the schema lives, relative to this config.
    * Defaults to `.penv/env.ts`.
    *

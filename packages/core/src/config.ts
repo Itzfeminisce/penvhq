@@ -314,6 +314,32 @@ function validateProviderType(environment: string, type: string): PenvError | un
 }
 
 /**
+ * `defaultEnvironment` is judged against the whitelist, never trusted for it.
+ * The key is what lets `--env` be omitted, so a default naming an environment
+ * nothing declares would be the one place an undeclared name reached a command
+ * (invariant 10) — and it would reach it on the runs where nobody typed a name
+ * to check.
+ */
+function validateDefaultEnvironment(config: PenvConfig, declared: ReadonlySet<string>): PenvError[] {
+  const value: unknown = config.defaultEnvironment;
+  if (value === undefined) {
+    return [];
+  }
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return [
+      new ConfigError(
+        `\`defaultEnvironment\` in penv.config.ts is ${describeValue(value)}, not an environment name`,
+        `Name one of ${quoteList([...declared])}, or remove the key and pass \`--env\`.`,
+      ),
+    ];
+  }
+  if (!declared.has(value)) {
+    return [new UnknownEnvironmentError(value, config.environments)];
+  }
+  return [];
+}
+
+/**
  * The `sinks` key is gone — everything it declared is a provider now — but a
  * config still carrying one deserves the exact rewrite, not a silent ignore
  * that would quietly stop pushing what it used to push.
@@ -391,6 +417,7 @@ export function validateConfig(config: PenvConfig): PenvError[] {
   }
 
   errors.push(...validateEnvironmentNames(config));
+  errors.push(...validateDefaultEnvironment(config, declared));
 
   const providers: unknown = config.providers;
   if (providers === null || typeof providers !== "object" || Array.isArray(providers)) {
@@ -588,7 +615,14 @@ function fromProcessEnv(name: "PENV_ENV" | "NODE_ENV"): string | undefined {
 }
 
 /**
- * The environment to act on if one is set: explicit, then `PENV_ENV`, then `NODE_ENV`.
+ * The environment to act on if one is set: explicit, then `PENV_ENV`, then
+ * `NODE_ENV`, then the config's `defaultEnvironment`.
+ *
+ * The declared default comes last because it is the standing answer and the
+ * others are this invocation's: a shell that exports `PENV_ENV`, or a CI job
+ * that sets `NODE_ENV`, is saying something about the run in hand, and a key
+ * committed to the repository must not overrule it. It fills the case that used
+ * to be a refusal, and nothing else.
  *
  * Absence is an answer here, not a failure. An unscoped `penv import .env` needs
  * no environment to know the scope it writes at — only the validation that
@@ -597,12 +631,19 @@ function fromProcessEnv(name: "PENV_ENV" | "NODE_ENV"): string | undefined {
  * `resolveEnvironment`, which turns the same absence into an error.
  *
  * A declared name is still the only answer: an environment that is set but
- * undeclared throws from here exactly as it does from `resolveEnvironment`.
+ * undeclared throws from here exactly as it does from `resolveEnvironment` —
+ * `defaultEnvironment` included, so a default naming an environment the
+ * whitelist does not carry is refused rather than quietly acted on.
  */
 export function lookupEnvironment(config: PenvConfig, explicit?: string): string | undefined {
   const requested =
     explicit !== undefined && explicit.trim().length > 0 ? explicit.trim() : undefined;
-  const environment = requested ?? fromProcessEnv("PENV_ENV") ?? fromProcessEnv("NODE_ENV");
+  const declared =
+    typeof config.defaultEnvironment === "string" && config.defaultEnvironment.trim().length > 0
+      ? config.defaultEnvironment.trim()
+      : undefined;
+  const environment =
+    requested ?? fromProcessEnv("PENV_ENV") ?? fromProcessEnv("NODE_ENV") ?? declared;
 
   if (environment === undefined) {
     return undefined;
@@ -612,15 +653,20 @@ export function lookupEnvironment(config: PenvConfig, explicit?: string): string
   return environment;
 }
 
-/** The environment to act on: explicit, then `PENV_ENV`, then `NODE_ENV`. */
+/**
+ * The environment to act on: explicit, then `PENV_ENV`, then `NODE_ENV`, then
+ * `defaultEnvironment`. Absence is the refusal, and it names both remedies —
+ * the flag that answers for this invocation, and the key that answers for every
+ * one after it.
+ */
 export function resolveEnvironment(config: PenvConfig, explicit?: string): string {
   const environment = lookupEnvironment(config, explicit);
 
   if (environment === undefined) {
     throw new ConfigError(
       "No environment is set, so penv cannot tell which environment to load",
-      `Set \`PENV_ENV\` (or \`NODE_ENV\`) to one of ${quoteList(config.environments)}, or pass ` +
-        "`--env <environment>`.",
+      `Pass \`--env <environment>\` — one of ${quoteList(config.environments)} — or declare ` +
+        "`defaultEnvironment` in penv.config.ts so every command has one.",
     );
   }
 
