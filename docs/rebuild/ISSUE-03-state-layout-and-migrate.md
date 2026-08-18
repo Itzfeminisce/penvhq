@@ -57,4 +57,44 @@ The manifest's content (ISSUE-04), init/cutover files (ISSUE-07), launcher readi
 
 ## Decisions log
 
-(append here)
+- **The path owner is `recordsDir(projectRoot)` in `packages/core/src/layout.ts`.** Everything else
+  in that module hangs off it: `recordPath` for the paths messages print, `oldLayoutEntries` and
+  `assertMigrated` for the refusal, `renderStateGitignore` for the boundary. The CLI, the runtime
+  and `migrate` all ask it, and nothing else spells the tree.
+- **`ProviderFactoryContext.root` is now the project root, not `.penv/`.** Keeping it at `.penv/`
+  would have needed a second path function (penv-dir → records) beside the one owner, and the
+  registry already walked up from it (`dirname`) to resolve plugin packages. No shipped provider
+  read `root`; the filesystem factory now calls `recordsDir(root)` and the mock keeps its store at
+  `.penv/.penv-mock.json`. Recorded in the changeset as a breaking change for third-party providers.
+- **Old layout means: an entry directly under `.penv/` that is not a dotfile, not `state/`, not the
+  module `schemaFile` names, and not a code module.** That is exactly what the tree walker used to
+  read, so an injection seam (`.penv/preload.ts`) and `.penv/env.ts` stay put. One function answers
+  it, so the refusal and `migrate`'s move list cannot disagree.
+- **The refusal fires in the runtime too**, not only in `openProject`. An unmigrated project that
+  booted would report a missing required parameter — the layout change disguised as a config error.
+- **`migrate` deletes `.penv/.gitignore`.** penv wrote it, it described a layout that no longer
+  exists, and left in place its `*` would keep ignoring `.penv/env.ts`, which the new layout
+  commits. It is previewed as a removal like everything else.
+- **`state/.gitignore` adds `!*.d.ts` and re-excludes `rollback/`**, on top of the ported
+  committed/ignored split (`*`, `!*/`, `!.gitignore`, `!*.json`). `cutover.json` therefore lands on
+  the committed side of `!*.json`; ISSUE-07 owns that file and may narrow the rule when it lands.
+- **`schemaInsideTree` now measures against `.penv/state/records/`.** The rule is unchanged — a
+  schema inside the tree is skipped by the path the config names — but the tree moved, so the
+  scaffolded `.penv/env.ts` is no longer inside it. An `env.ts` that does sit in the tree is a
+  stray code module and is refused, which is what the grammar already said about code in the tree.
+- **`isCodeModule` is exported from `grammar.ts`** so `migrate` and the walker ask one question
+  about what is code rather than two.
+- **`Project.penvDir` is replaced by `Project.recordsDir`.** Two callers wanted the tree (`watch`,
+  the provider) and two wanted the project (`push`, `sourceProviderFor`); one field meaning two
+  things is how a path gets scattered.
+- **A half-migrated tree is: old-layout entries present *and* a non-empty `state/records/`.** It is
+  refused with `HALF_MIGRATED`, naming the by-hand move and `penv validate` as the way back.
+- **Approval:** `migrate` prints the plan, then asks on a TTY; `--yes` skips the question. Without
+  a TTY and without `--yes` it prints the preview and writes nothing, so a script never migrates by
+  accident. `runMigrate` carries the same three outcomes as statuses (`previewed`, `migrated`,
+  `current`) rather than a boolean, so the tests drive the command's own vocabulary.
+- **`renderGitignore` moved out of `init.ts` into core** as `renderStateGitignore`: `init` and
+  `migrate` write the same bytes, and two renderers is how a boundary drifts.
+- **`penv fill`'s blocked remedy now names `penv.schema.ts`** instead of a hard-coded
+  `.penv/env.ts` — the shape module is where parameters are declared, and the old string was a
+  path this issue moved past.
