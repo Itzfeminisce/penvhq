@@ -104,18 +104,32 @@ export type ArtifactEntry = z.infer<typeof ENTRY>;
 
 /**
  * The delivery contract, hashed: every parameter id with the variable it
- * delivers to, sorted.
+ * delivers to and, where it is sealed, the address its ciphertext is bound to —
+ * sorted.
  *
  * Non-secret by construction — it is names, never values, so an artifact can
  * carry it and a log can print it. It is what `--source snapshot` checks before
  * it decrypts anything: an artifact whose mappings were edited after it was
  * built no longer hashes to the digest it declares, and penv refuses instead of
  * injecting an environment nobody built.
+ *
+ * The address is in the material because it travels with the ciphertext it
+ * unlocks. Without it a sealed `(address, sealed)` pair moved from one parameter
+ * to another still parses, still opens — the AAD moved too — and delivers the
+ * database password under the analytics variable. It is a name, and stable
+ * across re-seals at the same scope, so a rebuild after `penv set` hashes the
+ * same: values never enter here.
  */
 export function deliveryDigest(values: Readonly<Record<string, ArtifactEntry>>): string {
   const contract = Object.keys(values)
     .sort()
-    .map((id) => [id, values[id]?.variable ?? ""]);
+    .map((id) => {
+      const entry = values[id];
+      if (entry === undefined) {
+        return [id, ""];
+      }
+      return entry.kind === "sealed" ? [id, entry.variable, entry.address] : [id, entry.variable];
+    });
   return `sha256-${createHash("sha256").update(JSON.stringify(contract)).digest("base64url")}`;
 }
 
