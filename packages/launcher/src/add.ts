@@ -16,37 +16,39 @@
  * Nothing here puts adapter code on any startup path. What lands in the project
  * is two committed files with no runtime in them: the manifest entry, and a
  * type-only declaration.
+ *
+ * Because those two files are committed, `add` is a decision and needs a person:
+ * `--no-download` and a run with nobody at it are both refused before the first
+ * request, and CI gets `penv install`, which installs what the manifest already
+ * pins rather than choosing what it should.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { relative, sep } from "node:path";
 import type { Manifest, ManifestExtension, ManifestTrust } from "@penvhq/core";
-import {
-  findConfigFile,
-  MANIFEST_PATH,
-  OFFICIAL_SCOPE,
-  parseManifest,
-  serializeManifest,
-} from "@penvhq/core";
+import { findConfigFile, MANIFEST_PATH, OFFICIAL_SCOPE, serializeManifest } from "@penvhq/core";
 import { readProviderEntries, setProviderType } from "./config-edit.js";
 import { readExtensionPackage, writeDeclaration } from "./declaration.js";
 import {
   AddFlagError,
+  AddNoDownloadError,
+  AddNotInteractiveError,
   AddPackageNameError,
   AddRegistryError,
   AddSubjectError,
+  ManifestEntriesUnreadableError,
   MIN_PACKAGE_AGE_DAYS,
   OfficialRegistryError,
   PackageTooYoungError,
   TRUST_YOUNG_FLAG,
   TrustDeclinedError,
-  TrustPromptNeededError,
   TrustPublisherMissingError,
   TrustReasonMissingError,
 } from "./errors.js";
 import type { Fetcher } from "./fetcher.js";
 import type { LauncherIo } from "./io.js";
 import { fetchRelease, type Release } from "./registry.js";
+import { readManifestForRepair } from "./repair.js";
 import { DEFAULT_REGISTRY, installPin } from "./store.js";
 
 /** npm's package-name grammar, scoped or bare — the manifest's, checked before the fetch. */
@@ -68,6 +70,10 @@ export interface AddOptions {
   readonly home: string;
   readonly io: LauncherIo;
   readonly fetcher: Fetcher;
+  /** The launcher's `--no-download`: this run reaches no registry at all. */
+  readonly noDownload?: boolean;
+  /** True on a CI runner, which may have a terminal and still have nobody at it. */
+  readonly ci?: boolean;
   /** Injected so the age gate is testable without waiting seven days. */
   readonly now?: () => Date;
 }
@@ -192,9 +198,6 @@ async function trustFor(
   if (tier === "official") {
     return undefined;
   }
-  if (!io.interactive) {
-    throw new TrustPromptNeededError(release.name, release.version);
-  }
 
   if (tier === "third-party") {
     const age = now.getTime() - Date.parse(release.publishedAt);
@@ -238,9 +241,21 @@ async function trustFor(
   };
 }
 
-/** The manifest with this one extension recorded, serialized — and so validated. */
+/**
+ * The manifest with this one extension recorded, serialized — and so validated.
+ *
+ * The entry being replaced is allowed to be one penv cannot read: a broken entry
+ * refuses with `penv add <pkg>`, and a remedy has to survive the parse it names.
+ * Every other entry is validated as usual, and what gets written is validated in
+ * full by {@link serializeManifest}, so `add` cannot leave behind an entry the
+ * next command chokes on.
+ */
 function recordExtension(manifestFile: string, name: string, entry: ManifestExtension): string {
-  const manifest = parseManifest(readFileSync(manifestFile, "utf8"));
+  const { manifest, broken } = readManifestForRepair(readFileSync(manifestFile, "utf8"));
+  const others = broken.filter((other) => other !== name);
+  if (others.length > 0) {
+    throw new ManifestEntriesUnreadableError(others);
+  }
   const next: Manifest = {
     ...manifest,
     extensions: { ...manifest.extensions, [name]: entry },
@@ -323,6 +338,15 @@ export async function add(options: AddOptions): Promise<AddResult> {
   const request = parseRequest(options.argv);
   const tier = tierOf(request);
   const now = (options.now ?? (() => new Date()))();
+
+  // Both refusals come before the first request, so a run that cannot finish an
+  // add has not read the registry, written the manifest, or filled the store.
+  if (options.noDownload === true) {
+    throw new AddNoDownloadError(request.name);
+  }
+  if (options.ci === true || !io.interactive) {
+    throw new AddNotInteractiveError(request.name);
+  }
 
   const release = await fetchRelease({
     name: request.name,

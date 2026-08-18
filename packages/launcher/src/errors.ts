@@ -3,8 +3,10 @@
  *
  * Every one of these is a wrong-bytes or no-bytes answer to the same question —
  * which penv is this project's — so they all name the package, the version, and
- * a single next command. None of them mentions the launcher/engine split: that
- * surfaces in exactly one refusal, and core owns it.
+ * a single next command. Only the two engine-pin refusals mention the
+ * launcher/engine split, because a launcher that cannot record which engine it
+ * ran is the one failure that cannot be described without it; the rest name a
+ * package and a command, and leave penv looking like one program.
  */
 
 import {
@@ -261,16 +263,63 @@ export class PackageTooYoungError extends PenvError {
   }
 }
 
-/** The trust ceremony needs a human, and there is none on these streams. */
-export class TrustPromptNeededError extends PenvError {
-  override readonly name = "TrustPromptNeededError";
+/**
+ * Extension entries penv could not read, that the command in hand does not repair.
+ *
+ * One unreadable entry is what `penv add <pkg>` exists to rewrite, so that is the
+ * remedy. More than one is beyond a single `add` — each rewrites only its own —
+ * and the manifest is committed, so the file itself is the thing to restore.
+ */
+export class ManifestEntriesUnreadableError extends PenvError {
+  override readonly name = "ManifestEntriesUnreadableError";
 
-  constructor(name: string, version: string) {
+  constructor(names: readonly string[]) {
+    const one = names.length === 1;
     super(
-      "PENV_TRUST_PROMPT_NEEDED",
-      `Adding ${name} ${version} takes a trust decision, and this run has no terminal to ask at`,
-      `Run \`${addCommand(name, version)}\` from a terminal. The trust block records a person's ` +
-        "own reason, so penv will not write one on their behalf.",
+      "PENV_MANIFEST_ENTRIES_UNREADABLE",
+      `${MANIFEST_PATH} holds ${one ? "an extension entry" : "extension entries"} penv cannot ` +
+        `read: ${names.join(", ")}`,
+      one
+        ? `Run \`${addCommand(names[0] ?? "")}\` to rewrite that entry — it resolves the package ` +
+            "again and records what the registry states."
+        : `Restore it with \`git checkout ${MANIFEST_PATH}\`. Each \`penv add\` rewrites only its ` +
+            "own entry, so more than one broken entry is not something one of them can fix.",
+    );
+  }
+}
+
+/** `penv add` needs the registry, and `--no-download` says this run has no network. */
+export class AddNoDownloadError extends PenvError {
+  override readonly name = "AddNoDownloadError";
+
+  constructor(name: string) {
+    super(
+      "PENV_ADD_NO_DOWNLOAD",
+      `Adding ${name} means reading the registry for the version and integrity to pin, and ` +
+        "`--no-download` says this run does not",
+      `Run \`${addCommand(name)}\` without \`--no-download\`. Nothing was fetched or written.`,
+    );
+  }
+}
+
+/**
+ * `penv add` on a machine with nobody at it.
+ *
+ * It is refused everywhere, not only for the packages that pay the trust
+ * ceremony: what `add` writes is two committed files, and a pipeline that
+ * rewrites the manifest it was handed is a pipeline choosing which bytes the
+ * project runs. `penv install` is the command CI has, and it installs exactly
+ * what a person already decided.
+ */
+export class AddNotInteractiveError extends PenvError {
+  override readonly name = "AddNotInteractiveError";
+
+  constructor(name: string) {
+    super(
+      "PENV_ADD_NOT_INTERACTIVE",
+      `Adding ${name} rewrites ${MANIFEST_PATH}, and this run has nobody to decide that`,
+      `Run \`${addCommand(name)}\` from a terminal and commit what it writes. In CI, run ` +
+        `\`${INSTALL_COMMAND}\` — it installs the versions the committed manifest already pins.`,
     );
   }
 }

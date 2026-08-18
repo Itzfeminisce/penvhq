@@ -291,7 +291,7 @@ describe("an official extension", () => {
   });
 
   it("records the pin with no trust block, through the core serializer", async () => {
-    const test = harness({ argv: [VAULT], serve: VAULT_REGISTRY });
+    const test = harness({ argv: [VAULT], serve: VAULT_REGISTRY, interactive: true });
 
     await add(test.options);
 
@@ -304,7 +304,7 @@ describe("an official extension", () => {
   });
 
   it("installs the verified bytes into the store", async () => {
-    const test = harness({ argv: [VAULT], serve: VAULT_REGISTRY });
+    const test = harness({ argv: [VAULT], serve: VAULT_REGISTRY, interactive: true });
 
     await add(test.options);
 
@@ -333,7 +333,12 @@ describe("an official extension", () => {
   });
 
   it("never touches package.json", async () => {
-    const test = harness({ argv: [VAULT], config: CONFIG, serve: VAULT_REGISTRY });
+    const test = harness({
+      argv: [VAULT],
+      config: CONFIG,
+      serve: VAULT_REGISTRY,
+      interactive: true,
+    });
 
     await add(test.options);
 
@@ -490,17 +495,129 @@ describe("a public third-party extension", () => {
     expect(manifestIn(test.root)).toMatchObject({ extensions: {} });
   });
 
-  it("refuses with no terminal to ask at, and reaches no registry twice", async () => {
+  /** Refused before the first request, so a run with nobody at it reaches no registry at all. */
+  it("refuses with no terminal to ask at, and reaches no registry", async () => {
     const test = harness({ argv: [CONSUL], serve: consulRegistry(LONG_AGO) });
 
     await expect(add(test.options)).rejects.toMatchObject({
-      code: "PENV_TRUST_PROMPT_NEEDED",
+      code: "PENV_ADD_NOT_INTERACTIVE",
       message:
-        `Adding ${CONSUL} 1.4.2 takes a trust decision, and this run has no terminal to ask at\n` +
-        `  Run \`penv add ${CONSUL}@1.4.2\` from a terminal. The trust block records a person's own ` +
-        "reason, so penv will not write one on their behalf.",
+        `Adding ${CONSUL} rewrites ${MANIFEST_PATH}, and this run has nobody to decide that\n` +
+        `  Run \`penv add ${CONSUL}\` from a terminal and commit what it writes. In CI, run ` +
+        "`penv install` — it installs the versions the committed manifest already pins.",
     });
-    expect(test.asked).toEqual([`https://registry.npmjs.org/${CONSUL}`]);
+    expect(test.asked).toEqual([]);
+  });
+});
+
+/**
+ * `add` writes two committed files, so it is a decision and needs a person and a
+ * network. Both refusals land before the first request — a run that cannot finish
+ * an add has not read the registry, filled the store, or touched the manifest.
+ */
+describe("what add will not do on its own", () => {
+  it("refuses `--no-download` before it reaches the registry", async () => {
+    const test = harness({ argv: [VAULT], serve: VAULT_REGISTRY, interactive: true });
+
+    await expect(add({ ...test.options, noDownload: true })).rejects.toMatchObject({
+      code: "PENV_ADD_NO_DOWNLOAD",
+      message:
+        `Adding ${VAULT} means reading the registry for the version and integrity to pin, and ` +
+        "`--no-download` says this run does not\n" +
+        `  Run \`penv add ${VAULT}\` without \`--no-download\`. Nothing was fetched or written.`,
+    });
+    expect(test.asked).toEqual([]);
+    expect(manifestIn(test.root)).toMatchObject({ extensions: {} });
+  });
+
+  /** An official add takes no trust decision, and still will not rewrite a committed file in CI. */
+  it("refuses in CI even for the official scope", async () => {
+    const test = harness({ argv: [VAULT], serve: VAULT_REGISTRY, interactive: true });
+
+    await expect(add({ ...test.options, ci: true })).rejects.toMatchObject({
+      code: "PENV_ADD_NOT_INTERACTIVE",
+    });
+    expect(test.asked).toEqual([]);
+    expect(manifestIn(test.root)).toMatchObject({ extensions: {} });
+  });
+
+  /** The negative case: a terminal, no CI, no flag — the add is ordinary work. */
+  it("adds when there is a person, a network and no CI", async () => {
+    const test = harness({ argv: [VAULT], serve: VAULT_REGISTRY, interactive: true });
+
+    await add({ ...test.options, noDownload: false, ci: false });
+
+    expect(manifestIn(test.root)).toMatchObject({
+      extensions: { [VAULT]: { version: "0.9.0" } },
+    });
+  });
+});
+
+/**
+ * `penv add <pkg>` is the remedy a broken extension entry names, so it has to
+ * survive the file that carries one. Anything else in the manifest is validated
+ * exactly as before, and what `add` writes goes through the core serializer.
+ */
+describe("a manifest with an entry penv cannot read", () => {
+  /** The entry is written by hand, so it goes in past the serializer that would refuse it. */
+  function projectWithEntries(entries: Readonly<Record<string, unknown>>): string {
+    const root = projectAt();
+    const manifestFile = join(root, ...MANIFEST_PATH.split("/"));
+    writeFileSync(
+      manifestFile,
+      `${JSON.stringify({ ...baseManifest(), extensions: entries }, null, 2)}\n`,
+    );
+    return root;
+  }
+
+  it("is repaired by the `penv add` its own refusal names", async () => {
+    // The finding's scenario: a numeric `version`, which refuses MANIFEST_FIELD_TYPE
+    // with `Run \`penv add @penvhq/provider-vault\` to rewrite that entry.`
+    const root = projectWithEntries({ [VAULT]: { version: 9, integrity: ENGINE_INTEGRITY } });
+    const test = harness({ root, argv: [VAULT], serve: VAULT_REGISTRY, interactive: true });
+
+    await add(test.options);
+
+    expect(manifestIn(test.root)).toMatchObject({
+      extensions: { [VAULT]: { version: "0.9.0", integrity: integrityOf(VAULT_TAR) } },
+    });
+    // Valid afterwards, by the strictest reader there is.
+    expect(() => serializeManifest(manifestIn(test.root) as Manifest)).not.toThrow();
+  });
+
+  /** One `add` rewrites one entry, so a second broken one is refused rather than dropped. */
+  it("refuses when another entry is broken too", async () => {
+    const root = projectWithEntries({
+      [VAULT]: { version: 9, integrity: ENGINE_INTEGRITY },
+      [CONSUL]: { version: 8, integrity: ENGINE_INTEGRITY },
+    });
+    const test = harness({ root, argv: [VAULT], serve: VAULT_REGISTRY, interactive: true });
+
+    await expect(add(test.options)).rejects.toMatchObject({
+      code: "PENV_MANIFEST_ENTRIES_UNREADABLE",
+    });
+    // Nothing was written, so the entry the user did not name is still theirs.
+    expect(manifestIn(test.root)).toMatchObject({ extensions: { [CONSUL]: { version: 8 } } });
+  });
+
+  /** And the engine pin is not an entry: nothing here relaxes the refusal for it. */
+  it("still refuses a manifest whose engine pin is wrong", async () => {
+    const root = projectAt();
+    const manifestFile = join(root, ...MANIFEST_PATH.split("/"));
+    writeFileSync(
+      manifestFile,
+      `${JSON.stringify(
+        {
+          ...baseManifest(),
+          engine: { package: "@penvhq/cli", version: 9, integrity: ENGINE_INTEGRITY },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const test = harness({ root, argv: [VAULT], serve: VAULT_REGISTRY, interactive: true });
+
+    await expect(add(test.options)).rejects.toMatchObject({ code: "MANIFEST_FIELD_TYPE" });
   });
 });
 
@@ -668,7 +785,7 @@ describe("the generated declaration", () => {
   });
 
   it("falls back to the open shape for a package that ships none", async () => {
-    const test = harness({ argv: [VAULT], serve: VAULT_REGISTRY });
+    const test = harness({ argv: [VAULT], serve: VAULT_REGISTRY, interactive: true });
 
     await add(test.options);
 
@@ -772,7 +889,7 @@ describe("what add refuses to parse", () => {
   });
 
   it("refuses a version the registry does not publish", async () => {
-    const test = harness({ argv: [`${VAULT}@9.9.9`], serve: VAULT_REGISTRY });
+    const test = harness({ argv: [`${VAULT}@9.9.9`], serve: VAULT_REGISTRY, interactive: true });
 
     await expect(add(test.options)).rejects.toMatchObject({
       code: "PENV_VERSION_UNKNOWN",
