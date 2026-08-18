@@ -794,6 +794,23 @@ describe("an interrupted cutover", () => {
     expect(existsSync(join(root, ".env.development"))).toBe(true);
   });
 
+  /**
+   * A recorded file in neither place is reported, not refused. The old refusal's
+   * remedy was `penv cleanup`, which would have deleted the ones still in the
+   * bundle — the exact files it was meant to protect.
+   */
+  it("restores what it can when a recorded file is gone", async () => {
+    const root = makeProject(FIXTURE);
+    await cutover(root);
+    rmSync(join(root, ...ROLLBACK_DOTENV_PATH.split("/"), ".env.development"));
+
+    const result = runUndo({ cwd: root });
+
+    expect(result.restored).toEqual([".env"]);
+    expect(result.missing).toEqual([".env.development"]);
+    expect(readFileSync(join(root, ".env"), "utf8")).toBe(FIXTURE.files[".env"]);
+  });
+
   /** Only cleanup deletes: undo is what stands between an interruption and a lost file. */
   it("leaves nothing for cleanup to drop once it has been undone", async () => {
     const root = makeProject(FIXTURE);
