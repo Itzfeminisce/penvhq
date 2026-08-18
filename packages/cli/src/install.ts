@@ -180,6 +180,7 @@ export const installWithPackageManager: InstallRuntime = async (plan) => {
     command: plan.command,
     env: process.env as Record<string, string>,
     cwd: plan.root,
+    purpose: `install ${plan.package} ${plan.version}`,
   });
   const ended = await child.ended;
   if (ended.exitCode !== 0 || ended.signal !== null) {

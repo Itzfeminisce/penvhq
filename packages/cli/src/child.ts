@@ -36,6 +36,13 @@ export interface ChildInvocation {
   readonly command: readonly string[];
   readonly env: Record<string, string>;
   readonly cwd: string;
+  /**
+   * What penv is starting this on its own behalf to do — `init`'s dependency
+   * install. Absent means the command is the user's, from after `--`, and the
+   * two failures have opposite remedies: one is about what they typed, the other
+   * about a program penv chose to run.
+   */
+  readonly purpose?: string;
 }
 
 /** A started child: how it ends, and the one thing a wrapper may do to it. */
@@ -86,7 +93,7 @@ export const startChild: StartChild = (invocation) => {
   const ended = new Promise<ChildResult>((resolve, reject) => {
     child.on("error", (cause) => {
       release();
-      reject(cannotStart(executable, cause));
+      reject(cannotStart(executable, cause, invocation.purpose));
     });
     child.on("exit", (code, signal) => {
       release();
@@ -110,8 +117,15 @@ export function noCommand(): PenvError {
   );
 }
 
-function cannotStart(executable: string, cause: unknown): PenvError {
+function cannotStart(executable: string, cause: unknown, purpose: string | undefined): PenvError {
   const detail = cause instanceof Error ? cause.message : String(cause);
+  if (purpose !== undefined) {
+    return new PenvError(
+      "PENV_COMMAND_NOT_STARTED",
+      `penv could not start \`${executable}\` to ${purpose}: ${detail}`,
+      `Check that \`${executable}\` runs on its own — penv starts it the way your shell does, so it has to be on PATH. Nothing was changed.`,
+    );
+  }
   return new PenvError(
     "RUN_COMMAND_NOT_STARTED",
     `\`${executable}\` could not be started: ${detail}`,
@@ -167,22 +181,43 @@ export function cmdCommandLine(resolved: string, args: readonly string[]): strin
   );
 }
 
-/** Windows' executable extensions, in the order the shell would try them. */
-function extensions(env: Readonly<Record<string, string | undefined>>): string[] {
+/**
+ * The extensions a name is tried with, in the order the platform's own launcher
+ * tries them.
+ *
+ * On Windows PATHEXT leads and the bare name comes last, because the bare name
+ * is almost never what Windows would run: `pnpm`, `npx` and every
+ * `node_modules/.bin` tool ship an extensionless POSIX shell script *beside*
+ * their `.CMD` shim, in the same directory. Trying the empty extension first
+ * matched that script, which is not executable by CreateProcess and is not a
+ * `.cmd`, so the wrapper below was skipped and the spawn failed with ENOENT.
+ * Everywhere else there are no extensions at all.
+ */
+function extensions(
+  env: Readonly<Record<string, string | undefined>>,
+  platform: NodeJS.Platform,
+): string[] {
+  if (platform !== "win32") {
+    return [""];
+  }
   const declared = env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD";
-  return ["", ...declared.split(";").filter((extension) => extension.length > 0)];
+  return [...declared.split(";").filter((extension) => extension.length > 0), ""];
 }
 
 /**
  * What the shell would have run, found the way the shell finds it: the name as
  * given if it carries a path, else each PATH directory, each with each
  * executable extension.
+ *
+ * `platform` is a parameter so the ordering above is testable on either kind of
+ * machine — it is the whole behavior, and it differs by platform.
  */
-function findExecutable(
+export function findExecutable(
   executable: string,
   env: Readonly<Record<string, string | undefined>>,
+  platform: NodeJS.Platform = process.platform,
 ): string | undefined {
-  const candidates = extensions(env);
+  const candidates = extensions(env, platform);
   const isFile = (path: string): boolean => existsSync(path) && statSync(path).isFile();
 
   if (executable.includes("/") || executable.includes("\\") || isAbsolute(executable)) {
