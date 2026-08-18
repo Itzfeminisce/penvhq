@@ -1866,9 +1866,9 @@ export function renderCutover(result: CutoverResult): string[] {
         ? { glyph, text: step.text }
         : { glyph, text: step.text, note: step.note };
     }),
-    ...(plan.install.satisfied
-      ? []
-      : [{ glyph: CHECK, text: `Installed ${plan.install.package}`, note: plan.install.version }]),
+    ...plan.install.packages
+      .filter((entry) => !entry.satisfied)
+      .map((entry) => ({ glyph: CHECK, text: `Installed ${entry.name}`, note: entry.version })),
     {
       glyph: CHECK,
       text: `Imported ${plan.fields.length} parameters`,

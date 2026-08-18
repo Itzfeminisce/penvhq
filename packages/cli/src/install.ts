@@ -1,11 +1,17 @@
 /**
- * The one runtime dependency an adopted project takes, and how it gets there.
+ * The runtime dependencies an adopted project takes, and how they get there.
  *
- * PRD §3: an adopted project depends on exactly `@penvhq/penv` at the engine's
- * own version — the typed `@env` surface, not a CLI distribution. `penv init`
- * installs it with the package manager the project already uses, and only after
- * showing the exact `package.json` and lockfile change: an install is the one
- * step of adoption that reaches outside the repository, so it is the one step
+ * PRD §3: an adopted project depends on `@penvhq/penv` at the engine's own
+ * version — the typed `@env` surface, not a CLI distribution. It also depends on
+ * zod, because the `penv.schema.ts` init scaffolds imports it: zod is a *peer* of
+ * `@penvhq/penv`, and a peer is a package the project supplies. Under pnpm's
+ * strict layout nothing hoists it to the project root, so an install that named
+ * only `@penvhq/penv` left the very schema init had just written unable to
+ * resolve `zod` — and adoption could never finish.
+ *
+ * Both are installed with the package manager the project already uses, and only
+ * after showing the exact `package.json` and lockfile change: an install is the
+ * one step of adoption that reaches outside the repository, so it is the one step
  * that is shown before it happens rather than reported after.
  *
  * The install itself is a seam. It shells out to a package manager, which the
@@ -21,6 +27,9 @@ import { startChild } from "./child.js";
 
 /** The package an adopted project depends on. The CLI engine is not one of its dependencies. */
 export const RUNTIME_PACKAGE = "@penvhq/penv";
+
+/** The peer `penv.schema.ts` imports, which the project supplies because a peer is not hoisted. */
+export const SCHEMA_PACKAGE = "zod";
 
 export type PackageManager = "pnpm" | "npm" | "yarn" | "bun";
 
@@ -41,18 +50,26 @@ const ADD: Readonly<Record<PackageManager, readonly string[]>> = {
   bun: ["bun", "add", "--exact"],
 };
 
+/** One package the adopted project needs, and what its `package.json` says today. */
+export interface InstallPackage {
+  readonly name: string;
+  readonly version: string;
+  /** What `package.json` already says about it, when it says anything. */
+  readonly declared?: string;
+  /** True when this project already has it — nothing to install for this one. */
+  readonly satisfied: boolean;
+}
+
 export interface InstallPlan {
   readonly root: string;
   readonly manager: PackageManager;
-  readonly package: string;
-  readonly version: string;
+  /** Everything an adopted project needs, in the order the diff shows them. */
+  readonly packages: readonly InstallPackage[];
   /** The command, argv-shaped — what runs, and what a refusal tells the user to run. */
   readonly command: readonly string[];
   /** The lockfile the manager will rewrite, when the project has one. */
   readonly lockfile?: string;
-  /** What `package.json` already says about the package, when it says anything. */
-  readonly declared?: string;
-  /** True when `package.json` already pins this exact version — nothing to install. */
+  /** True when every package is already there — nothing to install. */
   readonly satisfied: boolean;
 }
 
@@ -65,21 +82,58 @@ export type InstallRuntime = (plan: InstallPlan) => Promise<void>;
  * the version a release bumps is a second answer waiting to drift.
  */
 export function engineVersion(): string {
-  const manifest = new URL("../package.json", import.meta.url);
-  try {
-    const version: unknown = JSON.parse(readFileSync(manifest, "utf8")).version;
-    if (typeof version === "string" && version.length > 0) {
-      return version;
-    }
-  } catch {
-    // Falls through to the refusal below: a version penv guessed would pin the
-    // project's one dependency to something nobody chose.
+  const version = ownManifest()?.version;
+  if (typeof version === "string" && version.length > 0) {
+    return version;
   }
   throw new PenvError(
     "ENGINE_VERSION_UNREADABLE",
     "penv could not read its own version, so it cannot say which `@penvhq/penv` this project needs",
     `Reinstall penv, then run \`penv init\` again.`,
   );
+}
+
+/**
+ * The zod an adopted project installs: the floor of the peer range the engine
+ * and `@penvhq/penv` both declare, which is the version penv is built and tested
+ * against.
+ *
+ * The floor rather than the range, because the diff shown before the install has
+ * to be the line that actually lands — `--save-exact` on `^4.4.3` would write
+ * whatever the registry resolved that day, which is not something a reader can
+ * consent to in advance.
+ */
+export function schemaPackageVersion(): string {
+  const peers = ownManifest()?.peerDependencies;
+  const declared =
+    peers !== null && typeof peers === "object" && !Array.isArray(peers)
+      ? (peers as Record<string, unknown>)[SCHEMA_PACKAGE]
+      : undefined;
+  const floor = typeof declared === "string" ? declared.replace(/^[\^~>=\s]+/, "").trim() : "";
+  if (floor.length > 0) {
+    return floor;
+  }
+  throw new PenvError(
+    "ENGINE_PEER_UNREADABLE",
+    `penv could not read its own \`${SCHEMA_PACKAGE}\` peer range, so it cannot say which ${SCHEMA_PACKAGE} this project needs`,
+    `Reinstall penv, then run \`penv init\` again.`,
+  );
+}
+
+/** The engine's own manifest, or `undefined` when it cannot be read. */
+function ownManifest(): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    );
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    // The callers refuse: a version penv guessed would pin a project's
+    // dependency to something nobody chose.
+    return undefined;
+  }
 }
 
 /** The package manager this project already uses: its lockfile, then what it declares, then npm. */
@@ -117,13 +171,13 @@ function manifestOf(root: string): Record<string, unknown> | undefined {
   }
 }
 
-/** What `package.json` pins the runtime at today, from either dependency block. */
-function declaredVersion(root: string): string | undefined {
+/** What `package.json` says about one package today, from either dependency block. */
+function declaredVersion(root: string, name: string): string | undefined {
   const manifest = manifestOf(root);
   for (const field of ["dependencies", "devDependencies"] as const) {
     const block: unknown = manifest?.[field];
     if (block !== null && typeof block === "object" && !Array.isArray(block)) {
-      const version: unknown = (block as Record<string, unknown>)[RUNTIME_PACKAGE];
+      const version: unknown = (block as Record<string, unknown>)[name];
       if (typeof version === "string") {
         return version;
       }
@@ -137,35 +191,74 @@ export function planInstall(root: string, version: string = engineVersion()): In
   const lockfile = LOCKFILES.find(
     ([name, file]) => name === manager && existsSync(join(root, file)),
   )?.[1];
-  const declared = declaredVersion(root);
+
+  const runtimeDeclared = declaredVersion(root, RUNTIME_PACKAGE);
+  const zodDeclared = declaredVersion(root, SCHEMA_PACKAGE);
+  const packages: InstallPackage[] = [
+    {
+      name: RUNTIME_PACKAGE,
+      version,
+      ...(runtimeDeclared === undefined ? {} : { declared: runtimeDeclared }),
+      satisfied: runtimeDeclared === version,
+    },
+    {
+      name: SCHEMA_PACKAGE,
+      version: schemaPackageVersion(),
+      ...(zodDeclared === undefined ? {} : { declared: zodDeclared }),
+      // Any declared zod counts: which zod a project uses is the project's
+      // decision, and penv is here to make sure there is one, not to move it.
+      satisfied: zodDeclared !== undefined,
+    },
+  ];
+
+  const pending = packages.filter((entry) => !entry.satisfied);
+  const specs = (pending.length === 0 ? packages : pending).map(
+    (entry) => `${entry.name}@${entry.version}`,
+  );
   return {
     root,
     manager,
-    package: RUNTIME_PACKAGE,
-    version,
-    command: [...ADD[manager], `${RUNTIME_PACKAGE}@${version}`],
+    packages,
+    command: [...ADD[manager], ...specs],
     ...(lockfile === undefined ? {} : { lockfile }),
-    ...(declared === undefined ? {} : { declared }),
-    satisfied: declared === version,
+    satisfied: pending.length === 0,
   };
+}
+
+function describe(entry: InstallPackage): string {
+  return `${entry.name} ${entry.version}`;
 }
 
 /**
  * The change, as it will appear in the diff — the whole point of showing it is
- * that the reader recognises their own file, so this is the `package.json` line
- * that lands and the lockfile that gets rewritten, not a summary of both.
+ * that the reader recognises their own file, so these are the `package.json`
+ * lines that land and the lockfile that gets rewritten, not a summary of both.
  */
 export function renderInstallPlan(plan: InstallPlan): string[] {
   if (plan.satisfied) {
-    return [`package.json already pins ${plan.package} ${plan.version} — nothing to install.`];
+    return [
+      `package.json already has ${plan.packages.map(describe).join(" and ")} — nothing to install.`,
+    ];
   }
-  const line = `"${plan.package}": "${plan.version}"`;
+  const pending = plan.packages.filter((entry) => !entry.satisfied);
+  const added = pending.filter((entry) => entry.declared === undefined);
+  const replaced = pending.filter((entry) => entry.declared !== undefined);
   return [
     "package.json",
-    ...(plan.declared === undefined
-      ? ['  + "dependencies": {', `  +   ${line}`, "  + }"]
-      : [`  - "${plan.package}": "${plan.declared}"`, `  + ${line}`]),
-    ...(plan.lockfile === undefined ? [] : [plan.lockfile, `  + ${plan.package}@${plan.version}`]),
+    ...(added.length === 0
+      ? []
+      : [
+          '  + "dependencies": {',
+          ...added.map((entry) => `  +   "${entry.name}": "${entry.version}"`),
+          "  + }",
+        ]),
+    ...replaced.flatMap((entry) => [
+      `  - "${entry.name}": "${entry.declared}"`,
+      `  + "${entry.name}": "${entry.version}"`,
+    ]),
+    ...(plan.lockfile === undefined
+      ? []
+      : [plan.lockfile, ...pending.map((entry) => `  + ${entry.name}@${entry.version}`)]),
     "",
     `Run with: ${plan.command.join(" ")}`,
   ];
@@ -180,7 +273,7 @@ export const installWithPackageManager: InstallRuntime = async (plan) => {
     command: plan.command,
     env: process.env as Record<string, string>,
     cwd: plan.root,
-    purpose: `install ${plan.package} ${plan.version}`,
+    purpose: `install ${plan.packages.map(describe).join(" and ")}`,
   });
   const ended = await child.ended;
   if (ended.exitCode !== 0 || ended.signal !== null) {

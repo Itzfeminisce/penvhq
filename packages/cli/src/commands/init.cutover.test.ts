@@ -33,7 +33,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { bundleDotenvFiles, bundledFiles, readCutover, runCleanup, runUndo } from "../cutover.js";
 import type { DotenvFile } from "../dotenv-files.js";
 import type { InstallPlan, InstallRuntime } from "../install.js";
-import { engineVersion } from "../install.js";
+import { engineVersion, schemaPackageVersion } from "../install.js";
 import { renderCleanup } from "./cleanup.js";
 import type { CutoverResult, PromptIo } from "./init.js";
 import {
@@ -116,7 +116,9 @@ function installRuntime(root: string, version: string): void {
   );
   const manifestFile = join(root, "package.json");
   const manifest = JSON.parse(readFileSync(manifestFile, "utf8")) as Record<string, unknown>;
-  manifest.dependencies = { "@penvhq/penv": version };
+  // zod comes with it, as it does from the real install: the scaffolded
+  // penv.schema.ts imports zod, and a peer is the project's to supply.
+  manifest.dependencies = { "@penvhq/penv": version, zod: schemaPackageVersion() };
   writeFileSync(manifestFile, JSON.stringify(manifest, null, 2), "utf8");
 }
 
@@ -126,7 +128,8 @@ function installer(): { readonly seam: InstallRuntime; readonly plans: InstallPl
     plans,
     seam: (plan) => {
       plans.push(plan);
-      installRuntime(plan.root, plan.version);
+      const runtime = plan.packages.find((entry) => entry.name === "@penvhq/penv");
+      installRuntime(plan.root, runtime?.version ?? VERSION);
       return Promise.resolve();
     },
   };
@@ -411,11 +414,14 @@ describe("what the cutover writes", () => {
     await cutover(root, { install: install.seam });
 
     expect(install.plans).toHaveLength(1);
+    // zod comes too: the schema this cutover just drafted imports it, and pnpm
+    // does not hoist a peer of @penvhq/penv to the project root.
     expect(install.plans[0]?.command).toEqual([
       "pnpm",
       "add",
       "--save-exact",
       `@penvhq/penv@${VERSION}`,
+      `zod@${schemaPackageVersion()}`,
     ]);
     expect(install.plans[0]?.lockfile).toBe("pnpm-lock.yaml");
   });
@@ -1152,6 +1158,10 @@ describe("the install", () => {
       environment: "development",
     });
 
-    expect(plan.install.version).toBe(engineVersion());
+    expect(plan.install.packages).toContainEqual({
+      name: "@penvhq/penv",
+      version: engineVersion(),
+      satisfied: false,
+    });
   });
 });
