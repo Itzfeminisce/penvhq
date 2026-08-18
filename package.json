@@ -17,7 +17,7 @@
     "changeset": "changeset",
     "release": "pnpm build && changeset publish",
     "test:artifact": "vitest run --config vitest.artifact.config.ts",
-    "release:pinned": "node --experimental-strip-types scripts/engine-pin.ts embed && pnpm exec changeset publish"
+    "release:pinned": "node --experimental-strip-types scripts/engine-pin.ts publish-pinned"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",

@@ -35,9 +35,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # Opens a "Version Packages" PR when changesets exist; publishes the
-      # scoped @penvhq/* packages to npm when that PR is merged. The embed step
-      # lives inside the publish command so a version-PR run never rewrites the
-      # committed development pin.
+      # scoped @penvhq/* packages to npm when that PR is merged. publish-pinned
+      # sends the engine out first, reads the integrity npm recorded, and only
+      # then builds and publishes the launcher — so the pin is true by
+      # construction, and a version-PR run never touches the committed dev pin.
       - name: Create release PR or publish
         id: changesets
         uses: changesets/action@v1

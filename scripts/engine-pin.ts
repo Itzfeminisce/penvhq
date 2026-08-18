@@ -4,14 +4,18 @@
  * `packages/launcher/src/pins.ts` carries a development placeholder, so a
  * launcher built from this repository refuses to write a manifest after `penv
  * init` — which is correct, and which means a published launcher has to carry
- * something else. This script is the something else, in two verbs:
+ * something else. This script is the something else, in three verbs:
  *
- *   embed  — before publishing: build and pack `@penvhq/cli`, take the npm SSRI
- *            of that tarball, and rewrite the pin's `version` and `integrity`.
- *   verify — after publishing: ask the registry what it stored for that version
- *            and fail the release if it is not the same bytes.
+ *   publish-pinned — the release: everything but the launcher goes out through
+ *                    changesets, the engine's integrity is read back from the
+ *                    registry, and the launcher builds and publishes carrying it.
+ *   embed          — the rewrite alone, from a locally packed tarball. Dev
+ *                    tooling; its bytes are NOT what npm records (packers are
+ *                    not reproducible), which is why the release reads back.
+ *   verify         — after publishing: ask the registry what it stored and fail
+ *                    the release loudly if it is not what the launcher pinned.
  *
- * `embed` runs in CI only. The committed pin stays the placeholder, because the
+ * These run in CI only. The committed pin stays the placeholder, because the
  * refusal it triggers is a tested behavior of the launcher.
  *
  * Run with `node --experimental-strip-types scripts/engine-pin.ts <verb>`.
@@ -181,9 +185,13 @@ const REGISTRY = "https://registry.npmjs.org";
 const ATTEMPTS = 12;
 const PAUSE_MS = 5_000;
 
-async function publishedIntegrity(name: string, version: string): Promise<string | undefined> {
+async function publishedIntegrity(
+  name: string,
+  version: string,
+  attempts = ATTEMPTS,
+): Promise<string | undefined> {
   const url = `${REGISTRY}/${name.replace("/", "%2F")}/${version}`;
-  for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const response = await fetch(url);
     if (response.ok) {
       const manifest = (await response.json()) as { dist?: { integrity?: string } };
@@ -192,9 +200,64 @@ async function publishedIntegrity(name: string, version: string): Promise<string
     if (response.status !== 404) {
       throw new Error(`${url} answered ${response.status}`);
     }
-    await new Promise((settle) => setTimeout(settle, PAUSE_MS));
+    if (attempt < attempts) {
+      await new Promise((settle) => setTimeout(settle, PAUSE_MS));
+    }
   }
   return undefined;
+}
+
+/**
+ * The publish that makes the pin true by construction. Tarball bytes are not
+ * reproducible across packers or machines — pnpm pack, npm pack and the registry
+ * each disagreed — so nothing predicted before publishing can be trusted. The
+ * registry is the one authority, so the engine publishes first, the pin is read
+ * back from what npm recorded, and only then does the launcher build and publish.
+ */
+async function publishPinned(): Promise<void> {
+  const engine = manifestOf(enginePackageDir);
+  const launcherDir = join(repoRoot, "packages", "launcher");
+  const launcherManifestFile = join(launcherDir, "package.json");
+  const launcherSource = readFileSync(launcherManifestFile, "utf8");
+  const launcher = JSON.parse(launcherSource) as PackageManifest;
+
+  if ((await publishedIntegrity(launcher.name, launcher.version, 1)) !== undefined) {
+    console.log(`✓ ${launcher.name} ${launcher.version} is already on npm`);
+    return;
+  }
+
+  run("pnpm", ["build"], repoRoot);
+
+  // Everything but the launcher goes out through changesets, which skips a
+  // private package — the launcher's turn comes once the registry can answer.
+  const hidden = { ...(JSON.parse(launcherSource) as Record<string, unknown>), private: true };
+  writeFileSync(launcherManifestFile, `${JSON.stringify(hidden, null, 2)}\n`);
+  try {
+    run("pnpm", ["exec", "changeset", "publish"], repoRoot);
+  } finally {
+    writeFileSync(launcherManifestFile, launcherSource);
+  }
+
+  const integrity = await publishedIntegrity(engine.name, engine.version);
+  if (integrity === undefined) {
+    refuse(
+      `${engine.name} ${engine.version} did not appear on ${REGISTRY}`,
+      "The launcher cannot pin what npm does not hold. Re-run the release once the engine is up.",
+    );
+  }
+
+  const source = readFileSync(pinsFile, "utf8");
+  writeFileSync(pinsFile, embedPin(source, { version: engine.version, integrity }), "utf8");
+  run("pnpm", ["--filter", "@penvhq/launcher", "build"], repoRoot);
+  run(
+    "pnpm",
+    ["--filter", "@penvhq/launcher", "publish", "--access", "public", "--no-git-checks"],
+    repoRoot,
+  );
+  const tag = `${launcher.name}@${launcher.version}`;
+  run("git", ["tag", tag], repoRoot);
+  run("git", ["push", "origin", tag], repoRoot);
+  console.log(`✓ ${launcher.name} ${launcher.version} published pinning ${integrity}`);
 }
 
 async function verify(): Promise<void> {
@@ -207,7 +270,7 @@ async function verify(): Promise<void> {
     refuse(
       "the launcher was published carrying the development engine pin",
       "Every project adopted by that launcher will refuse to write a manifest. Publish a patch " +
-        "with the embed step running before `pnpm release`.",
+        "through `publish-pinned`, which takes the pin from the registry.",
     );
   }
   if (pin.version !== engine.version) {
@@ -234,7 +297,11 @@ async function verify(): Promise<void> {
   console.log(`✓ ${engine.name} ${pin.version} on npm matches the launcher's pin`);
 }
 
-const VERBS: Record<string, () => void | Promise<void>> = { embed, verify };
+const VERBS: Record<string, () => void | Promise<void>> = {
+  embed,
+  verify,
+  "publish-pinned": publishPinned,
+};
 
 async function main(): Promise<void> {
   const verb = process.argv[2];
