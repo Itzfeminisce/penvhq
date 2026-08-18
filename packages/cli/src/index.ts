@@ -9,6 +9,7 @@
 
 import { setKeychain } from "@penvhq/core";
 import { runMain as cittyRunMain, defineCommand } from "citty";
+import { cleanupCommand } from "./commands/cleanup.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { decryptCommand, encryptCommand } from "./commands/encrypt.js";
 import { fillCommand } from "./commands/fill.js";
@@ -49,6 +50,7 @@ export const main = defineCommand({
     run: runCommand,
     remove: removeCommand,
     list: listCommand,
+    cleanup: cleanupCommand,
     migrate: migrateCommand,
     encrypt: encryptCommand,
     decrypt: decryptCommand,
@@ -84,8 +86,20 @@ export type { GetExplanation } from "./commands/get.js";
 export { runExplain, runGet } from "./commands/get.js";
 export type { ImportReport } from "./commands/import.js";
 export { importDotenv } from "./commands/import.js";
-export type { InitResult, InitStep } from "./commands/init.js";
-export { insertEnvAlias, runInit } from "./commands/init.js";
+export type {
+  AdoptionPlan,
+  CutoverPlan,
+  CutoverResult,
+  InitResult,
+  InitStep,
+} from "./commands/init.js";
+export {
+  applyCutover,
+  insertEnvAlias,
+  planAdoption,
+  planCutover,
+  runInit,
+} from "./commands/init.js";
 export type { ListResult } from "./commands/list.js";
 export { runList } from "./commands/list.js";
 export type { MigrateMove, MigratePlan, MigrateResult, MigrateStatus } from "./commands/migrate.js";
@@ -108,3 +122,5 @@ export type { EnvironmentCheck, ValidateIssue, ValidateResult } from "./commands
 export { checkEnvironment, runValidate } from "./commands/validate.js";
 export type { WatchHandle, WatchOptions } from "./commands/watch.js";
 export { renderWatch, runWatch } from "./commands/watch.js";
+export type { CleanupResult, Cutover, UndoResult } from "./cutover.js";
+export { runCleanup, runUndo } from "./cutover.js";

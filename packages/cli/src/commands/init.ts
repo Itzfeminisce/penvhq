@@ -1,5 +1,20 @@
 /**
- * `penv init` — scaffold a project.
+ * `penv init` — scaffold a project, and adopt its dotenv files completely.
+ *
+ * A project with `.env` files gets a cutover: init lists every dotenv file it
+ * found, the developer picks the ones penv takes, and then penv either takes all
+ * of them or none. There is no half-adopted state, because a project whose
+ * values live half in `.env` and half in penv has two truths about its own
+ * configuration — the drift penv exists to delete, introduced by penv itself. So
+ * everything is preflighted first: the selection, the environments it declares,
+ * every variable name, the draft schema, the dependency install, and the
+ * generated variable each parameter maps to. A failed preflight moves nothing,
+ * writes nothing, and never reports partial success.
+ *
+ * Only after the imported values validate do the dotenv files move — into one
+ * ignored `.penv/state/rollback/dotenv/` bundle, recorded in
+ * `.penv/state/cutover.json`, which `penv init undo` restores by exact name and
+ * `penv cleanup` drops.
  *
  * Every step is idempotent, and two of them are write-once on purpose: the
  * schema module is yours the moment it exists (invariant 2 — penv scaffolds it,
@@ -12,28 +27,38 @@
  * codebase. It must ask for what it cannot observe: which environments exist is
  * deployment topology, it is nowhere on disk, and a project that carries a
  * `staging` penv invented is a project whose config is fiction (invariant 10).
- * So `environments` starts empty, and `--yes` cannot fill it: `--yes` means "I
- * trust your defaults for what you can see", never "invent my infrastructure".
+ * Selecting `.env.production` is the developer declaring production; selecting
+ * `.env` alone declares nothing, and init asks which environment those values
+ * are for rather than deciding.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
+import type { DotenvDiagnostic, DotenvEntry, ParameterRef, Scope } from "@penvhq/core";
 import {
+  CUTOVER_PATH,
   DEFAULT_SCHEMA_FILE,
   isLegalEnvironmentName,
   loadConfigFrom,
   PENV_DIR,
   type PenvConfig,
   PenvError,
+  parameterId,
+  parseDotenv,
+  RECORDS_PATH,
   RESERVED_TOKENS,
+  ROLLBACK_DOTENV_PATH,
   renderStateGitignore,
   SCHEMA_SHAPE_FILE,
   STATE_GITIGNORE_PATH,
   schemaFileOf,
+  validateConfig,
   validateSchemaFile,
 } from "@penvhq/core";
 import { defineCommand } from "citty";
+import { assertNoCollisions, refsForEntries, writeEntries } from "../adopt.js";
+import { bundleDotenvFiles, readCutover, runUndo } from "../cutover.js";
 import {
   DEFAULT_ALIAS,
   type Detected,
@@ -41,10 +66,23 @@ import {
   detectFramework,
   srcPrefix,
 } from "../detect.js";
-import { selfContainedSchemaModule } from "../project.js";
+import type { DotenvFile } from "../dotenv-files.js";
+import { cascadeFor, discoverDotenvFiles, environmentsDeclaredBy } from "../dotenv-files.js";
+import type { DraftField, SchemaField } from "../draft-schema.js";
+import { draftFieldsAcross } from "../draft-schema.js";
+import type { InstallPlan, InstallRuntime } from "../install.js";
+import {
+  detectPackageManager,
+  installWithPackageManager,
+  planInstall,
+  renderInstallPlan,
+} from "../install.js";
+import { localTree, openProject, selfContainedSchemaModule } from "../project.js";
 import { type ScaffoldSeam, type Seam, seamFor } from "../seams.js";
 import { out } from "../style.js";
 import { CHECK, columns, formatSteps, guard, prompt, type Step, tip, WARN, write } from "../ui.js";
+import type { ValidateResult } from "./validate.js";
+import { checkEnvironment } from "./validate.js";
 
 export const SCHEMA_FILE = "env.ts";
 
@@ -128,6 +166,12 @@ export interface InitStep {
 export interface InitDecisions {
   /** The whitelist. Empty unless a human named them — penv never infers one. */
   readonly environments: readonly string[];
+  /**
+   * The environment every command falls back to when `--env` is absent (seal 3).
+   * Written only when the cutover adopted one — a declared decision, so the
+   * whitelist rule is untouched, and CI keeps naming `--env` anyway.
+   */
+  readonly defaultEnvironment?: string;
   /** The schema module, relative to the project root, POSIX. */
   readonly schemaFile: string;
   /** The prefixes the framework inlines into its client bundle. */
@@ -186,6 +230,12 @@ export interface InitFlags {
   readonly environments?: readonly string[];
   /** `--alias <name>`. */
   readonly alias?: string;
+  /**
+   * `--yes` on a project with nothing to adopt. It takes `development` and the
+   * local provider — the machine the command was typed on, which is the one
+   * environment penv can declare without claiming a deployment exists.
+   */
+  readonly yes?: boolean;
 }
 
 export interface InitPlan {
@@ -394,14 +444,25 @@ export function planInit(root: string, flags: InitFlags = {}): InitPlan {
   }
 
   const suggestedEnvironments = suggestEnvironments(root);
-  const environments = flags.environments ?? declared?.environments ?? [];
+  // `--yes` takes `development` and nothing else (PRD §6). It is the machine the
+  // command was typed on rather than a claim that a deployment exists, which is
+  // what separates it from the production/staging/preview it still never invents.
+  const safeDefault = flags.yes === true && declared === undefined;
+  const environments =
+    flags.environments ?? declared?.environments ?? (safeDefault ? [DEVELOPMENT] : []);
+  const defaultEnvironment =
+    declared?.defaultEnvironment ?? (safeDefault ? DEVELOPMENT : undefined);
+  if (safeDefault) {
+    notes.push(
+      `\`--yes\` declares ${DEVELOPMENT} with the local provider — the one environment penv can ` +
+        "name without inventing a deployment.",
+    );
+  }
   // The empty whitelist is worth a line only when it is still empty. A project
   // that declared `production` being told it has declared nothing is penv
   // reading its own config wrong out loud.
   if (environments.length === 0) {
-    notes.push(
-      "No environments declared: penv does not infer them, and a `--yes` run cannot invent them.",
-    );
+    notes.push("No environments declared: penv does not infer them.");
     if (suggestedEnvironments.length > 0) {
       notes.push(
         `Your \`.env\` files mention ${suggestedEnvironments.join(", ")} — declare the ones you ` +
@@ -414,6 +475,9 @@ export function planInit(root: string, flags: InitFlags = {}): InitPlan {
     detected,
     decisions: {
       environments,
+      // A recorded decision, carried forward so a re-run reports the project as
+      // it is. `writeConfigFile` keeps an existing config either way.
+      ...(defaultEnvironment === undefined ? {} : { defaultEnvironment }),
       // Injection is a choice about the app's needs, not something on disk — so
       // the plan defaults it off, and only the interactive prompt turns it on.
       inject: false,
@@ -553,22 +617,19 @@ async function askInject(io: PromptIo): Promise<boolean> {
  * Templates.
  */
 
-/** One schema field for the draft `penv import` generates. */
-export interface SchemaField {
-  readonly key: string;
-  /** The Zod expression, e.g. `z.url()`. */
-  readonly type: string;
-}
+export type { SchemaField };
 
 const EMPTY_SCHEMA_BODY =
   "  // One key per parameter, e.g. `databaseUrl: z.url(),`. Nesting a key nests\n" +
   "  // the parameter: `redis: z.object({ password: z.string() })` is redis/password.";
 
 const DRAFT_HEADER =
-  "// DRAFT — generated by `penv import` from one sample of each value, and yours\n" +
-  "// to correct. Single-sample inference cannot know that a boolean seen as `true`\n" +
-  "// must also accept `1`/`0`, or that a string is really a URL. penv scaffolds\n" +
-  "// this file once and never regenerates it, so edits here are safe.\n";
+  "// DRAFT — generated from the dotenv values penv adopted, and yours to correct.\n" +
+  "// Inference from a sample cannot know that a boolean seen as `true` must also\n" +
+  "// accept `1`/`0`, or that a string is really a URL. A field every adopted\n" +
+  "// environment had starts required; one that was missing anywhere starts\n" +
+  "// optional. penv scaffolds this file once and never regenerates it, so edits\n" +
+  "// here are safe.\n";
 
 /**
  * `penv.schema.ts` — the shape, and nothing that loads. This is the side-effect
@@ -697,6 +758,16 @@ function renderEnvironments(decisions: InitDecisions): string {
 /** The config, carrying only the decisions that were actually made. */
 export function renderConfigModule(decisions: InitDecisions): string {
   let body = renderEnvironments(decisions);
+
+  // Seal 3: what turns `penv run --env development -- pnpm dev` into
+  // `penv run -- pnpm dev`. A declared decision, so invariant 10 is untouched —
+  // this is not `NODE_ENV`, a branch name or a filename being believed.
+  if (decisions.defaultEnvironment !== undefined) {
+    body +=
+      "\n  // The environment a command uses when `--env` is absent. A pipeline names\n" +
+      "  // `--env` anyway: a deploy that leans on this is one edit from the wrong one.\n" +
+      `  defaultEnvironment: ${JSON.stringify(decisions.defaultEnvironment)},\n`;
+  }
 
   // The default is written by not writing it: a key that restates the default is
   // noise the next reader has to check against the docs before they can ignore it.
@@ -1341,6 +1412,507 @@ export function scaffold(
   return seam === undefined ? steps : [...steps, seam];
 }
 
+/*
+ * The cutover.
+ *
+ * Everything from here down is all-or-nothing by construction: `planCutover`
+ * reads and checks, `applyCutover` writes and moves, and nothing between them
+ * decides anything. That split is what lets a preflight failure be a refusal
+ * with no cleanup to do.
+ */
+
+/** The environment `--yes` takes and the file list preselects. */
+export const DEVELOPMENT = "development";
+
+/** The provider a scaffolded environment reads from until the project says otherwise. */
+const LOCAL_PROVIDER = "@penvhq/provider-filesystem";
+
+/** One adopted file: what it holds, and the scope its values are written at. */
+interface Adopted {
+  readonly file: DotenvFile;
+  readonly entries: readonly DotenvEntry[];
+  readonly refs: readonly ParameterRef[];
+  readonly scope: Scope;
+}
+
+export interface AdoptionPlan {
+  readonly root: string;
+  /** Every dotenv file penv found, in the order the list shows them. */
+  readonly found: readonly DotenvFile[];
+  /** Checked when the list is first shown: the development cascade, where it exists. */
+  readonly preselected: readonly string[];
+}
+
+/** What there is to adopt, and what penv proposes taking. */
+export function planAdoption(root: string): AdoptionPlan {
+  const found = discoverDotenvFiles(root);
+  return {
+    root,
+    found,
+    preselected: found
+      .filter((file) => file.environment === undefined || file.environment === DEVELOPMENT)
+      .map((file) => file.name),
+  };
+}
+
+/** The scope a file's values are written at — invariant 4's four levels, unchanged. */
+function scopeOf(file: DotenvFile): Scope {
+  if (file.kind === "shared") {
+    return { kind: "unscoped" };
+  }
+  if (file.kind === "local") {
+    return { kind: "local" };
+  }
+  const environment = file.environment ?? "";
+  return file.kind === "environment"
+    ? { kind: "environment", environment }
+    : { kind: "environment-local", environment };
+}
+
+export interface CutoverPlan {
+  readonly root: string;
+  readonly selected: readonly DotenvFile[];
+  readonly adopted: readonly Adopted[];
+  /** The whitelist after this cutover — what the config declares, or is about to. */
+  readonly environments: readonly string[];
+  /**
+   * The environments this cutover is *about*: the ones its files name. Narrower
+   * than the whitelist on a project that already declared more, and the ones the
+   * draft is judged against and the import is validated for — an environment
+   * this cutover did not touch must not fail it for a state it was already in.
+   */
+  readonly adopting: readonly string[];
+  readonly decisions: InitDecisions;
+  readonly fields: readonly DraftField[];
+  readonly variables: number;
+  /** Values the parser read but that look like a mistake. Shown, never fixed. */
+  readonly diagnostics: readonly DotenvDiagnostic[];
+  readonly install: InstallPlan;
+  readonly framework: string | undefined;
+  /** True when `penv.config.ts` already existed, so init keeps every decision it records. */
+  readonly configured: boolean;
+}
+
+export interface CutoverInput {
+  readonly root: string;
+  /** What init would scaffold anyway: detection, the schema's home, the alias. */
+  readonly base: InitPlan;
+  readonly selected: readonly DotenvFile[];
+  /** The environment named when the selection declares none — `.env` alone declares nothing. */
+  readonly environment?: string;
+  /** The `@penvhq/penv` version to pin. Defaults to this engine's own. */
+  readonly version?: string;
+  readonly inject?: boolean;
+}
+
+/**
+ * Everything a cutover needs, checked before anything is written.
+ *
+ * The order is the order the failures matter in: an unresolved bundle first
+ * (there is nothing to plan on top of it), then what the selection declares,
+ * then whether the selection is complete, then every variable name, and only
+ * then the schema and the install. Each one throws, so the caller has a plan or
+ * a refusal and never a half-answer.
+ */
+export function planCutover(input: CutoverInput): CutoverPlan {
+  const { root, base } = input;
+  assertBundleResolved(root);
+
+  const selected = [...input.selected];
+  if (selected.length === 0) {
+    throw new PenvError(
+      "INIT_NOTHING_SELECTED",
+      "No dotenv file was selected, so there is nothing to migrate",
+      "Run `penv init` again and choose the files penv should adopt.",
+    );
+  }
+
+  const declared = declaredIn(root);
+  const named = environmentsDeclaredBy(selected);
+  const chosen = named.length > 0 ? named : [requireEnvironment(input)];
+  const environments = declared === undefined ? chosen : declared.environments;
+  for (const environment of chosen) {
+    if (!environments.includes(environment)) {
+      throw new PenvError(
+        "INIT_ENVIRONMENT_UNDECLARED",
+        `${CONFIG_FILE} declares ${describeList(environments)}, and adopting these files needs \`${environment}\` declared too`,
+        `Add \`${environment}\` to \`environments\` in ${CONFIG_FILE}, with a provider for it, then run \`penv init\` again. Nothing was changed.`,
+      );
+    }
+  }
+
+  const defaultEnvironment =
+    declared === undefined ? proposedDefault(chosen) : declared.defaultEnvironment;
+  const decisions: InitDecisions = {
+    ...base.decisions,
+    environments,
+    ...(defaultEnvironment === undefined ? {} : { defaultEnvironment }),
+    ...(input.inject === undefined ? {} : { inject: input.inject }),
+  };
+
+  // The config init is about to write, judged by the same validator `penv
+  // validate` will judge it by — before it exists, rather than after.
+  const config = declared ?? configFor(decisions);
+  const configError = validateConfig(config)[0];
+  if (configError !== undefined) {
+    throw configError;
+  }
+
+  assertCascadeComplete(root, selected, chosen);
+
+  const adopted: Adopted[] = [];
+  const refs: ParameterRef[] = [];
+  const diagnostics: DotenvDiagnostic[] = [];
+  let variables = 0;
+  for (const file of selected) {
+    const parsed = parseDotenv(readFileSync(join(root, file.name), "utf8"));
+    const fileRefs = refsForEntries(parsed.entries, file.name, config);
+    adopted.push({ file, entries: parsed.entries, refs: fileRefs, scope: scopeOf(file) });
+    refs.push(...fileRefs);
+    diagnostics.push(...parsed.diagnostics);
+    variables += parsed.entries.length;
+  }
+  // Invariant 12, across the whole cutover rather than one file at a time: two
+  // files may each be fine and still map two parameters to one variable. One
+  // parameter written at four scopes is not that — `DATABASE_URL` in `.env` and
+  // in `.env.development.local` is the cascade doing its job — so the refs are
+  // deduplicated first.
+  assertNoCollisions(distinct(refs), config);
+
+  const fields = draftFieldsAcross(
+    adopted.map((entry) => ({
+      ...(entry.file.environment === undefined ? {} : { environment: entry.file.environment }),
+      entries: entry.entries,
+    })),
+    chosen,
+  );
+
+  return {
+    root,
+    selected,
+    adopted,
+    environments,
+    adopting: chosen,
+    decisions,
+    fields,
+    variables,
+    diagnostics,
+    install: planInstall(root, input.version),
+    framework: base.detected?.name,
+    configured: declared !== undefined,
+  };
+}
+
+/**
+ * Seal 3, decided once: `development` when the development cascade was adopted,
+ * and otherwise the single environment this cutover is about. Two or more
+ * environments and no development among them is a project whose daily
+ * environment penv cannot know, so it declares none and `--env` keeps its job.
+ */
+function proposedDefault(chosen: readonly string[]): string | undefined {
+  if (chosen.includes(DEVELOPMENT)) {
+    return DEVELOPMENT;
+  }
+  return chosen.length === 1 ? chosen[0] : undefined;
+}
+
+/** One entry per parameter, whatever number of scopes it was seen at. */
+function distinct(refs: readonly ParameterRef[]): ParameterRef[] {
+  const seen = new Map<string, ParameterRef>();
+  for (const ref of refs) {
+    seen.set(parameterId(ref), ref);
+  }
+  return [...seen.values()];
+}
+
+function configFor(decisions: InitDecisions): PenvConfig {
+  return {
+    environments: decisions.environments,
+    providers: Object.fromEntries(
+      decisions.environments.map((environment) => [environment, { type: LOCAL_PROVIDER }]),
+    ),
+    schemaFile: decisions.schemaFile,
+    ...(decisions.defaultEnvironment === undefined
+      ? {}
+      : { defaultEnvironment: decisions.defaultEnvironment }),
+    ...(decisions.publicPrefixes.length === 0
+      ? {}
+      : { publicPrefixes: [...decisions.publicPrefixes] }),
+  };
+}
+
+function describeList(names: readonly string[]): string {
+  return names.length === 0 ? "no environments" : names.map((name) => `\`${name}\``).join(", ");
+}
+
+/**
+ * `.env` alone declares no environment (PRD §6), and penv will not pick one for
+ * it. The caller asks; this is the guard that the answer arrived.
+ */
+function requireEnvironment(input: CutoverInput): string {
+  const environment = input.environment?.trim() ?? "";
+  if (environment.length > 0) {
+    return environment;
+  }
+  throw new PenvError(
+    "INIT_ENVIRONMENT_UNNAMED",
+    "The selected files name no environment, and penv does not invent one",
+    `Run \`penv init --env ${DEVELOPMENT}\` to say which environment these values are for.`,
+  );
+}
+
+/**
+ * PRD §6: every framework-discoverable file in an adopted environment's cascade
+ * has to come too. Adopting `.env.development` while leaving `.env` behind
+ * leaves the framework loading values penv does not hold — a project with two
+ * live sources, which is the state a complete cutover exists to prevent.
+ */
+function assertCascadeComplete(
+  root: string,
+  selected: readonly DotenvFile[],
+  environments: readonly string[],
+): void {
+  const present = new Set(discoverDotenvFiles(root).map((file) => file.name));
+  const taken = new Set(selected.map((file) => file.name));
+  for (const environment of environments) {
+    for (const name of cascadeFor(environment)) {
+      if (present.has(name) && !taken.has(name)) {
+        throw new PenvError(
+          "INIT_CUTOVER_INCOMPLETE",
+          `${name} is part of ${environment}'s cascade and was not selected, so your framework would keep reading it beside penv`,
+          "Run `penv init` again and take every file penv listed for that environment. Nothing was changed.",
+        );
+      }
+    }
+  }
+}
+
+/** A second migration over an unresolved bundle would bury the first one's files. */
+function assertBundleResolved(root: string): void {
+  if (readCutover(root) === undefined) {
+    return;
+  }
+  throw new PenvError(
+    "INIT_BUNDLE_UNRESOLVED",
+    `The dotenv files from the last cutover are still in ${ROLLBACK_DOTENV_PATH}/, and penv will not migrate a second time over them`,
+    "Run `penv cleanup` to drop that bundle once you are happy with the migration.",
+  );
+}
+
+/**
+ * `--yes` takes the development cascade, and refuses when another environment is
+ * leaning on the shared `.env` this cutover would move (PRD §6). Which files
+ * that environment should keep is a decision, and `--yes` means "I trust your
+ * defaults", never "decide my other environments for me".
+ */
+export function selectionForYes(plan: AdoptionPlan): DotenvFile[] {
+  const shared = plan.found.find((file) => file.kind === "shared");
+  const other = plan.found.find(
+    (file) => file.environment !== undefined && file.environment !== DEVELOPMENT,
+  );
+  if (shared !== undefined && other !== undefined) {
+    throw new PenvError(
+      "INIT_YES_SHARED_FALLBACK",
+      `${other.name} falls back to the shared ${shared.name} this cutover would move, so \`--yes\` will not decide what happens to ${other.environment ?? ""}`,
+      "Run `penv init` without `--yes` and choose every file the cutover takes. Nothing was changed.",
+    );
+  }
+  return plan.found.filter((file) => plan.preselected.includes(file.name));
+}
+
+export interface CutoverResult {
+  readonly plan: CutoverPlan;
+  readonly steps: readonly InitStep[];
+  /** The dotenv files moved into the bundle, by name. */
+  readonly moved: readonly string[];
+  /** The environments whose imported values were validated before the move. */
+  readonly validated: readonly string[];
+}
+
+export interface CutoverOptions {
+  /** Injected in tests: how the runtime dependency is installed. Never spawns there. */
+  readonly install?: InstallRuntime;
+}
+
+/**
+ * Installs, scaffolds, imports, validates — and only then moves the dotenv
+ * files aside. The order is the guarantee: every step before the move leaves a
+ * project whose `.env` files are exactly where they were, so a refusal at any
+ * of them costs a re-run and nothing else.
+ */
+export async function applyCutover(
+  plan: CutoverPlan,
+  options: CutoverOptions = {},
+): Promise<CutoverResult> {
+  if (!plan.install.satisfied) {
+    await (options.install ?? installWithPackageManager)(plan.install);
+  }
+
+  const steps = scaffold(plan.root, plan.fields, true, plan.decisions, plan.framework);
+  const project = openProject(plan.root);
+  const tree = localTree(project);
+  for (const adopted of plan.adopted) {
+    writeEntries(tree, adopted.entries, adopted.refs, adopted.scope);
+  }
+
+  // Every environment this cutover adopted, not just the daily one: the draft is
+  // the weakest shape all of them satisfy, so if one of them does not, the draft
+  // is wrong and the files must stay where they are. An environment the cutover
+  // did not touch is not judged here — it was already in whatever state it was in.
+  for (const environment of plan.adopting) {
+    const check = await checkEnvironment(project, environment);
+    if (!check.result.ok) {
+      throw invalidAfterImport(check.result);
+    }
+  }
+
+  const cutover = bundleDotenvFiles(
+    plan.root,
+    plan.selected.map((file) => file.name),
+    plan.environments,
+  );
+  return { plan, steps, moved: cutover.files, validated: plan.adopting };
+}
+
+function invalidAfterImport(result: ValidateResult): PenvError {
+  const lines = result.issues.map((issue) => `  ${issue.subject}: ${issue.message}`).join("\n");
+  return new PenvError(
+    "INIT_CUTOVER_INVALID",
+    `The imported values do not satisfy the draft schema for ${result.environment}, so your dotenv files were left where they are:\n${lines}`,
+    `Correct ${SCHEMA_SHAPE_FILE} or the values above, then run \`penv init\` again.`,
+  );
+}
+
+/*
+ * The cutover's screens.
+ */
+
+/** The file list, checkboxes and all — the one screen the selection is made on. */
+export function renderSelection(
+  plan: AdoptionPlan,
+  selected: readonly string[] = plan.preselected,
+): string[] {
+  const rows = plan.found.map((file) => [
+    `  ${selected.includes(file.name) ? "[x]" : "[ ]"}`,
+    file.name,
+    out.dim(file.label),
+  ]);
+  return [out.bold("Found dotenv files. Which should penv adopt?"), "", ...columns(rows), ""];
+}
+
+/** The plan, and the install it is conditional on. Nothing here has happened yet. */
+export function renderCutoverPlan(plan: CutoverPlan): string[] {
+  const required = plan.fields.filter((field) => field.required).length;
+  const optional = plan.fields.length - required;
+  const rows: string[][] = [
+    [`  ${out.dim("environments")}`, out.cyan(`[${plan.environments.join(", ")}]`), ""],
+  ];
+  if (plan.decisions.defaultEnvironment !== undefined) {
+    rows.push([
+      `  ${out.dim("default")}`,
+      plan.decisions.defaultEnvironment,
+      out.dim("← so `penv run -- pnpm dev` needs no --env"),
+    ]);
+  }
+  rows.push([
+    `  ${out.dim("schema")}`,
+    `${plan.fields.length} parameters`,
+    out.dim(`← ${required} required, ${optional} optional — a draft you own`),
+  ]);
+  rows.push([
+    `  ${out.dim("values")}`,
+    `${RECORDS_PATH}/`,
+    out.dim(`← from ${plan.variables} variables`),
+  ]);
+  rows.push([
+    `  ${out.dim("dotenv")}`,
+    `${ROLLBACK_DOTENV_PATH}/`,
+    out.dim("← recoverable with `penv init undo`"),
+  ]);
+
+  return [
+    out.bold("The cutover"),
+    "",
+    ...columns(rows),
+    "",
+    ...plan.diagnostics.map((diagnostic) => `${out.yellow(WARN)} ${diagnostic.detail}`),
+    ...(plan.diagnostics.length === 0 ? [] : [""]),
+    ...renderInstallPlan(plan.install),
+    "",
+  ];
+}
+
+/** What actually happened, and the one command the project starts through now. */
+export function renderCutover(result: CutoverResult): string[] {
+  const { plan } = result;
+  const plural = plan.environments.length === 1 ? "environment" : "environments";
+  const steps: Step[] = [
+    {
+      glyph: plan.configured ? WARN : CHECK,
+      text: `Declared ${plural}`,
+      note: plan.configured
+        ? `${plan.environments.join(", ")} (already in ${CONFIG_FILE} — penv kept it)`
+        : plan.environments.join(", "),
+    },
+    ...result.steps.map((step) => {
+      const glyph = step.action === "conflicted" ? WARN : step.action === "info" ? "→" : CHECK;
+      return step.note === undefined
+        ? { glyph, text: step.text }
+        : { glyph, text: step.text, note: step.note };
+    }),
+    ...(plan.install.satisfied
+      ? []
+      : [{ glyph: CHECK, text: `Installed ${plan.install.package}`, note: plan.install.version }]),
+    {
+      glyph: CHECK,
+      text: `Imported ${plan.fields.length} parameters`,
+      note: `into ${RECORDS_PATH}/`,
+    },
+    { glyph: CHECK, text: `Validated ${result.validated.join(", ")}` },
+    {
+      glyph: CHECK,
+      text: `Moved ${result.moved.length} dotenv ${result.moved.length === 1 ? "file" : "files"}`,
+      note: `${ROLLBACK_DOTENV_PATH}/ (penv init undo restores them)`,
+    },
+  ];
+
+  return [
+    ...formatSteps(steps),
+    "",
+    `${out.green(CHECK)} ${out.bold("Done.")} Start your app with penv:`,
+    tip(out.cyan(dailyCommand(plan.root))),
+  ];
+}
+
+/**
+ * The daily command, shown and never written (seal 1 as amended). penv cannot
+ * compose a script line containing a command it did not write, and wrapping
+ * inside a script would run `pre*`/`post*` hooks outside penv's environment — so
+ * the wrapper stays outside, and this is copy.
+ */
+export function dailyCommand(root: string): string {
+  return `penv run -- ${detectPackageManager(root)} ${devScript(root)}`;
+}
+
+/** The script the project already has, so the line shown is one the reader can paste. */
+function devScript(root: string): string {
+  const file = join(root, PACKAGE_FILE);
+  if (!existsSync(file)) {
+    return "dev";
+  }
+  try {
+    const scripts: unknown = JSON.parse(readFileSync(file, "utf8")).scripts;
+    if (scripts !== null && typeof scripts === "object" && !Array.isArray(scripts)) {
+      const named = Object.keys(scripts);
+      return ["dev", "start"].find((script) => named.includes(script)) ?? named[0] ?? "dev";
+    }
+  } catch {
+    // An unreadable manifest is not a reason to print nothing: `dev` is what the
+    // reader will recognise, and the line is copy either way.
+  }
+  return "dev";
+}
+
 export function runInit(options: InitOptions): InitResult {
   const root = resolve(options.cwd);
   const decisions = options.decisions ?? planInit(root).decisions;
@@ -1381,27 +1953,192 @@ export function renderInit(result: InitResult): string[] {
   ];
 }
 
-/** The prompt runs only against a real terminal; anything else has nobody to ask. */
-async function askOnTty(plan: InitPlan): Promise<InitDecisions | undefined> {
+/*
+ * The cutover conversation: one screen at a time, and every answer a decision
+ * penv could not observe. The io is a parameter throughout, so the tests drive
+ * the conversation without a terminal.
+ */
+
+/**
+ * The files to adopt. `undefined` is the developer declining, which is an
+ * outcome and not a failure — nothing is written and the run says so.
+ *
+ * Enter takes the checked list, because the checked list is the complete
+ * development cascade and taking all of it is what makes the cutover complete.
+ */
+export async function promptForSelection(
+  plan: AdoptionPlan,
+  io: PromptIo,
+): Promise<DotenvFile[] | undefined> {
+  for (const line of renderSelection(plan)) {
+    io.write(line);
+  }
+
+  const answer = (await io.ask(prompt("files", "Enter to take the checked ones"))).trim();
+  if (answer.toLowerCase() === "none") {
+    return undefined;
+  }
+  const names =
+    answer.length === 0
+      ? plan.preselected
+      : answer.toLowerCase() === "all"
+        ? plan.found.map((file) => file.name)
+        : answer
+            .split(/[\s,]+/)
+            .map((name) => name.trim())
+            .filter((name) => name.length > 0);
+
+  const selected: DotenvFile[] = [];
+  for (const name of names) {
+    const file = plan.found.find((candidate) => candidate.name === name);
+    if (file === undefined) {
+      throw new PenvError(
+        "INIT_SELECTION_UNKNOWN",
+        `\`${name}\` is not one of the dotenv files penv found`,
+        "Run `penv init` again and name the files exactly as they are listed, e.g. `.env.production`.",
+      );
+    }
+    selected.push(file);
+  }
+  return selected.length === 0 ? undefined : selected;
+}
+
+/**
+ * Which environment a selection that declares none is for. Offered, never
+ * assumed: `development` is the answer for almost every project adopting a plain
+ * `.env`, and pressing Enter is the developer giving it.
+ */
+export async function askEnvironment(io: PromptIo, offered: string): Promise<string> {
+  io.write("");
+  io.write("Selecting `.env` alone declares no environment, and penv never infers one.");
+  const answer = (await io.ask(prompt("environment", `Enter for ${offered}`))).trim();
+  return answer.length === 0 ? offered : answer;
+}
+
+/** The last question before anything is written. */
+async function askProceed(io: PromptIo): Promise<boolean> {
+  const answer = (await io.ask(prompt("Proceed?", "Y/n"))).trim().toLowerCase();
+  return answer.length === 0 || answer === "y" || answer === "yes";
+}
+
+/** A terminal, or `undefined` when there is nobody to ask. */
+function terminal(): { readonly io: PromptIo; close(): void } {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    return await promptForDecisions(plan, {
+  return {
+    io: {
       ask: (question) => rl.question(question),
       write: (line) => process.stdout.write(`${line}\n`),
-    });
+    },
+    close: () => rl.close(),
+  };
+}
+
+/** The prompt runs only against a real terminal; anything else has nobody to ask. */
+async function askOnTty(plan: InitPlan): Promise<InitDecisions | undefined> {
+  const rl = terminal();
+  try {
+    return await promptForDecisions(plan, rl.io);
   } finally {
     rl.close();
   }
 }
 
+/** The scaffold-only path: a project with no dotenv files to adopt. */
+async function scaffoldOnly(root: string, plan: InitPlan, asked: boolean): Promise<void> {
+  const decisions = asked ? await askOnTty(plan) : plan.decisions;
+  if (decisions === undefined) {
+    write(["Nothing written. Re-run `penv init` when you want to scaffold."]);
+    return;
+  }
+  if (!asked) {
+    write([...plan.notes, ""]);
+  }
+  write(
+    renderInit(
+      runInit({ cwd: root, decisions, ...(plan.detected && { framework: plan.detected.name }) }),
+    ),
+  );
+}
+
+/** The cutover path, asked one screen at a time. */
+async function cutoverInteractively(
+  root: string,
+  base: InitPlan,
+  adoption: AdoptionPlan,
+): Promise<void> {
+  const rl = terminal();
+  let plan: CutoverPlan;
+  let inject = false;
+  try {
+    const selected = await promptForSelection(adoption, rl.io);
+    if (selected === undefined) {
+      write(["Nothing written. Re-run `penv init` when you want to migrate."]);
+      return;
+    }
+    const named = environmentsDeclaredBy(selected);
+    const environment =
+      named.length > 0 ? undefined : await askEnvironment(rl.io, offeredEnvironment(root));
+
+    plan = planCutover({
+      root,
+      base,
+      selected,
+      ...(environment === undefined ? {} : { environment }),
+    });
+    for (const line of renderCutoverPlan(plan)) {
+      rl.io.write(line);
+    }
+    if (!(await askProceed(rl.io))) {
+      write(["Nothing written. Re-run `penv init` when you want to migrate."]);
+      return;
+    }
+    inject = seamKindFor(base) === "none" ? false : await askInject(rl.io);
+  } finally {
+    rl.close();
+  }
+
+  write([""]);
+  write(renderCutover(await applyCutover({ ...plan, decisions: { ...plan.decisions, inject } })));
+}
+
+/** What the environment question offers: what the project already declared, else development. */
+function offeredEnvironment(root: string): string {
+  const declared = declaredIn(root);
+  if (declared === undefined) {
+    return DEVELOPMENT;
+  }
+  return (
+    declared.defaultEnvironment ??
+    (declared.environments.includes(DEVELOPMENT)
+      ? DEVELOPMENT
+      : (declared.environments[0] ?? DEVELOPMENT))
+  );
+}
+
+/** `penv init --yes`: the development cascade, the filesystem provider, and no questions. */
+async function cutoverWithYes(root: string, base: InitPlan, adoption: AdoptionPlan): Promise<void> {
+  const selected = selectionForYes(adoption);
+  const plan = planCutover({ root, base, selected, environment: DEVELOPMENT });
+  write([...renderCutoverPlan(plan), ""]);
+  write(renderCutover(await applyCutover(plan)));
+}
+
 export const initCommand = defineCommand({
-  meta: { name: "init", description: "Initialize a project (.penv/, env.ts, config, @env alias)" },
+  meta: {
+    name: "init",
+    description: "Adopt your dotenv files, or scaffold a project (.penv/, env.ts, config, @env)",
+  },
   args: {
+    action: {
+      type: "positional",
+      required: false,
+      description: "`undo` puts the dotenv files of the last cutover back, under their exact names",
+    },
     yes: {
       type: "boolean",
       description:
-        "Take the detected defaults without asking. Environments still start empty — penv " +
-        "cannot see your infrastructure",
+        `Take the development cascade and the ${LOCAL_PROVIDER} provider without asking. It ` +
+        "never invents production, staging or preview",
     },
     schema: {
       type: "string",
@@ -1422,33 +2159,68 @@ export const initCommand = defineCommand({
   run({ args }) {
     return guard(async () => {
       const root = resolve(process.cwd());
+      if (args.action !== undefined) {
+        runUndoAction(root, String(args.action));
+        return;
+      }
+
       const environments = environmentsFromFlag(args.env);
+      const adoption = planAdoption(root);
+      // The `--yes` default is for a project with nothing to adopt; where there
+      // is a cascade, the files declare the environments and the flag only means
+      // "take the checked ones".
+      const bare = adoption.found.length === 0;
       const plan = planInit(root, {
         ...(args.schema === undefined ? {} : { schema: args.schema }),
         ...(args.alias === undefined ? {} : { alias: args.alias }),
         ...(environments === undefined ? {} : { environments }),
+        ...(bare && args.yes === true ? { yes: true } : {}),
       });
 
-      // No terminal is not a reason to guess: it is a reason to take the
-      // defaults and say what they were, so a CI log carries the decisions.
-      const asked = process.stdin.isTTY === true && args.yes !== true && environments === undefined;
-      const decisions = asked ? await askOnTty(plan) : plan.decisions;
-      if (decisions === undefined) {
-        write(["Nothing written. Re-run `penv init` when you want to scaffold."]);
+      const tty = process.stdin.isTTY === true;
+      if (bare) {
+        // No terminal is not a reason to guess: it is a reason to take the
+        // defaults and say what they were, so a CI log carries the decisions.
+        await scaffoldOnly(root, plan, tty && args.yes !== true && environments === undefined);
         return;
       }
-      if (!asked) {
-        write([...plan.notes, ""]);
+      if (args.yes === true) {
+        await cutoverWithYes(root, plan, adoption);
+        return;
       }
-      write(
-        renderInit(
-          runInit({
-            cwd: root,
-            decisions,
-            ...(plan.detected && { framework: plan.detected.name }),
-          }),
-        ),
-      );
+      if (!tty) {
+        // A cutover moves the developer's files, so it is never taken by a
+        // script that did not ask for it. The plan is printed; nothing is done.
+        write([...renderSelection(adoption), "penv found dotenv files to migrate."]);
+        write([tip(out.cyan("penv init --yes"))]);
+        return;
+      }
+      await cutoverInteractively(root, plan, adoption);
     });
   },
 });
+
+/** `penv init undo` — the only positional this command takes. */
+function runUndoAction(root: string, action: string): void {
+  if (action !== "undo") {
+    throw new PenvError(
+      "INIT_UNKNOWN_ACTION",
+      `\`penv init ${action}\` is not something init does`,
+      "Run `penv init undo` to put back the dotenv files of the last cutover.",
+    );
+  }
+  const result = runUndo({ cwd: root });
+  write([
+    ...formatSteps(
+      result.restored.map((name) => ({
+        glyph: CHECK,
+        text: `Restored ${name}`,
+        note: `from ${ROLLBACK_DOTENV_PATH}/`,
+      })),
+    ),
+    "",
+    `${out.green(CHECK)} ${out.bold("Undone.")} Your dotenv files are back exactly as they were, and ` +
+      `${CUTOVER_PATH} is gone.`,
+    `penv's records are still in ${RECORDS_PATH}/ — nothing penv scaffolded is yours to lose.`,
+  ]);
+}

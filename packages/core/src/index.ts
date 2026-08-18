@@ -29,7 +29,7 @@ export {
   sealValue,
   UndecryptableValueError,
 } from "./crypto.js";
-export type { DotenvEntry, DotenvParseResult } from "./dotenv.js";
+export type { DotenvDiagnostic, DotenvEntry, DotenvParseResult } from "./dotenv.js";
 export { parseDotenv, serializeDotenv } from "./dotenv.js";
 export type { Envelope } from "./envelope.js";
 export { formatEnvelope, NONCE_BYTES, parseEnvelope, TAG_BYTES } from "./envelope.js";
@@ -81,6 +81,7 @@ export {
   PENV_DIR,
   penvDir,
   RECORDS_PATH,
+  ROLLBACK_DOTENV_PATH,
   ROLLBACK_PATH,
   recordPath,
   recordsDir,

@@ -465,6 +465,61 @@ describe("a tree nothing has been pulled into", () => {
   });
 });
 
+/**
+ * PRD §6: after a cutover, a framework-active dotenv file that comes back is two
+ * live sources of configuration, and `run` refuses it before anything starts.
+ */
+describe("a dotenv file that reappeared", () => {
+  function withDotenv(name: string, contents = "DATABASE_URL=postgres://elsewhere/app\n"): string {
+    const root = makeProject();
+    writeFileSync(join(root, name), contents, "utf8");
+    return root;
+  }
+
+  it("refuses before the child starts, naming one command", async () => {
+    const root = withDotenv(".env.local");
+    const start = vi.fn(() => pending());
+
+    const error = await refusalFrom(
+      run({ cwd: root, environment: "development", command: ["node", "x.js"], start }),
+    );
+
+    expect(error.code).toBe("RUN_DOTENV_ACTIVE");
+    expect(error.message.split("\n")[0]).toBe(
+      ".env.local is active configuration again, and your framework would read it beside penv's records",
+    );
+    expect(error.remedy).toBe(
+      "Adopt it with `penv init`, or delete .env.local — its values belong in .penv/state/records/.",
+    );
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("refuses an environment-scoped file the config declares", async () => {
+    const root = withDotenv(".env.production");
+
+    const error = await refusalFrom(
+      run({ cwd: root, environment: "development", command: ["node", "x.js"] }),
+    );
+
+    // Not development's file, and still refused: the framework loads it whenever
+    // it runs as production, and which of the two is right is not penv's call.
+    expect(error.code).toBe("RUN_DOTENV_ACTIVE");
+    expect(error.message).toContain(".env.production");
+  });
+
+  /** The negative cases: documentation, and a name no framework loads. */
+  it("stays quiet for .env.example and for an undeclared environment's file", async () => {
+    const root = makeProject();
+    const out = join(root, "reported.json");
+    writeFileSync(join(root, ".env.example"), "DATABASE_URL=\n", "utf8");
+    writeFileSync(join(root, ".env.staging"), "DATABASE_URL=postgres://staging/app\n", "utf8");
+
+    await expect(
+      run({ cwd: root, environment: "development", command: reporter(out) }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+  });
+});
+
 describe("the network", () => {
   /**
    * The whole point of the command: a run reads what is already on disk. The

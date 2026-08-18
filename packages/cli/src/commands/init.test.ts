@@ -12,11 +12,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { recordsDir } from "@penvhq/core";
+import { runCommand as runCittyCommand } from "citty";
 import { afterEach, describe, expect, it } from "vitest";
 import type { InitDecisions, InitPlan, InitResult, InitTarget, PromptIo } from "./init.js";
 import {
   DEFAULT_DECISIONS,
   environmentsFromFlag,
+  initCommand,
   insertEnvAlias,
   planInit,
   promptForDecisions,
@@ -27,6 +29,7 @@ import {
 } from "./init.js";
 
 const created: string[] = [];
+const originalCwd = process.cwd();
 
 function makeDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "penv-init-"));
@@ -79,6 +82,7 @@ function read(root: string, ...path: string[]): string {
 }
 
 afterEach(() => {
+  process.chdir(originalCwd);
   for (const dir of created.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -245,6 +249,8 @@ describe("scaffolding", () => {
     expect(ignore).toContain("!*.d.ts");
     expect(ignore).toContain("!*/");
     expect(ignore).toContain("rollback/");
+    // The adoption state names one machine's bundle; `!*.json` would commit it.
+    expect(ignore).toContain("/cutover.json");
   });
 
   it("is safe to re-run", () => {
@@ -560,14 +566,19 @@ describe("environments", () => {
     expect(config).not.toContain("staging");
   });
 
-  /** `--yes` trusts penv's reading of the codebase. Infrastructure is not in the codebase. */
-  it("still declares none when the detected defaults are taken unasked", () => {
+  /**
+   * The plan itself invents nothing. `--yes` adds `development` on top of it —
+   * the machine the command was typed on, not a claim about anyone's
+   * infrastructure — and that is the command's decision, not the plan's.
+   */
+  it("proposes no environment of its own", () => {
     const root = makeProject(NEXT, { src: true });
 
     const plan = planFor(root);
 
     expect(plan.decisions.environments).toEqual([]);
     expect(plan.decisions.schemaFile).toBe("src/env.ts");
+    expect(plan.decisions.defaultEnvironment).toBeUndefined();
   });
 
   /** An empty whitelist is a decision penv made for the user, so it is explained on the spot. */
@@ -611,6 +622,44 @@ describe("environments", () => {
   /** Present-but-blank is refused, never normalized into "no answer". */
   it("refuses --env with no name rather than reading it as none", () => {
     expect(() => environmentsFromFlag("")).toThrow(/`--env` was given without a value/);
+  });
+});
+
+/**
+ * PRD §6: `--yes` on a clean project takes `development` and the filesystem
+ * provider, and never invents a deployment. The command is run for real, because
+ * where that default is applied — the command, not the plan — is the point.
+ */
+describe("`penv init --yes` on a project with nothing to adopt", () => {
+  async function initWithYes(root: string): Promise<void> {
+    process.chdir(root);
+    try {
+      await runCittyCommand(initCommand, { rawArgs: ["--yes"] });
+    } finally {
+      process.chdir(originalCwd);
+    }
+  }
+
+  it("declares development, with a provider and a default", async () => {
+    const root = makeDir();
+
+    await initWithYes(root);
+    const config = read(root, "penv.config.ts");
+
+    expect(config).toContain('environments: ["development"],');
+    expect(config).toContain('"development": { type: "@penvhq/provider-filesystem" },');
+    expect(config).toContain('defaultEnvironment: "development",');
+  });
+
+  it("invents no other environment", async () => {
+    const root = makeDir();
+
+    await initWithYes(root);
+    const config = read(root, "penv.config.ts");
+
+    for (const invented of ["production", "staging", "preview"]) {
+      expect(config).not.toContain(`"${invented}"`);
+    }
   });
 });
 

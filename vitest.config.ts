@@ -21,6 +21,15 @@ export default defineConfig({
   },
   test: {
     include: ["packages/**/*.test.ts"],
+    /**
+     * The assertions here are timing-free, but a good many tests evaluate a
+     * user's `penv.config.ts` or schema through jiti — a real transpile — and
+     * some start real child processes. Under a full parallel run those measure
+     * the machine rather than the code, and the 5s default failed a different
+     * innocent test on each run. This is the knob for that, not a licence for a
+     * test that waits on a clock.
+     */
+    testTimeout: 20_000,
     exclude: ["**/node_modules/**", "**/dist/**", "**/fixtures/**", "**/*.smoke.test.ts"],
     typecheck: {
       enabled: true,
