@@ -7,6 +7,9 @@ import {
   createEnvKeySource,
   createKeychainKeySource,
   KEY_BYTES,
+  keySourceFrom,
+  keySourceIdentifier,
+  NO_KEY_SOURCE,
   nullKeySource,
   resolveKeySource,
   setKeychain,
@@ -449,6 +452,50 @@ describe("createKeychainKeySource", () => {
  * added to core would enter the deploy tree transitively and slip past it. This
  * pins core itself.
  */
+/**
+ * The identifier a deployment artifact carries. It names *where the key lives*
+ * and nothing else, because the `keys` block does not travel with a release —
+ * and it never falls back to a source penv happens to support (invariant 15).
+ */
+describe("the key-source identifier", () => {
+  const keyed: PenvConfig = { ...config, keys: { production: prod } };
+
+  it("names the source and the id, and reads back as the same source", () => {
+    setEnv("PENV_KEY_PROD", exportedKey(KEY_BYTES));
+    const identifier = keySourceIdentifier(keyed, "production");
+
+    expect(identifier).toBe("env:prod");
+    expect(keySourceFrom(identifier, "production").lookup("prod")).toMatchObject({ kind: "found" });
+  });
+
+  it("says `none` for an environment that declares no keys, and reads back as no source", () => {
+    expect(keySourceIdentifier(config, "production")).toBe(NO_KEY_SOURCE);
+
+    // Never `absent`: penv was not told where to look, so it has not looked.
+    expect(keySourceFrom(NO_KEY_SOURCE, "production").lookup("prod")).toMatchObject({
+      kind: "unavailable",
+    });
+  });
+
+  it("carries a keychain source across without turning it into an env one", () => {
+    const identifier = keySourceIdentifier(
+      { ...config, keys: { production: { source: "keychain", id: "prod" } } },
+      "production",
+    );
+
+    expect(identifier).toBe("keychain:prod");
+    expect(keySourceFrom(identifier, "production").type).toBe("keychain");
+  });
+
+  it("refuses an identifier it does not recognise rather than reaching for any key", () => {
+    setEnv("PENV_KEY_PROD", exportedKey(KEY_BYTES));
+
+    for (const identifier of ["vault:prod", "env", "env:", "prod", ""]) {
+      expect(() => keySourceFrom(identifier, "production")).toThrow(PenvError);
+    }
+  });
+});
+
 describe("the native-free invariant core depends on", () => {
   it("declares no native or keychain dependency in @penvhq/core", () => {
     const manifest: unknown = JSON.parse(
