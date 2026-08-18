@@ -134,7 +134,9 @@ preflight and is ISSUE-07's to write (a `prepare` in `commands/run.ts` is where 
 `--source snapshot` refuses by naming the artifact feature, for ISSUE-09 to replace. Nothing was
 needed from `packages/launcher`.
 
-**Test-suite note.** Three full `pnpm test` runs: two green, one in which two unrelated jiti-heavy
-files (`project.test.ts`, `doctor.sink.test.ts`) hit the 5s per-test timeout under the added CPU
-load of this issue's real-child spawns. Both pass alone and in the two green runs; the assertions
-are timing-free, so this reads as machine load rather than a new dependency between them.
+**Test-suite note.** Six full `pnpm test` runs: four green, and two in which a handful of unrelated
+jiti-heavy tests (`project.test.ts`, `doctor.sink.test.ts`) hit the 5s per-test timeout. One of the
+two was demonstrably a second suite running in parallel on the same four cores. Their assertions are
+timing-free and they pass alone, so this is machine load meeting a 5s default, not a new dependency
+— but this issue's tests do add real child processes and a dozen more schema evaluations to the run,
+so the margin is thinner than it was. If it recurs in CI, the per-test timeout is the knob.
