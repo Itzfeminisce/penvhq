@@ -12,7 +12,8 @@
       "@penvhq/provider-vault": ["./packages/providers/vault/src/index.ts"],
       "@penvhq/provider-contract": ["./packages/providers/contract/src/index.ts"],
       "@penvhq/provider-github": ["./packages/providers/github/src/index.ts"],
-      "@penvhq/cli": ["./packages/cli/src/index.ts"]
+      "@penvhq/cli": ["./packages/cli/src/index.ts"],
+      "penv": ["./packages/launcher/src/index.ts"]
     }
   },
   "include": [

@@ -16,6 +16,7 @@ export default defineConfig({
       "@penvhq/provider-contract": src("providers/contract"),
       "@penvhq/provider-github": src("providers/github"),
       "@penvhq/cli": src("cli"),
+      penv: src("launcher"),
     },
   },
   test: {
