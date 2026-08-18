@@ -88,6 +88,18 @@ function manifestText(options: { format?: number; extension?: boolean } = {}): s
   )}\n`;
 }
 
+/** A manifest whose one extension entry pins a number, written past the serializer. */
+function brokenEntryManifest(): string {
+  return `${JSON.stringify(
+    {
+      ...(JSON.parse(manifestText()) as Record<string, unknown>),
+      extensions: { [EXTENSION_PIN.name]: { version: 9, integrity: EXTENSION_PIN.integrity } },
+    },
+    null,
+    2,
+  )}\n`;
+}
+
 function projectAt(manifest = manifestText()): string {
   const root = scratch("penv-launch-project-");
   const file = join(root, ...MANIFEST_PATH.split("/"));
@@ -652,6 +664,42 @@ describe("penv install", () => {
     expect(await runLauncher(test.options)).toBe(0);
     expect(test.asked).toEqual([]);
     expect(test.out).toEqual(["✓ @penvhq/cli 0.9.0 already installed"]);
+  });
+
+  /**
+   * `penv install` is the remedy every missing-package refusal names, so it has
+   * to run against a manifest holding the entry that refused. It installs what it
+   * can read and names the `penv add` for what it cannot.
+   */
+  it("installs around an entry it cannot read, and names the add that rewrites it", async () => {
+    const home = scratch("penv-home-");
+    const test = harness({
+      argv: ["install"],
+      cwd: projectAt(brokenEntryManifest()),
+      home,
+      serve: REGISTRY,
+    });
+
+    expect(await runLauncher(test.options)).toBe(1);
+    expect(test.out).toEqual(["✓ @penvhq/cli 0.9.0 installed"]);
+    expect(test.err).toEqual([
+      "✗ .penv/state/manifest.json holds an extension entry penv cannot read: @penvhq/provider-vault",
+      "  → Run `penv add @penvhq/provider-vault` to rewrite that entry — it resolves the package again and records what the registry states.",
+    ]);
+  });
+
+  /** The engine pin is not an entry, and nothing about the repair path relaxes it. */
+  it("still refuses a manifest whose engine pin is wrong", async () => {
+    const test = harness({
+      argv: ["install"],
+      cwd: projectAt(manifestText().replace(`"${ENGINE_PIN.version}"`, "9")),
+      home: scratch("penv-home-"),
+      serve: REGISTRY,
+    });
+
+    expect(await runLauncher(test.options)).toBe(1);
+    expect(test.asked).toEqual([]);
+    expect(test.err[0]).toContain("`engine.version` in .penv/state/manifest.json is a number");
   });
 });
 

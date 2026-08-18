@@ -367,11 +367,21 @@ function scanForbidden(value: unknown, path: PathSegment[]): ManifestError | und
   return undefined;
 }
 
-/** The one command that rewrites whatever section the bad field sits in. */
+/**
+ * What clears the refusal, for whatever section the bad field sits in.
+ *
+ * An extension entry has a command that rewrites it. The engine pin has none —
+ * no penv command moves it — so the remedy says what to write instead of naming
+ * something that would refuse the same way when it read the same file.
+ */
 function sectionRemedy(path: readonly PathSegment[]): string {
   const [section, name] = path;
   if (section === "engine") {
-    return "Run `penv upgrade` to rewrite the engine pin.";
+    return (
+      `Restore it with \`git checkout ${MANIFEST_PATH}\`, or write the exact version and the ` +
+      `\`integrity\` npm published for that ${ENGINE_PACKAGE} release. penv runs the bytes this ` +
+      "pin names, so it will not guess one."
+    );
   }
   if (section === "extensions" && typeof name === "string") {
     return `Run \`penv add ${name}\` to rewrite that entry.`;
@@ -519,7 +529,7 @@ function validateManifest(value: unknown): Manifest {
       throw new ManifestError(
         "MANIFEST_INVALID",
         `${MANIFEST_PATH} is not a format ${MANIFEST_FORMAT} manifest`,
-        "Run `penv upgrade` to rewrite it.",
+        `Restore it with \`git checkout ${MANIFEST_PATH}\` — penv writes this file, and it is committed.`,
       );
     }
     throw toManifestError(issue, value);
