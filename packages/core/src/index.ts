@@ -67,6 +67,23 @@ export {
   setKeychain,
   validateKeys,
 } from "./keys.js";
+export type {
+  LauncherUpdate,
+  Manifest,
+  ManifestEngine,
+  ManifestExtension,
+  ManifestTrust,
+} from "./manifest.js";
+export {
+  ENGINE_PACKAGE,
+  MANIFEST_FORMAT,
+  MANIFEST_PATH,
+  ManifestError,
+  OFFICIAL_SCOPE,
+  parseManifest,
+  serializeManifest,
+  UnsupportedManifestFormatError,
+} from "./manifest.js";
 export { effectiveMeta, isRequired, isSecret, parseMeta, serializeMeta } from "./meta.js";
 export {
   accessPath,
