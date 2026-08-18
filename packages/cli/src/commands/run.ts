@@ -37,6 +37,7 @@ import {
   isSecret,
   MissingMaterializationError,
   PenvError,
+  RECORDS_PATH,
   variableName,
 } from "@penvhq/core";
 import { childEnvironment, declaredRefs, hasRemoteSource, RUN_MARKER } from "@penvhq/runtime";
@@ -44,6 +45,7 @@ import { defineCommand } from "citty";
 import type { z } from "zod";
 import type { ChildResult, StartChild } from "../child.js";
 import { noCommand, startChild } from "../child.js";
+import { activeDotenvFiles } from "../dotenv-files.js";
 import { shorthandCandidates } from "../env-flags.js";
 import type { Project } from "../project.js";
 import { openProject, targetEnvironment } from "../project.js";
@@ -217,12 +219,40 @@ interface Prepared {
   readonly stripped: readonly string[];
 }
 
+/**
+ * A dotenv file that came back after the project adopted penv (PRD §6).
+ *
+ * The framework loads `.env`, `.env.local`, `.env.<environment>` and
+ * `.env.<environment>.local` on its own, so one of them reappearing beside
+ * penv's records is two live sources of configuration — the drift adoption
+ * removed, recreated by an editor, a generator, or a teammate's paste. It is
+ * refused rather than merged: which of the two is right is not penv's to decide,
+ * and the environment the file serves is not always the one being started.
+ *
+ * `.env.example` and its kin are documentation and no framework loads them, so
+ * they are not active files and are never checked. Neither is `.env.staging` in
+ * a project that never declared `staging`: nothing loads it either.
+ */
+function assertNoActiveDotenv(project: Project): void {
+  const active = activeDotenvFiles(project.root, project.config);
+  const first = active[0];
+  if (first === undefined) {
+    return;
+  }
+  throw new PenvError(
+    "RUN_DOTENV_ACTIVE",
+    `${first.name} is active configuration again, and your framework would read it beside penv's records`,
+    `Adopt it with \`penv init\`, or delete ${first.name} — its values belong in ${RECORDS_PATH}/.`,
+  );
+}
+
 async function prepare(
   project: Project,
   environment: string,
   host: Readonly<Record<string, string | undefined>>,
   inner: string,
 ): Promise<Prepared> {
+  assertNoActiveDotenv(project);
   const check: EnvironmentCheck = await checkEnvironment(project, environment);
 
   if (!check.result.ok || check.schema === undefined) {
