@@ -20,7 +20,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { delimiter, isAbsolute, join, normalize } from "node:path";
+import { delimiter, isAbsolute, join, win32 } from "node:path";
 import { PenvError } from "@penvhq/core";
 
 /** How a child ended. Exactly one of these is meaningful, and both are forwarded. */
@@ -138,19 +138,33 @@ function resolveTarget(
   if (resolved === undefined || !/\.(cmd|bat)$/i.test(resolved)) {
     return { file: resolved ?? executable, args, verbatim: false };
   }
-  // A package-manager shim in `node_modules/.bin` re-invokes cmd on its own way
-  // through, so its arguments pass two rounds of cmd's expansion and have to
-  // survive both.
-  const shim = /(?:^|\\)node_modules\\\.bin\\[^\\]+\.cmd$/i.test(resolved);
-  const line = [
-    escapeCommand(normalize(resolved)),
-    ...args.map((argument) => escapeArgument(argument, shim)),
-  ].join(" ");
   return {
     file: env.ComSpec ?? "cmd.exe",
-    args: ["/d", "/s", "/c", `"${line}"`],
+    args: ["/d", "/s", "/c", `"${cmdCommandLine(resolved, args)}"`],
     verbatim: true,
   };
+}
+
+/** A package-manager shim, which re-invokes cmd on its own way through. */
+const SHIM = /(?:^|\\)node_modules\\\.bin\\[^\\]+\.cmd$/i;
+
+/**
+ * The one command line cmd.exe is handed, escaped so the child receives the
+ * bytes penv was given.
+ *
+ * The path is normalized first and *then* judged: `./node_modules/.bin/next.cmd`
+ * and `.\node_modules\.bin\next.cmd` are the same shim, and deciding on the
+ * un-normalized spelling would escape a forward-slash invocation once while cmd
+ * expands it twice — so an argument holding `&` would run as a command inside
+ * the shim's second round. Windows' own separator, whatever this process runs
+ * on, because this line is only ever read by cmd.exe.
+ */
+export function cmdCommandLine(resolved: string, args: readonly string[]): string {
+  const command = win32.normalize(resolved);
+  const shim = SHIM.test(command);
+  return [escapeCommand(command), ...args.map((argument) => escapeArgument(argument, shim))].join(
+    " ",
+  );
 }
 
 /** Windows' executable extensions, in the order the shell would try them. */
