@@ -693,6 +693,64 @@ describe("a schema that does not load", () => {
   });
 });
 
+/**
+ * The sealed deployment artifact is the one penv file that belongs outside the
+ * repository: it is a release input, built per environment and mounted by the
+ * container. One inside the tree is a production ciphertext a `git add` away
+ * from being permanent, so `doctor` names it.
+ */
+describe("artifact-in-tree", () => {
+  const ARTIFACT = JSON.stringify(
+    {
+      engineVersion: "0.8.0",
+      environment: "production",
+      format: 1,
+      keySource: "env:prod",
+      schemaDigest: "sha256-QpVnpJcSg7JBoZNpG3Uu0PjhLUQoYuTa7lFRZmr07jQ",
+      values: {
+        "api-url": { kind: "plain", value: "https://api.example.com", variable: "API_URL" },
+      },
+    },
+    null,
+    2,
+  );
+
+  it("fires when an artifact is sitting in the repository, wherever it sits", async () => {
+    const root = makeProject({ schema: "apiUrl: z.string()" });
+    mkdirSync(join(root, "dist"), { recursive: true });
+    // `dist` on purpose: putting an artifact there does not make a platform load
+    // it, so it is not an exception the check should carve out.
+    writeFileSync(join(root, "dist", "penv.artifact.json"), ARTIFACT, "utf8");
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+    const fired = firedFor(report.findings, "artifact-in-tree");
+
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.severity).toBe("failure");
+    expect(fired[0]?.subject).toBe("dist/penv.artifact.json");
+    expect(fired[0]?.remedy).toContain("penv artifact build");
+    expect(report.ok).toBe(false);
+  });
+
+  /** The negative case: a repository is full of JSON, and none of it is an artifact. */
+  it("stays quiet for a project's ordinary JSON", async () => {
+    const root = makeProject({
+      schema: "apiUrl: z.string()",
+      tree: {
+        "api-url.production": "https://api.example.com",
+        "api-url.json": JSON.stringify({ secret: false }),
+      },
+    });
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "app" }), "utf8");
+    writeFileSync(join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: {} }), "utf8");
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+
+    expect(firedFor(report.findings, "artifact-in-tree")).toHaveLength(0);
+    expect(severityOf(report.findings, "artifact-in-tree")).toBe("pass");
+  });
+});
+
 describe("the report", () => {
   it("prints a passing line for every check when nothing is wrong", async () => {
     const root = makeProject({
@@ -719,6 +777,7 @@ describe("the report", () => {
       "rotation-overdue",
       "rotation-stuck",
       "provider-value-drift",
+      "artifact-in-tree",
       "provider",
     ]);
     expect(report.findings.every((finding) => finding.severity === "pass")).toBe(true);

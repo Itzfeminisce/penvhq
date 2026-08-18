@@ -55,8 +55,8 @@ import type {
   ValueFile,
 } from "@penvhq/core";
 import {
-  accessPath,
   ARTIFACT_BUILD_COMMAND,
+  accessPath,
   assertNever,
   effectiveMeta,
   formatValueFile,
