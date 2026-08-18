@@ -1,6 +1,6 @@
 {
   "name": "penv",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "The stable penv launcher: it verifies the engine your project pins and hands over the command.",
   "license": "MIT",
   "type": "module",

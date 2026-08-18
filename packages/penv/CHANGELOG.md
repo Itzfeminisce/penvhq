@@ -1,5 +1,45 @@
 # @penvhq/penv
 
+## 0.9.0
+
+### Minor Changes
+
+- 7ad42ba: `penv init` is a complete dotenv cutover.
+
+  It lists the dotenv files it found, preselects the development cascade, and adopts the ones you choose — all of them or none. Selecting an environment-scoped file is what declares that environment; `.env` alone declares nothing, so init asks which environment those values are for rather than inventing one. The draft schema it writes is the weakest shape every adopted environment satisfies: a field all of them carry starts required, a field missing from any starts optional, and requiredness is never inferred per environment. When the development cascade is adopted, `defaultEnvironment: "development"` is written down, so the daily command is `penv run -- pnpm dev`.
+
+  Everything is preflighted before anything moves: the selection, the environments it declares, every framework-discoverable file in those cascades, every variable name, the generated variable each maps to, the draft, and the dependency install. A failed preflight changes nothing and never claims a partial migration. The runtime dependency is installed at the engine's exact version with the project's own package manager, and only after the exact `package.json` and lockfile change is shown; a declined or failed install performs no cutover. init then imports, validates every adopted environment, and only then moves the prior dotenv files into one ignored bundle under `.penv/state/rollback/dotenv/`, recorded in `.penv/state/cutover.json`.
+
+  `penv init undo` restores those files under their exact names. `penv cleanup` is the new command that closes the migration, removing the bundle and its cutover state and nothing else. A second migration refuses while a bundle is unresolved. After a cutover, `penv run` refuses a framework-active `.env`, `.env.local`, `.env.<environment>` or `.env.<environment>.local` that reappears, so a later edit cannot quietly recreate a second source of configuration; `.env.example` and its documentation siblings are excluded.
+
+  init never edits `package.json` scripts — it ends by showing the `penv run --` line to type — and it creates no keys, seals nothing, builds no artifact and authenticates with no provider.
+
+  `@penvhq/penv` no longer declares a `penv` bin. It is the typed runtime surface an adopted project depends on; the global `penv` is the launcher's.
+
+- d36fbf4: **Breaking:** the embedded snapshot is removed. `penv.snapshot.ts` is no longer generated, read, or checked.
+
+  `penv snapshot` is gone, and so are the `snapshot` and `source` options on `load()`, the `PenvSnapshot` and `LoadSource` types, and the `doctor` checks `snapshot-stale` and `bundle-invisible-plaintext`. `load()` resolves from `penv.config.ts` and the `.penv/` tree, and nothing else: a project with no config file fails by name instead of falling back. `penv init` scaffolds an `env.ts` that calls `load(schema)`.
+
+  A committed `penv.snapshot.ts` left over from 0.8 is an inert file — nothing reads it, so delete it and drop its `import` from your `env.ts`. Deployments that resolved from the snapshot need a build step that materializes configuration for the target instead.
+
+- 0a1601d: `penv run -- <command>` is how an adopted project starts.
+
+  It resolves the parameter tree, checks it against your schema, builds a child environment penv owns, and starts the exact command after `--` — argument boundaries, pipes, `pre*`/`post*` hooks, exit code and signals all stay the child's. `--source` defaults to `project`, so the daily command is `penv run -- pnpm dev`; `snapshot` names the sealed artifact and is always spelled out. A run contacts no provider: what is already materialised locally is the whole input, and `--watch` is the one opt-in mode allowed to sync, where a failed pull or a failed check leaves the running child exactly where it was.
+
+  The child environment is penv's: every schema-declared parameter is written under its generated name, or deleted when the schema excuses it and nothing resolved, so a stale export cannot stand in for a value penv resolved to nothing. Unrelated variables are untouched; penv's keys, the declared providers' credentials, and its own control variables never reach the child. An outer `penv run` meeting an in-script one is refused, naming both.
+
+  `penv.config.ts` takes a new `defaultEnvironment`, checked against the environment whitelist, that `run`, `pull`, `push`, `set` and every other environment-taking command fall back to when `--env` is absent. It is a declared decision, never inference — CI still names `--env`. With neither the flag nor the key, the refusal names both.
+
+  Two refusals are new, and both name one next command: an application started outside `penv run` is told the missing parameter and the `penv run --` line to start it with, and an environment whose provider holds values nothing has pulled yet is told `Run: penv pull`.
+
+- 6917016: **Breaking:** the parameter tree moves to `.penv/state/records/`, and penv reads only that layout.
+
+  `.penv/state/` is where penv keeps what it manages — the records, the committed `.gitignore` that draws the safety boundary, and the manifest and extension declarations that follow. `.penv/env.ts` stays yours, at the same path. Records keep their names, so the filename grammar, the cascade, meta and the AAD that binds a ciphertext to its address are all unchanged.
+
+  Run `penv migrate` to convert an existing project: it previews the move, converts on approval, and leaves `penv.schema.ts`, `penv.config.ts` and `.penv/env.ts` byte-identical. Running it twice is a no-op that says so. Until you run it, every command — and `load()` — refuses by name rather than reading an empty tree.
+
+  `ProviderFactoryContext.root` is now the project root rather than the `.penv/` directory, so a provider package that derives paths from it should re-derive them.
+
 ## 0.8.0
 
 ### Minor Changes
