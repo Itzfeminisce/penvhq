@@ -1,5 +1,18 @@
 # penv
 
+## 0.9.3
+
+### Patch Changes
+
+- cd2d376: The launcher's engine pin is taken from the registry, not predicted. Tarball bytes proved
+  non-reproducible across packers and machines — 0.9.1 and 0.9.2 both pinned bytes npm does not
+  hold, and the release's own verification refused them. The release now publishes the engine
+  first, reads back the integrity npm recorded, and only then builds and publishes the launcher,
+  so the pin is true by construction.
+- Updated dependencies [cd2d376]
+  - @penvhq/cli@0.9.3
+  - @penvhq/core@0.9.3
+
 ## 0.9.2
 
 ### Patch Changes
