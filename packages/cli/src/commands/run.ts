@@ -29,24 +29,39 @@
  */
 
 import type { FSWatcher } from "node:fs";
-import { existsSync, watch } from "node:fs";
+import { existsSync, readFileSync, watch } from "node:fs";
 import { basename, dirname } from "node:path";
-import type { ParameterRef, Resolution } from "@penvhq/core";
+import type { Artifact, ParameterRef, Resolution } from "@penvhq/core";
 import {
+  ARTIFACT_BUILD_COMMAND,
+  assertArtifactFor,
   isPublicVariable,
   isSecret,
+  keySourceFrom,
   MissingMaterializationError,
+  openSealed,
+  parseArtifact,
   PenvError,
   RECORDS_PATH,
+  UndecryptableValueError,
   variableName,
 } from "@penvhq/core";
-import { childEnvironment, declaredRefs, hasRemoteSource, RUN_MARKER } from "@penvhq/runtime";
+import type { DeliveredValue } from "@penvhq/runtime";
+import {
+  childEnvironment,
+  declaredRefs,
+  deliveredEnvironment,
+  hasRemoteSource,
+  RUN_MARKER,
+  SNAPSHOT_VARIABLE,
+} from "@penvhq/runtime";
 import { defineCommand } from "citty";
 import type { z } from "zod";
 import type { ChildResult, StartChild } from "../child.js";
 import { noCommand, startChild } from "../child.js";
 import { activeDotenvFiles } from "../dotenv-files.js";
 import { shorthandCandidates } from "../env-flags.js";
+import { engineVersion } from "../install.js";
 import type { Project } from "../project.js";
 import { openProject, targetEnvironment } from "../project.js";
 import { guard, heading, reportError, writeError } from "../ui.js";
@@ -105,8 +120,15 @@ export interface RunResult {
  * child carries in {@link RUN_MARKER}, so a nested `penv run` can name the
  * wrapper it found itself inside.
  */
-function invocationOf(environment: string | undefined, command: readonly string[]): string {
-  const flags = environment === undefined ? "" : ` --env ${environment}`;
+function invocationOf(
+  environment: string | undefined,
+  command: readonly string[],
+  source?: RunSource,
+): string {
+  const named = environment === undefined ? "" : ` --env ${environment}`;
+  // Only `snapshot` is spelled out: `project` is the default, so writing it would
+  // teach the reader a flag they never have to type.
+  const flags = named + (source === "snapshot" ? " --source snapshot" : "");
   const parts = command.map((part) => (part.includes(" ") ? JSON.stringify(part) : part));
   return `penv run${flags} -- ${parts.join(" ")}`;
 }
@@ -132,17 +154,10 @@ function assertNotNested(host: Readonly<Record<string, string | undefined>>, inn
   );
 }
 
-/** `--source snapshot` names a real thing this engine cannot open yet (ISSUE-09). */
-function assertSource(source: string, environment: string | undefined, inner: string): RunSource {
-  if (source === "project") {
-    return "project";
-  }
-  if (source === "snapshot") {
-    throw new PenvError(
-      "RUN_SOURCE_SNAPSHOT",
-      "`--source snapshot` reads a sealed deployment artifact, which this engine cannot build or open",
-      `Start from the project tree with \`${inner}\`, and build the artifact when \`penv artifact build\` ships.`,
-    );
+/** The two sources a run reads. Anything else is refused on what it says, not on what it finds. */
+function assertSource(source: string, inner: string): RunSource {
+  if (source === "project" || source === "snapshot") {
+    return source;
   }
   throw new PenvError(
     "RUN_SOURCE_UNKNOWN",
@@ -159,12 +174,16 @@ function assertSource(source: string, environment: string | undefined, inner: st
  * that will inline it into a browser bundle, permanently. penv is the only thing
  * holding both halves — meta says secret, the generated name says public — so it
  * is the only thing that can stop it.
+ *
+ * `penv artifact build` makes the same refusal for the same reason: the artifact
+ * is the other delivery, and the container reading it has no meta to check.
+ * `retry` is the command that was refused, so each caller names its own.
  */
-async function assertNoPublicSecret(
+export async function assertNoPublicSecret(
   project: Project,
   environment: string,
   refs: readonly ParameterRef[],
-  inner: string,
+  retry: string,
 ): Promise<void> {
   const prefixes = project.config.publicPrefixes ?? [];
   if (prefixes.length === 0) {
@@ -183,7 +202,7 @@ async function assertNoPublicSecret(
     throw new PenvError(
       "RUN_PUBLIC_SECRET",
       `The secret ${parameter} maps to ${variable}, which the \`${prefix}\` prefix publishes to the browser`,
-      `Rename the parameter, or drop \`secret\` from its meta if it is not one — then \`${inner}\`.`,
+      `Rename the parameter, or drop \`secret\` from its meta if it is not one — then \`${retry}\`.`,
     );
   }
 }
@@ -285,6 +304,103 @@ async function prepare(
 }
 
 /**
+ * The artifact a `--source snapshot` run reads, and only that.
+ *
+ * `PENV_SNAPSHOT` is the whole of the input. There is no search, no default
+ * path, and no fall back to the project tree: a container that was supposed to
+ * mount an artifact and did not must say so, not quietly start from whatever
+ * happens to be on disk beside it.
+ */
+function snapshotPath(host: Readonly<Record<string, string | undefined>>): string {
+  const path = host[SNAPSHOT_VARIABLE]?.trim();
+  if (path === undefined || path.length === 0) {
+    throw new PenvError(
+      "RUN_SNAPSHOT_UNSET",
+      `\`--source snapshot\` reads the sealed artifact ${SNAPSHOT_VARIABLE} names, and ${SNAPSHOT_VARIABLE} is not set`,
+      `Build one with \`${ARTIFACT_BUILD_COMMAND}\` and point ${SNAPSHOT_VARIABLE} at it.`,
+    );
+  }
+  return path;
+}
+
+function readSnapshot(path: string): string {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    throw new PenvError(
+      "RUN_SNAPSHOT_MISSING",
+      `${SNAPSHOT_VARIABLE} names ${path}, and penv cannot read a sealed artifact there`,
+      `Point ${SNAPSHOT_VARIABLE} at the artifact your release mounted — \`${ARTIFACT_BUILD_COMMAND}\` writes one.`,
+    );
+  }
+}
+
+/**
+ * The artifact's values, opened in memory.
+ *
+ * The key source is the identifier the artifact carries and nothing else — the
+ * `keys` block never travelled, because provider and key *configuration* is
+ * exactly what an artifact must not hold. A ciphertext that will not open is a
+ * refusal here, before the child exists: the alternative is starting an
+ * application with a variable silently missing.
+ */
+function openSnapshot(artifact: Artifact, path: string): DeliveredValue[] {
+  const keys = keySourceFrom(artifact.keySource, artifact.environment);
+  const values: DeliveredValue[] = [];
+  for (const parameter of Object.keys(artifact.values).sort()) {
+    const entry = artifact.values[parameter];
+    if (entry === undefined || entry.kind === "absent") {
+      values.push({ parameter, variable: entry?.variable ?? "" });
+      continue;
+    }
+    if (entry.kind === "plain") {
+      values.push({ parameter, variable: entry.variable, value: entry.value });
+      continue;
+    }
+    const opened = openSealed(entry.address, entry.sealed, keys);
+    if (opened.kind === "failed") {
+      throw new UndecryptableValueError(parameter, artifact.environment, entry.address, {
+        ...opened.failure,
+        detail: `${opened.failure.detail} (from ${path})`,
+      });
+    }
+    values.push({ parameter, variable: entry.variable, value: opened.value });
+  }
+  return values.filter(({ variable }) => variable.length > 0);
+}
+
+/**
+ * A run from a sealed artifact: read, verify, open, inject.
+ *
+ * No project is opened, and that is the point rather than an optimisation.
+ * There is no `penv.config.ts`, no records tree and no provider package in a
+ * release container, so this path reaches for none of them — and the artifact is
+ * verified whole (format, engine, environment, delivery digest) before a single
+ * ciphertext is opened.
+ */
+function prepareFromSnapshot(
+  host: Readonly<Record<string, string | undefined>>,
+  environment: string | undefined,
+  command: readonly string[],
+): { readonly environment: string; readonly prepared: Prepared } {
+  const path = snapshotPath(host);
+  const artifact = parseArtifact(readSnapshot(path), path);
+  assertArtifactFor(
+    artifact,
+    { engineVersion: engineVersion(), ...(environment === undefined ? {} : { environment }) },
+    path,
+  );
+
+  const { env, written, deleted, stripped } = deliveredEnvironment({
+    host,
+    environment: artifact.environment,
+    values: openSnapshot(artifact, path),
+    invocation: invocationOf(artifact.environment, command, "snapshot"),
+  });
+  return { environment: artifact.environment, prepared: { env, written, deleted, stripped } };
+}
+
+/**
  * `--watch`'s sync, and whether it worked.
  *
  * Reported and swallowed rather than thrown: a provider that will not answer
@@ -367,9 +483,32 @@ export async function runRun(options: RunOptions): Promise<RunResult> {
   // Before anything is opened or read: a nested run is refused on what it is,
   // not on what the project turns out to hold.
   assertNotNested(host, inner);
-  const source = assertSource(options.source ?? "project", options.environment, inner);
+  const source = assertSource(options.source ?? "project", inner);
   if (command.length === 0) {
     throw noCommand();
+  }
+
+  if (source === "snapshot") {
+    // `--watch` synchronises a tree from a provider, and neither exists here. It
+    // is refused rather than ignored: a flag that quietly does nothing is a
+    // developer waiting for a restart that is never coming.
+    if (options.watch === true) {
+      throw new PenvError(
+        "RUN_SNAPSHOT_WATCH",
+        "`--watch` re-syncs the project tree, and a run from a sealed artifact has no tree to watch",
+        "Drop `--watch` — an artifact is built once and read unchanged. Watch the project instead: `penv run --watch -- <command>`.",
+      );
+    }
+    // A release container has no project to open, so none is.
+    const snapshot = prepareFromSnapshot(host, options.environment, command);
+    return startAndReport(
+      snapshot.environment,
+      source,
+      command,
+      snapshot.prepared,
+      options.start ?? startChild,
+      options.cwd,
+    );
   }
 
   const project = openProject(options.cwd);
@@ -383,20 +522,12 @@ export async function runRun(options: RunOptions): Promise<RunResult> {
   }
 
   const first = await prepare(project, environment, host, invocation);
-  // penv's own line goes to stderr: the child owns stdout, and a run whose
-  // output is piped somewhere must deliver the child's bytes and nothing else.
-  writeError([
-    heading(
-      `penv run · ${environment}`,
-      `${source} · ${first.written} variables${first.deleted === 0 ? "" : ` · ${first.deleted} deleted`}`,
-    ),
-  ]);
+  if (options.watch !== true) {
+    return startAndReport(environment, source, command, first, start, project.root);
+  }
+  announce(environment, source, first);
 
   let current = start({ command, env: first.env, cwd: project.root });
-  if (options.watch !== true) {
-    const ended = await current.ended;
-    return report(environment, source, command, first, ended, 0);
-  }
 
   let restarts = 0;
   let restarting: Promise<void> | undefined;
@@ -452,6 +583,33 @@ export async function runRun(options: RunOptions): Promise<RunResult> {
     closed = true;
     changed.close();
   }
+}
+
+/**
+ * penv's one line, on stderr: the child owns stdout, and a run whose output is
+ * piped somewhere must deliver the child's bytes and nothing else.
+ */
+function announce(environment: string, source: RunSource, prepared: Prepared): void {
+  writeError([
+    heading(
+      `penv run · ${environment}`,
+      `${source} · ${prepared.written} variables${prepared.deleted === 0 ? "" : ` · ${prepared.deleted} deleted`}`,
+    ),
+  ]);
+}
+
+/** The plain run, whichever source prepared it: announce, start, wait, report. */
+async function startAndReport(
+  environment: string,
+  source: RunSource,
+  command: readonly string[],
+  prepared: Prepared,
+  start: StartChild,
+  cwd: string,
+): Promise<RunResult> {
+  announce(environment, source, prepared);
+  const ended = await start({ command, env: prepared.env, cwd }).ended;
+  return report(environment, source, command, prepared, ended, 0);
 }
 
 function report(

@@ -22,9 +22,9 @@
  */
 
 import type { ParameterRef, PenvConfig } from "@penvhq/core";
-import { own } from "@penvhq/core";
+import { deliveryNames, own, PenvError } from "@penvhq/core";
 import type { z } from "zod";
-import { inject } from "./inject.js";
+import { declaredRefs, inject } from "./inject.js";
 
 /**
  * The variable a `penv run` leaves in its child so a nested `penv run` can see
@@ -32,7 +32,7 @@ import { inject } from "./inject.js";
  * able to name both.
  *
  * It is penv talking to penv. The application never reads it — the bridge takes
- * it out of `process.env` on the first `load` (see {@link consumeRunMarker}),
+ * it out of `process.env` on the first `load` (see {@link consumeDelivery}),
  * while a nested penv, which never loads a schema before checking, still finds
  * it.
  */
@@ -42,12 +42,34 @@ export const RUN_MARKER = "PENV_RUN";
 export const ENVIRONMENT_VARIABLE = "PENV_ENV";
 
 /**
+ * The delivery contract this run wrote: parameter id → the variable it was
+ * written under, as JSON.
+ *
+ * Names only, never values — it is the one thing the application's bridge cannot
+ * work out for itself. The bridge validates the *injected* environment, so it
+ * must know which variable each schema parameter arrived in, and an `override`
+ * in `penv.config.ts` makes that unguessable. A container running from an
+ * artifact has no config to read, so the map travels with the environment
+ * instead. Like {@link RUN_MARKER}, it is penv talking to penv and the bridge
+ * takes it back out of `process.env` on the first `load`.
+ */
+export const DELIVERY_VARIABLE = "PENV_DELIVERY";
+
+/** Where a `--source snapshot` run reads its artifact from. Read once, in the parent. */
+export const SNAPSHOT_VARIABLE = "PENV_SNAPSHOT";
+
+/**
  * penv's internal channels. They are penv's business with itself, and an
  * application that inherited one would be reading a message addressed to
  * somewhere else — `PENV_SNAPSHOT` above all, whose whole point is that the
  * artifact is opened once, in the parent, and never again.
  */
-const CONTROL_VARIABLES = [RUN_MARKER, "PENV_SCHEMA_HARVEST", "PENV_SNAPSHOT"] as const;
+const CONTROL_VARIABLES = [
+  RUN_MARKER,
+  DELIVERY_VARIABLE,
+  "PENV_SCHEMA_HARVEST",
+  SNAPSHOT_VARIABLE,
+] as const;
 
 /** Every exported encryption key. penv unwraps keys; the application never holds one. */
 const KEY_PREFIX = "PENV_KEY_";
@@ -88,23 +110,61 @@ const PROVIDER_CREDENTIALS: Readonly<Record<string, readonly string[]>> = {
 export type Environment = Readonly<Record<string, string | undefined>>;
 
 /**
- * The variables penv removes before the application starts: its keys, the
- * declared providers' credentials, and its own control channels. Sorted, so a
- * report of what was stripped reads the same on every machine.
+ * The variables that are penv's own wherever a run reads from: its control
+ * channels and every exported key.
+ *
+ * A run from an artifact removes exactly these and no more. It declares no
+ * provider — there is no config to declare one in, and nothing in the artifact
+ * authenticates with anything — so the credentials below are not penv's to take
+ * there, and deleting a container's `AWS_ACCESS_KEY_ID` because some other
+ * project uses SSM would break an application that legitimately reads it.
  */
-export function strippedVariables(host: Environment, config: PenvConfig): string[] {
+function penvOwnVariables(host: Environment): Set<string> {
   const names = new Set<string>(CONTROL_VARIABLES);
   for (const name of Object.keys(host)) {
     if (name.startsWith(KEY_PREFIX)) {
       names.add(name);
     }
   }
+  return names;
+}
+
+/**
+ * The variables penv removes before the application starts: its keys, the
+ * declared providers' credentials, and its own control channels. Sorted, so a
+ * report of what was stripped reads the same on every machine.
+ */
+export function strippedVariables(host: Environment, config: PenvConfig): string[] {
+  const names = penvOwnVariables(host);
   for (const provider of Object.values(config.providers)) {
     for (const name of own(PROVIDER_CREDENTIALS, provider.type) ?? []) {
       names.add(name);
     }
   }
   return [...names].sort();
+}
+
+/** Removes `names` from `child`, reporting the ones that were actually there. */
+function strip(child: Record<string, string | undefined>, names: readonly string[]): string[] {
+  const stripped: string[] = [];
+  for (const name of names) {
+    if (name in child) {
+      stripped.push(name);
+    }
+    delete child[name];
+  }
+  return stripped;
+}
+
+/** Drops the `undefined` holes a delete leaves, so the child gets a plain record. */
+function compact(child: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(child)) {
+    if (value !== undefined) {
+      env[name] = value;
+    }
+  }
+  return env;
 }
 
 export interface ChildEnvironmentInput {
@@ -142,13 +202,7 @@ export function childEnvironment(input: ChildEnvironmentInput): ChildEnvironment
   // First: penv's own variables leave, including any marker this process
   // inherited. Doing it after the stamp below would delete the marker the child
   // is supposed to carry.
-  const stripped: string[] = [];
-  for (const name of strippedVariables(input.host, input.config)) {
-    if (name in child) {
-      stripped.push(name);
-    }
-    delete child[name];
-  }
+  const stripped = strip(child, strippedVariables(input.host, input.config));
 
   // Then: the schema's parameters, written or deleted — `inject`'s exclusivity,
   // aimed at the child rather than at this process.
@@ -160,45 +214,159 @@ export function childEnvironment(input: ChildEnvironmentInput): ChildEnvironment
     target: child,
   });
 
-  // Last: the environment penv resolved, and the marker. A nested `penv run`
-  // reads the marker; the bridge reads the environment and then takes the marker
-  // back out, so the application sees neither penv talking to penv.
-  child[ENVIRONMENT_VARIABLE] = input.environment;
-  child[RUN_MARKER] = input.invocation;
+  stampControl(child, {
+    environment: input.environment,
+    invocation: input.invocation,
+    names: deliveryNames(declaredRefs(input.schema), input.config),
+  });
+  return { env: compact(child), written, deleted, stripped };
+}
 
-  const env: Record<string, string> = {};
-  for (const [name, value] of Object.entries(child)) {
-    if (value !== undefined) {
-      env[name] = value;
-    }
-  }
-  return { env, written, deleted, stripped };
+/** One delivery mapping as an artifact-backed run hands it over: opened, or resolved to nothing. */
+export interface DeliveredValue {
+  /** The parameter id, so the bridge can map the variable back to its schema key. */
+  readonly parameter: string;
+  readonly variable: string;
+  /** Absent when the artifact carries no non-local winner — the variable is deleted. */
+  readonly value?: string;
+}
+
+export interface DeliveredEnvironmentInput {
+  readonly host: Environment;
+  readonly environment: string;
+  /** Every schema-declared delivery mapping the artifact carries, already opened. */
+  readonly values: readonly DeliveredValue[];
+  readonly invocation: string;
 }
 
 /**
- * The outer `penv run` invocation this process was started by, taken out of
- * `process.env` as it is read.
+ * The child environment for a run from a sealed artifact.
+ *
+ * The same environment `childEnvironment` builds, reached without a schema, a
+ * config, or a tree — because in a container there are none. The artifact
+ * already *is* the delivery contract: it names every schema-declared mapping and
+ * says whether it has a value, so exclusivity is carried rather than recomputed,
+ * and the same variable is written or deleted here as would be from the project.
+ */
+export function deliveredEnvironment(input: DeliveredEnvironmentInput): ChildEnvironment {
+  const child: Record<string, string | undefined> = { ...input.host };
+  const stripped = strip(child, [...penvOwnVariables(input.host)].sort());
+
+  let written = 0;
+  let deleted = 0;
+  for (const { variable, value } of input.values) {
+    if (value !== undefined) {
+      child[variable] = value;
+      written += 1;
+      continue;
+    }
+    if (variable in child) {
+      delete child[variable];
+      deleted += 1;
+    }
+  }
+
+  stampControl(child, {
+    environment: input.environment,
+    invocation: input.invocation,
+    names: Object.fromEntries(input.values.map(({ parameter, variable }) => [parameter, variable])),
+  });
+  return { env: compact(child), written, deleted, stripped };
+}
+
+/**
+ * Last: the environment penv resolved, the delivery contract, and the marker.
+ *
+ * Stamped after the strip, never before — an inherited marker must not survive
+ * into the child pretending to be this run, and the one this run writes must not
+ * be swept away by its own strip. A nested `penv run` reads the marker; the
+ * bridge reads the environment and the contract, then takes both control
+ * variables back out, so the application sees none of penv talking to penv.
+ */
+function stampControl(
+  child: Record<string, string | undefined>,
+  what: {
+    readonly environment: string;
+    readonly invocation: string;
+    readonly names: Readonly<Record<string, string>>;
+  },
+): void {
+  child[ENVIRONMENT_VARIABLE] = what.environment;
+  child[DELIVERY_VARIABLE] = JSON.stringify(what.names);
+  child[RUN_MARKER] = what.invocation;
+}
+
+/** What `penv run` told this process about itself, once the bridge has taken it. */
+export interface Delivery {
+  /** The `penv run` that started this process, or absent when nothing did. */
+  readonly invocation: string | undefined;
+  /** Parameter id → the variable it was delivered under. Empty for a direct start. */
+  readonly names: Readonly<Record<string, string>>;
+}
+
+/**
+ * What `penv run` left for this process, taken out of `process.env` as it is
+ * read.
  *
  * Read once and remembered: the bridge asks on every `load`, and the answer must
- * not change because the first call cleared the variable. Taking it out is what
- * makes the marker penv's alone — a nested `penv run` checks before any schema
- * loads and still sees it, while the application, whose first act is the bridge,
- * never does.
+ * not change because the first call cleared the variables. Taking them out is
+ * what makes them penv's alone — a nested `penv run` checks before any schema
+ * loads and still sees the marker, while the application, whose first act is the
+ * bridge, never does.
  */
-let consumed: { readonly invocation: string | undefined } | undefined;
+let consumed: Delivery | undefined;
 
-export function consumeRunMarker(env: Record<string, string | undefined> = process.env): {
-  readonly invocation: string | undefined;
-} {
+export function consumeDelivery(env: Record<string, string | undefined> = process.env): Delivery {
   if (consumed === undefined) {
     const invocation = env[RUN_MARKER];
+    const contract = env[DELIVERY_VARIABLE];
     delete env[RUN_MARKER];
-    consumed = { invocation };
+    delete env[DELIVERY_VARIABLE];
+    consumed = { invocation, names: parseNames(contract) };
   }
   return consumed;
 }
 
-/** Test seam: forgets the consumed marker, so a test can set up another process's view. */
-export function resetRunMarker(): void {
+/**
+ * The delivery contract, read back.
+ *
+ * penv wrote it one line earlier in the same run, so anything that is not a flat
+ * map of strings is a channel that was tampered with rather than a format to
+ * tolerate — and guessing the names instead would deliver a schema parameter
+ * from whatever variable happened to match.
+ */
+function parseNames(contract: string | undefined): Readonly<Record<string, string>> {
+  if (contract === undefined) {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contract);
+  } catch {
+    parsed = undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw invalidDelivery();
+  }
+  const names: Record<string, string> = {};
+  for (const [id, variable] of Object.entries(parsed)) {
+    if (typeof variable !== "string") {
+      throw invalidDelivery();
+    }
+    names[id] = variable;
+  }
+  return names;
+}
+
+function invalidDelivery(): PenvError {
+  return new PenvError(
+    "DELIVERY_CONTRACT_INVALID",
+    `${DELIVERY_VARIABLE} does not hold the delivery contract \`penv run\` writes`,
+    `Unset ${DELIVERY_VARIABLE} and start the application with \`penv run\` — it is penv's own channel, not a variable to set.`,
+  );
+}
+
+/** Test seam: forgets what was consumed, so a test can set up another process's view. */
+export function resetDelivery(): void {
   consumed = undefined;
 }

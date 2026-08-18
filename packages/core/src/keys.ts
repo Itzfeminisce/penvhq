@@ -276,6 +276,59 @@ export function resolveKeySource(config: PenvConfig, environment: string): KeySo
   );
 }
 
+/** What an artifact's `keySource` says when the environment declares no `keys` block. */
+export const NO_KEY_SOURCE = "none";
+
+/**
+ * The environment's key source, written as the one identifier a deployment
+ * artifact carries — `env:prod`, `keychain:prod`, or `none`.
+ *
+ * It names *where the key lives*, never the key. That is what lets an artifact
+ * be read in a container with no `penv.config.ts`: the `keys` block does not
+ * travel, so the artifact says which door to knock on and nothing else.
+ * {@link resolveKeySource} decides, here as everywhere, so an unrecognised
+ * source refuses at build time instead of producing an artifact that names a
+ * source nothing can read.
+ */
+export function keySourceIdentifier(config: PenvConfig, environment: string): string {
+  const source = resolveKeySource(config, environment);
+  const declared = own(config.keys, environment);
+  if (declared === undefined) {
+    return NO_KEY_SOURCE;
+  }
+  return `${source.type}${SOURCE_SEPARATOR}${declared.id}`;
+}
+
+const SOURCE_SEPARATOR = ":";
+
+/**
+ * The key source an artifact's identifier names.
+ *
+ * The mirror of {@link keySourceIdentifier}, and it falls back to nothing: an
+ * identifier this penv does not recognise refuses rather than reaching for
+ * whatever key happens to be exported (invariant 15).
+ */
+export function keySourceFrom(identifier: string, environment: string): KeySource {
+  if (identifier === NO_KEY_SOURCE) {
+    return nullKeySource(environment);
+  }
+  const [source, id] = identifier.split(SOURCE_SEPARATOR);
+  if (source !== undefined && id !== undefined && KEY_ID.test(id)) {
+    if (source === "env") {
+      return createEnvKeySource({ source: "env", id });
+    }
+    if (source === "keychain") {
+      return createKeychainKeySource({ source: "keychain", id });
+    }
+  }
+  throw new PenvError(
+    "KEY_SOURCE_UNSUPPORTED",
+    `\`${identifier}\` names no key source penv can read`,
+    `A key source is ${SOURCES.map((s) => `\`${s}:<id>\``).join(" or ")}, or \`${NO_KEY_SOURCE}\`. ` +
+      "Rebuild the artifact with the penv that reads it.",
+  );
+}
+
 /** The `id` charset. `:` is excluded because it separates the envelope's fields. */
 const KEY_ID = /^[A-Za-z0-9._-]+$/;
 

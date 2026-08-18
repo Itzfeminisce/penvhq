@@ -32,10 +32,17 @@
  *   source-of-truth provider hold different opaque values for the same address.
  *   The one drift a value-withholding destination can never report, because a
  *   record-holding provider can be read back and a projection cannot.
+ * - **artifact-in-tree** — a sealed deployment artifact is sitting inside the
+ *   repository. It is an external release input, built per environment and
+ *   mounted by the container; one in the source tree is a production ciphertext
+ *   a clone away from git history, and it is not a layout penv supports.
  *
  * Warnings are reported; failures are reported and exit non-zero.
  */
 
+import type { Dirent } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 import type {
   Meta,
   PenvConfig,
@@ -49,6 +56,7 @@ import type {
 } from "@penvhq/core";
 import {
   accessPath,
+  ARTIFACT_BUILD_COMMAND,
   assertNever,
   effectiveMeta,
   formatValueFile,
@@ -121,7 +129,8 @@ export type DoctorCheck =
   | "projection-name-drift"
   | "projection-manual-edit"
   | "projection-value-drift"
-  | "environment-flag-shadow";
+  | "environment-flag-shadow"
+  | "artifact-in-tree";
 
 export interface DoctorFinding {
   readonly check: DoctorCheck;
@@ -280,6 +289,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   }
   findings.push(...(await providerDriftFindings(project, environment, options.source)));
   findings.push(...(await projectionFindings(project, environment, options.projection)));
+  findings.push(...artifactFindings(project));
 
   findings.push({
     check: "provider",
@@ -879,6 +889,116 @@ async function projectionFindings(
     detail: "value drift between the tree and the destination is unknowable by design",
   });
   return findings;
+}
+
+/** What a scan never descends into: git's own store, and packages penv did not write. */
+const UNSCANNED_DIRS: ReadonlySet<string> = new Set([".git", "node_modules"]);
+
+/** Above this, a file is not the canonical JSON `penv artifact build` writes. */
+const ARTIFACT_SCAN_LIMIT = 1_048_576;
+
+/**
+ * Whether a file is a sealed deployment artifact, decided on its keys.
+ *
+ * Deliberately looser than {@link parseArtifact}: an artifact whose digest no
+ * longer matches, or one a newer penv wrote, is still an artifact sitting in the
+ * repository, and the whole point of the finding is that it is *there*. The
+ * cheap substring gate runs first so a repository's ordinary JSON is never
+ * parsed.
+ */
+function looksLikeArtifact(text: string): boolean {
+  if (!text.includes('"schemaDigest"')) {
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return false;
+  }
+  const keys = ["format", "environment", "engineVersion", "schemaDigest", "keySource", "values"];
+  return keys.every((key) => key in parsed);
+}
+
+/** Every `.json` file under `directory` a scan is willing to open. */
+function scannableFiles(directory: string, out: string[]): void {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (!UNSCANNED_DIRS.has(entry.name)) {
+        scannableFiles(path, out);
+      }
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith(".json")) {
+      out.push(path);
+    }
+  }
+}
+
+/**
+ * A deployment artifact inside the repository.
+ *
+ * The artifact is the one penv file that is deliberately *not* part of the
+ * project: it is built per release, holds one environment's sealed values, and
+ * is mounted by the container that runs from it. One in the source tree is a
+ * production ciphertext one `git add` away from being permanent — and `dist/` is
+ * not an exception, because putting an artifact there does not make any platform
+ * load it.
+ *
+ * The scan is bounded by what the writer produces: canonical JSON, so `.json`
+ * files only, under a megabyte, outside `.git` and `node_modules`.
+ */
+function artifactFindings(project: Project): DoctorFinding[] {
+  const files: string[] = [];
+  scannableFiles(project.root, files);
+
+  const findings: DoctorFinding[] = [];
+  for (const file of files) {
+    let text: string;
+    try {
+      if (statSync(file).size > ARTIFACT_SCAN_LIMIT) {
+        continue;
+      }
+      text = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    if (!looksLikeArtifact(text)) {
+      continue;
+    }
+    findings.push({
+      check: "artifact-in-tree",
+      severity: "failure",
+      label: "Artifact in the repository",
+      subject: relative(project.root, file).split("\\").join("/"),
+      detail: "a sealed deployment artifact is an external release input, not part of the source",
+      remedy:
+        "Delete it and build the artifact outside the repository with " +
+        `\`${ARTIFACT_BUILD_COMMAND}\`, then mount it at PENV_SNAPSHOT.`,
+    });
+  }
+
+  if (findings.length > 0) {
+    return findings;
+  }
+  return [
+    {
+      check: "artifact-in-tree",
+      severity: "pass",
+      label: "Deployment artifacts",
+      subject: "none inside the repository",
+    },
+  ];
 }
 
 /** A rough, human-facing span — the largest whole unit that fits. Never precise, and never claims to be. */

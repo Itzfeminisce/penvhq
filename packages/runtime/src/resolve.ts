@@ -1,18 +1,23 @@
 /**
- * The synchronous half of the value cascade, shared by `load` and the
- * `penv/config` compatibility entry.
+ * The synchronous half of the value cascade, for the `penv/config`
+ * compatibility entry.
+ *
+ * It is the *schemaless* ambient path's reader and nothing else. The typed
+ * bridge validates the environment `penv run` injected and never opens a tree
+ * (see `load.ts`); this entry has no schema to be handed values under, so it
+ * resolves the tree itself, exactly as `dotenv/config` would.
  *
  * `resolveParameter` in `@penvhq/core` is async because the provider contract is,
- * and `load` is synchronous — so this module walks the cascade against the
- * filesystem provider's synchronous reads instead. It does not restate the
+ * and the compat entry is synchronous — so this module walks the cascade against
+ * the filesystem provider's synchronous reads instead. It does not restate the
  * precedence rule: `candidatesFor` owns the order and everything here only
  * walks the list it returns, so the two paths cannot drift apart.
  *
- * The runtime reads the local tree for every environment, whatever provider
- * that environment declares, and this is the design rather than a limitation.
- * A provider is where an environment's source of truth *lives*, not where the
+ * It reads the local tree for every environment, whatever provider that
+ * environment declares, and this is the design rather than a limitation. A
+ * provider is where an environment's source of truth *lives*, not where the
  * runtime reads from: `penv pull` materialises the tree from the provider, and
- * the runtime then reads what is on disk. So `load` never inspects
+ * the runtime then reads what is on disk. So nothing here inspects
  * `providers.*.type` — a Vault-backed environment resolves through exactly the
  * code path a filesystem-backed one does, which is what makes changing provider
  * a configuration change rather than an application rewrite.
@@ -23,10 +28,7 @@
  * runs `penv pull` to materialise the tree. Key *use* is a synchronous pure
  * function over bytes. penv never calls a KMS in-process — a key is where an
  * environment's secret material *lives*, not what the runtime dials at boot, just
- * as a provider is a sync target and not a runtime source. So invariant 3 is not
- * traded against encryption: `load` stays generic and synchronous because the
- * network half of both problems was moved out of the process entirely, rather
- * than awaited inside it.
+ * as a provider is a sync target and not a runtime source.
  */
 
 import { dirname, resolve as resolvePath } from "node:path";
@@ -47,7 +49,6 @@ import {
   UndecryptableValueError,
 } from "@penvhq/core";
 import { createFilesystemProvider } from "@penvhq/provider-filesystem";
-import { debugEnabled } from "./diagnostics.js";
 
 /**
  * The package that always *is* the local tree. Named here rather than in core,
@@ -178,16 +179,4 @@ export function resolveSync(options: ResolveOptions): ResolvedConfig {
   const provider = createFilesystemProvider({ root: recordsDir(root), config });
   const keys = resolveKeySource(config, target);
   return { config, environment: target, values: resolveFrom(provider, target, keys), origin: file };
-}
-
-/** The `PENV_DEBUG=1` account of one resolution. Never printed otherwise. */
-export function describeResolution(resolved: ResolvedConfig): string[] {
-  if (!debugEnabled()) {
-    return [];
-  }
-  return [
-    `environment ${resolved.environment}, resolved from ${resolved.origin}`,
-    `${resolved.values.length} parameter${resolved.values.length === 1 ? "" : "s"} resolved`,
-    ...resolved.values.map(({ ref, location }) => `  ${parameterId(ref)} <- ${location}`),
-  ];
 }
