@@ -686,7 +686,7 @@ export function renderImport(
     lines.push(...renderValidate(validation));
   }
 
-  lines.push("", "Done. .penv/ is now your source of truth.");
+  lines.push("", "Done. The records tree is now your source of truth.");
   return lines;
 }
 

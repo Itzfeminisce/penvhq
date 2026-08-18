@@ -20,7 +20,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Meta, ParameterRef, ValueFile } from "@penvhq/core";
-import { PenvError, parseEnvelope, rotationOf } from "@penvhq/core";
+import { PenvError, parseEnvelope, recordsDir, rotationOf } from "@penvhq/core";
 import { createFilesystemProvider } from "@penvhq/provider-filesystem";
 import { createMockProvider } from "@penvhq/provider-mock";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -63,7 +63,7 @@ function makeProject(config: Record<string, unknown> = {}): string {
     `export default ${JSON.stringify({ ...CONFIG, ...config })};\n`,
     "utf8",
   );
-  mkdirSync(join(root, ".penv"), { recursive: true });
+  mkdirSync(recordsDir(root), { recursive: true });
   writeFileSync(join(root, ".penv", "env.ts"), "export const schema = {};\n", "utf8");
   return root;
 }
@@ -75,7 +75,7 @@ function mockSource(root: string) {
 
 /** The filesystem source for `development`, the same store the registry builds. */
 function filesystemSource(root: string) {
-  return createFilesystemProvider({ root: join(root, ".penv"), config: CONFIG });
+  return createFilesystemProvider({ root: recordsDir(root), config: CONFIG });
 }
 
 const T_BEGIN = "2026-01-01T00:00:00.000Z";
@@ -96,7 +96,7 @@ function freshKey(): string {
  * provider terminates a written file with a newline, so it is dropped here.
  */
 function valueFile(root: string, location: string): string | undefined {
-  const file = join(root, ".penv", location);
+  const file = join(recordsDir(root), location);
   if (!existsSync(file)) {
     return undefined;
   }
@@ -106,7 +106,7 @@ function valueFile(root: string, location: string): string | undefined {
 
 /** Writes the parameter's meta file into the local tree, the way `readMeta` reads it. */
 function writeMetaFile(root: string, meta: Record<string, unknown>): void {
-  writeFileSync(join(root, ".penv", "api-key.json"), JSON.stringify(meta), "utf8");
+  writeFileSync(join(recordsDir(root), "api-key.json"), JSON.stringify(meta), "utf8");
 }
 
 /**
@@ -295,7 +295,7 @@ describe("runRotate against the local filesystem tree", () => {
     process.env[KEY_VARIABLE] = freshKey();
     const root = makeProject(KEYS);
     // A stale cleartext value the old code would have left winning beside the seal.
-    writeFileSync(join(root, ".penv", "api-key.development"), "old-plaintext\n", "utf8");
+    writeFileSync(join(recordsDir(root), "api-key.development"), "old-plaintext\n", "utf8");
     writeMetaFile(root, { secret: true, rotationMechanism: "atomic-cutover" });
 
     await runRotate({
@@ -318,7 +318,7 @@ describe("runRotate against the local filesystem tree", () => {
     const root = makeProject(KEYS);
     // A stale ciphertext twin from when the parameter was a secret.
     writeFileSync(
-      join(root, ".penv", "api-key.development.enc"),
+      join(recordsDir(root), "api-key.development.enc"),
       "penv:1:dev:AAECAwQFBgcICQoL:AAECAwQFBgcICQoLDQ4PEA\n",
       "utf8",
     );

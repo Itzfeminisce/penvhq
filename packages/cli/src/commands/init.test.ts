@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { recordsDir } from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { InitDecisions, InitPlan, InitResult, InitTarget, PromptIo } from "./init.js";
 import {
@@ -232,17 +233,18 @@ describe("scaffolding", () => {
     });
   });
 
-  /** Invariant 17: a value file that is not ignored is a secret waiting to be committed. */
-  it("ignores value files but keeps env.ts, meta, and structure committable", () => {
+  /** Invariant 20: a value file that is not ignored is a secret waiting to be committed. */
+  it("ignores values and the rollback bundle, keeps meta and the manifest committable", () => {
     const root = makeDir();
 
     runInit({ cwd: root });
-    const ignore = read(root, ".penv", ".gitignore");
+    const ignore = read(root, ".penv", "state", ".gitignore");
 
     expect(ignore).toContain("*\n");
-    expect(ignore).toContain("!env.ts");
     expect(ignore).toContain("!*.json");
+    expect(ignore).toContain("!*.d.ts");
     expect(ignore).toContain("!*/");
+    expect(ignore).toContain("rollback/");
   });
 
   it("is safe to re-run", () => {
@@ -285,7 +287,7 @@ describe("the two generated modules are both write-once", () => {
   it("does not overwrite an existing .penv/env.ts (the wrapper)", () => {
     const root = makeDir();
     const mine = "export const env = 'mine, hand-written, and quite wrong';\n";
-    mkdirSync(join(root, ".penv"), { recursive: true });
+    mkdirSync(recordsDir(root), { recursive: true });
     writeFileSync(join(root, ".penv", "env.ts"), mine, "utf8");
 
     const result = runInit({ cwd: root });
@@ -306,7 +308,7 @@ describe("the two generated modules are both write-once", () => {
    */
   it("does not add a second penv.schema.ts beside an old self-contained env.ts", () => {
     const root = makeDir();
-    mkdirSync(join(root, ".penv"), { recursive: true });
+    mkdirSync(recordsDir(root), { recursive: true });
     const selfContained =
       'import { z } from "zod";\n' +
       "export const schema = z.object({ databaseUrl: z.url() });\n" +
@@ -338,7 +340,7 @@ describe("the two generated modules are both write-once", () => {
    */
   it("does not add a second penv.schema.ts beside a pre-0.5 env.ts (no PenvSchemaShape)", () => {
     const root = makeDir();
-    mkdirSync(join(root, ".penv"), { recursive: true });
+    mkdirSync(recordsDir(root), { recursive: true });
     const preAugmentation =
       'import { z } from "zod";\n' +
       'import { load } from "@penvhq/penv";\n' +
@@ -370,7 +372,7 @@ describe("the two generated modules are both write-once", () => {
 
   it("says so rather than failing when it keeps the wrapper", () => {
     const root = makeDir();
-    mkdirSync(join(root, ".penv"), { recursive: true });
+    mkdirSync(recordsDir(root), { recursive: true });
     writeFileSync(join(root, ".penv", "env.ts"), "// mine\n", "utf8");
 
     const result = runInit({ cwd: root });
@@ -836,16 +838,17 @@ describe("the schema's home", () => {
   /**
    * The un-ignore names the schema by name, so outside the tree it names nothing:
    * a `!env.ts` matching no file is a line the next reader has to prove is dead
-   * before they can leave it alone.
+   * before they can leave it alone. The scaffolded loader sits beside the tree,
+   * never in it, so no project gets that line.
    */
-  it("drops the schema's un-ignore line when the schema is not in .penv/", () => {
+  it("writes no un-ignore line for a schema outside the tree", () => {
     const root = makeDir();
 
     runInit({ cwd: root, decisions: CUSTOM });
-    const ignore = read(root, ".penv", ".gitignore");
+    const ignore = read(root, ".penv", "state", ".gitignore");
 
     expect(ignore).not.toContain("!env.ts");
-    // Invariant 17 is untouched: values are still ignored, structure still committed.
+    // Invariant 20 is untouched: values are still ignored, structure still committed.
     expect(ignore).toContain("*\n");
     expect(ignore).toContain("!*/");
     expect(ignore).toContain("!*.json");

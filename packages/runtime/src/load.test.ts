@@ -9,6 +9,7 @@ import {
   KEY_BYTES,
   type NameCollisionError,
   PenvError,
+  recordsDir,
   SCHEMA_HARVEST_ENV,
   sealValue,
   type UndecryptableValueError,
@@ -44,8 +45,8 @@ const CONFIG = {
 };
 
 /**
- * A real project root: `penv.config.ts` plus a `.penv/` tree. Keys are paths
- * relative to `.penv/`, so `"redis/password.production"` writes the namespace.
+ * A real project root: `penv.config.ts` plus a records tree. Keys are paths
+ * relative to the tree, so `"redis/password.production"` writes the namespace.
  */
 function makeProject(files: Readonly<Record<string, string>>, config: unknown = CONFIG): string {
   const root = mkdtempSync(join(tmpdir(), "penv-load-"));
@@ -56,7 +57,7 @@ function makeProject(files: Readonly<Record<string, string>>, config: unknown = 
     "utf8",
   );
   for (const [name, value] of Object.entries(files)) {
-    const file = join(root, ".penv", name);
+    const file = join(recordsDir(root), name);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, value, "utf8");
   }
@@ -458,7 +459,7 @@ describe("load", () => {
 
       // The lower-scope plaintext is really there, and really resolvable — this
       // test would pass vacuously against a tree that simply had no fallback.
-      expect(readFileSync(join(cwd, ".penv", "database-url"), "utf8")).toBe(
+      expect(readFileSync(join(recordsDir(cwd), "database-url"), "utf8")).toBe(
         "postgres://default/app",
       );
       expect(load(schema, { cwd, environment: "development" }).databaseUrl).toBe(
@@ -705,6 +706,27 @@ describe("no config file", () => {
     const error = thrown as ConfigError;
     expect(error.message).toContain("No penv.config.ts found");
     expect(error.message).toContain("penv init");
+  });
+});
+
+/**
+ * An unmigrated project must not boot with an empty environment: the runtime
+ * makes the same refusal the CLI does, or the first thing the user hears about
+ * the layout is a missing required parameter.
+ */
+describe("a project still on the old layout", () => {
+  it("refuses, naming penv migrate", () => {
+    const cwd = makeProject({});
+    mkdirSync(join(cwd, ".penv"), { recursive: true });
+    writeFileSync(join(cwd, ".penv", "database-url"), "postgres://localhost/app", "utf8");
+
+    expect(() => load(schema, { cwd, environment: "development" })).toThrowError(/penv migrate/);
+  });
+
+  it("stays quiet when the records are where penv reads them", () => {
+    const cwd = makeProject({ "database-url": "postgres://localhost/app", "redis/host": "::1" });
+
+    expect(() => load(schema, { cwd, environment: "development" })).not.toThrow();
   });
 });
 

@@ -14,7 +14,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type PenvConfig, PenvError } from "@penvhq/core";
+import { type PenvConfig, PenvError, recordsDir } from "@penvhq/core";
 import { FilesystemProvider } from "@penvhq/provider-filesystem";
 import { afterEach, describe, expect, it } from "vitest";
 import { localTree, openProject, sourceProviderFor } from "./project.js";
@@ -58,7 +58,7 @@ function makeProject(config: PenvConfig): string {
     `export default ${JSON.stringify(config)};\n`,
     "utf8",
   );
-  mkdirSync(join(root, ".penv"), { recursive: true });
+  mkdirSync(recordsDir(root), { recursive: true });
   writeFileSync(
     join(root, ".penv", "env.ts"),
     'import { z } from "zod";\nexport const schema = z.object({});\n',

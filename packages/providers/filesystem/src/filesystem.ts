@@ -2,7 +2,7 @@
  * The reference provider, and the ground truth for the provider contract.
  *
  * The contract in `@penvhq/core` is the shape every provider satisfies; this
- * module implements it against a `.penv/` directory and never bends it to suit
+ * module implements it against a records directory and never bends it to suit
  * the filesystem. The sync read path below is *additional* to the contract, not
  * a replacement for it: the runtime `load(schema)` is synchronous, and a
  * network-backed provider still satisfies the async contract unchanged.
@@ -55,7 +55,7 @@ export class FilesystemProvider implements Provider {
     this.#config = options.config;
   }
 
-  /** The `.penv/` directory this provider is rooted at, absolute. */
+  /** The records directory this provider is rooted at, absolute. */
   get root(): string {
     return this.#root;
   }

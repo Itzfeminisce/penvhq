@@ -32,6 +32,7 @@
 import { dirname, resolve as resolvePath } from "node:path";
 import type { KeySource, ParameterRef, PenvConfig, ValueFile } from "@penvhq/core";
 import {
+  assertMigrated,
   ConfigError,
   candidatesFor,
   findConfigFile,
@@ -39,6 +40,7 @@ import {
   loadConfigFrom,
   openValue,
   parameterId,
+  recordsDir,
   resolveEnvironment,
   resolveKeySource,
   UndecryptableValueError,
@@ -124,9 +126,6 @@ export interface ResolveOptions {
   readonly environment?: string;
 }
 
-/** The tree directory, resolved beside the config file. */
-const PENV_DIR = ".penv";
-
 /**
  * Loads the config, settles the environment, and resolves every parameter the
  * local tree holds — the work `load` and `penv/config` both start from.
@@ -149,8 +148,12 @@ export function resolveSync(options: ResolveOptions): ResolvedConfig {
   }
 
   const config = loadConfigFrom(file);
+  const root = dirname(file);
+  // The refusal the CLI makes at open time, made here too: an unmigrated project
+  // must hear that its records moved, not boot with an empty environment.
+  assertMigrated(root, config);
   const target = resolveEnvironment(config, environment);
-  const provider = createFilesystemProvider({ root: resolvePath(dirname(file), PENV_DIR), config });
+  const provider = createFilesystemProvider({ root: recordsDir(root), config });
   const keys = resolveKeySource(config, target);
   return { config, environment: target, values: resolveFrom(provider, target, keys), origin: file };
 }

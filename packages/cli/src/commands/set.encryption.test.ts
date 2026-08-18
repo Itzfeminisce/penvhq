@@ -16,7 +16,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PenvError, parseEnvelope } from "@penvhq/core";
+import { PenvError, parseEnvelope, recordsDir } from "@penvhq/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runDoctor } from "./doctor.js";
 import { runGet } from "./get.js";
@@ -91,7 +91,7 @@ function makeProject(fixture: Fixture): string {
     `export default ${JSON.stringify(CONFIG)};\n`,
     "utf8",
   );
-  mkdirSync(join(root, ".penv"), { recursive: true });
+  mkdirSync(recordsDir(root), { recursive: true });
   writeFileSync(
     join(root, ".penv", "env.ts"),
     `import { z } from "zod";\nexport const schema = z.object({${fixture.schema ?? ""}});\n`,
@@ -99,7 +99,7 @@ function makeProject(fixture: Fixture): string {
   );
 
   for (const [name, contents] of Object.entries(fixture.tree ?? {})) {
-    const file = join(root, ".penv", name);
+    const file = join(recordsDir(root), name);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, contents, "utf8");
   }
@@ -111,7 +111,7 @@ function makeProject(fixture: Fixture): string {
  * terminates a written file with a newline, so it is dropped here.
  */
 function valueFile(root: string, location: string): string | undefined {
-  const file = join(root, ".penv", location);
+  const file = join(recordsDir(root), location);
   if (!existsSync(file)) {
     return undefined;
   }

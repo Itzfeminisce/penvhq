@@ -15,7 +15,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PenvError } from "@penvhq/core";
+import { PenvError, recordsDir } from "@penvhq/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FillPrompt } from "./fill.js";
 import { runFill } from "./fill.js";
@@ -68,7 +68,7 @@ function makeProject(fixture: Fixture): string {
     `export default ${JSON.stringify(CONFIG)};\n`,
     "utf8",
   );
-  mkdirSync(join(root, ".penv"), { recursive: true });
+  mkdirSync(recordsDir(root), { recursive: true });
   writeFileSync(
     join(root, ".penv", "env.ts"),
     fixture.schemaModule ??
@@ -77,7 +77,7 @@ function makeProject(fixture: Fixture): string {
   );
 
   for (const [name, contents] of Object.entries(fixture.tree ?? {})) {
-    const file = join(root, ".penv", name);
+    const file = join(recordsDir(root), name);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, contents, "utf8");
   }

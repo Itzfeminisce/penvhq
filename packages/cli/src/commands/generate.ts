@@ -16,6 +16,7 @@ import {
   checkNameCollisions,
   effectiveMeta,
   PenvError,
+  recordPath,
   requireValue,
   serializeDotenv,
   variableName,
@@ -27,7 +28,6 @@ import {
   keySourceFor,
   localTree,
   openProject,
-  PENV_DIR,
   refsFrom,
   resolveAllSync,
   targetEnvironment,
@@ -95,7 +95,7 @@ function entriesFor(project: Project, environment: string, allowDecrypt: boolean
       if (!allowDecrypt) {
         throw new PenvError(
           "ENCRYPTED_VALUE_REFUSED",
-          `Parameter ${resolution.parameter} for environment ${environment} resolves to the encrypted value file ${PENV_DIR}/${winner.location}, and \`penv generate\` writes plaintext`,
+          `Parameter ${resolution.parameter} for environment ${environment} resolves to the encrypted value file ${recordPath(winner.location)}, and \`penv generate\` writes plaintext`,
           `Re-run with \`--allow-decrypt\` to write the decrypted value into the artifact, or generate for an environment whose values are plaintext. The artifact is gitignored; a committed plaintext secret is a \`penv doctor\` failure.`,
         );
       }

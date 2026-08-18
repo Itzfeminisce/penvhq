@@ -31,7 +31,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PenvError } from "@penvhq/core";
+import { PenvError, recordsDir } from "@penvhq/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { keySourceFor, localTree, openProject, resolveSync } from "../project.js";
 import { EMPTY_DRIFT } from "../schema.js";
@@ -92,9 +92,9 @@ function makeProject(fixture: Fixture): string {
   return root;
 }
 
-/** Every file below `.penv/`, so a test can assert the tree is clean. */
+/** Every file in the records tree, so a test can assert the tree is clean. */
 function penvTree(root: string): string[] {
-  const dir = join(root, ".penv");
+  const dir = recordsDir(root);
   return existsSync(dir) ? readdirSync(dir, { recursive: true }).map(String).sort() : [];
 }
 
@@ -164,7 +164,7 @@ describe("a variable that is a reserved token", () => {
     importFails(root);
 
     expect(penvTree(root)).toEqual([]);
-    expect(existsSync(join(root, ".penv", "enc"))).toBe(false);
+    expect(existsSync(join(recordsDir(root), "enc"))).toBe(false);
   });
 
   it.each(["JSON", "TOML", "YML", "LOCAL"])("refuses %s for the same reason", (variable) => {
@@ -202,7 +202,7 @@ describe("a variable that is a reserved token", () => {
     const report = importDotenv({ cwd: root, file: ".env" });
 
     expect(report.variables).toBe(1);
-    expect(existsSync(join(root, ".penv", "production"))).toBe(true);
+    expect(existsSync(join(recordsDir(root), "production"))).toBe(true);
   });
 
   /** Nothing partial: the good variables in the file are not imported either. */
@@ -257,7 +257,7 @@ describe("a variable that does not round-trip", () => {
     const report = importDotenv({ cwd: root, file: ".env" });
 
     expect(report.variables).toBe(1);
-    expect(existsSync(join(root, ".penv", "my-var"))).toBe(true);
+    expect(existsSync(join(recordsDir(root), "my-var"))).toBe(true);
   });
 
   /** An override that renames it to something *else* still round-trips badly. */

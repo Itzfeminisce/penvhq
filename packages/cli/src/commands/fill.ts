@@ -20,11 +20,10 @@
  * user who never heard the question never chose it.
  */
 
-import { PenvError } from "@penvhq/core";
+import { PenvError, recordPath, SCHEMA_SHAPE_FILE } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { shorthandCandidates } from "../env-flags.js";
 import { lineReader } from "../input.js";
-import { PENV_DIR } from "../project.js";
 import { out } from "../style.js";
 import { CHECK, formatRows, guard, prompt as promptLine, type Row, WARN, write } from "../ui.js";
 import { runSet } from "./set.js";
@@ -80,7 +79,7 @@ export interface FillResult {
   /** The value files written, one per answered prompt. */
   readonly written: ReadonlyArray<{
     readonly parameter: string;
-    /** The value file written, relative to `.penv/`. */
+    /** The value file written, relative to the records tree. */
     readonly location: string;
     readonly encrypted: boolean;
   }>;
@@ -137,7 +136,7 @@ export async function runFill(options: FillOptions): Promise<FillResult> {
       `penv fill cannot run: environment ${environment} has ${blockers.length} unresolved ` +
         `configuration ${blockers.length === 1 ? "issue" : "issues"}:\n${detail}`,
       "Fix these — `penv validate` reports them — then run `penv fill`. If you have not written a " +
-        `schema yet, declare the required parameters in ${PENV_DIR}/env.ts.`,
+        `schema yet, declare the required parameters in ${SCHEMA_SHAPE_FILE}.`,
     );
   }
 
@@ -242,7 +241,7 @@ export function renderFill(result: FillResult): string[] {
   const rows: Row[] = result.written.map((entry) => ({
     glyph: CHECK,
     label: "Wrote",
-    subject: `${PENV_DIR}/${entry.location}`,
+    subject: recordPath(entry.location),
     // Meta decided the seal, not the answer, so the line says so — as `set` does.
     ...(entry.encrypted ? { detail: "encrypted, per the parameter's meta policy" } : {}),
   }));

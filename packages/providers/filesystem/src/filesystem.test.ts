@@ -266,12 +266,24 @@ describe("FilesystemProvider", () => {
   });
 
   describe("list", () => {
-    it("ignores env.ts, which is the user's schema and not a parameter", async () => {
+    /**
+     * The loader lives beside the tree, not in it, so `env.ts` here is code that
+     * wandered into penv-managed state — and code in the tree is refused, not
+     * quietly skipped. A project that declares its schema inside the tree is the
+     * one exception, and it is skipped by the path the config names.
+     */
+    it("refuses a code module in the tree, and skips the schema the config puts there", async () => {
       const provider = makeProvider();
       writeFileSync(join(provider.root, "env.ts"), "export const schema = {};\n", "utf8");
       await provider.write(redisPassword, "hunter2");
 
-      expect(await provider.list()).toEqual([redisPassword]);
+      await expect(provider.list()).rejects.toBeInstanceOf(StrayCodeFileError);
+
+      const declared = createFilesystemProvider({
+        root: provider.root,
+        config: { ...config, schemaFile: ".penv/state/records/env.ts" },
+      });
+      expect(await declared.list()).toEqual([redisPassword]);
     });
 
     it("ignores .gitignore", async () => {
