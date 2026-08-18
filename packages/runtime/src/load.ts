@@ -5,16 +5,21 @@
  * so the type you code against and the value you receive cannot diverge.
  */
 
+import { basename, isAbsolute, relative } from "node:path";
 import {
   accessPath,
+  DirectStartError,
+  MissingMaterializationError,
   type OverrideKeysOf,
   schemaHarvestActive,
   ValidationError,
 } from "@penvhq/core";
 import type { z } from "zod";
+import { consumeRunMarker } from "./child-env.js";
 import { debug } from "./diagnostics.js";
 import { inject } from "./inject.js";
-import { describeResolution, resolveSync } from "./resolve.js";
+import type { ResolvedValue } from "./resolve.js";
+import { describeResolution, hasRemoteSource, resolveSync } from "./resolve.js";
 
 export interface LoadOptions {
   /** Where to start looking for `penv.config.ts`. Defaults to `process.cwd()`. */
@@ -123,6 +128,10 @@ export function load<T extends z.ZodType>(schema: T, options?: LoadOptionsFor<T>
 }
 
 function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptions): z.infer<T> {
+  // Read once, here, and taken out of `process.env` as it is read: the marker is
+  // penv's message to a nested penv, and the application's first act is this
+  // load, so this is where it stops being visible to anything downstream.
+  consumeRunMarker();
   const resolved = resolveSync({
     cwd: options?.cwd ?? process.cwd(),
     ...(options?.environment === undefined ? {} : { environment: options.environment }),
@@ -137,12 +146,14 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptio
 
   const result = schema.safeParse(object);
   if (!result.success) {
-    throw new ValidationError(
+    throw failure(
       environment,
       result.error.issues.map((issue) => ({
         parameter: issue.path.join("."),
         message: issue.message,
       })),
+      values,
+      hasRemoteSource(config, environment),
     );
   }
 
@@ -170,6 +181,65 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptio
     });
   }
   return result.data;
+}
+
+/**
+ * Which refusal a failed validation is, which depends entirely on who is
+ * reading it.
+ *
+ * Three readers, three answers. Nothing resolved at all, for an environment
+ * whose values live in a provider: a teammate who has cloned and not yet pulled,
+ * and the whole tree is what they are missing — an environment backed by the
+ * local tree is excluded, because there is nowhere for it to pull from and the
+ * line would be a dead end. Something resolved but a required parameter did not,
+ * in a process penv did not start: an adopted application started the old way,
+ * whose remedy is the command rather than the value. Anything else — a value the
+ * schema rejects, or a failure inside `penv run`, where the environment was
+ * already prepared — is the plain validation error it has always been.
+ */
+function failure(
+  environment: string,
+  issues: readonly { readonly parameter: string; readonly message: string }[],
+  values: readonly ResolvedValue[],
+  remoteSource: boolean,
+): ValidationError | MissingMaterializationError {
+  if (values.length === 0 && remoteSource) {
+    return new MissingMaterializationError(environment);
+  }
+  if (consumeRunMarker().invocation !== undefined) {
+    return new ValidationError(environment, issues);
+  }
+  const resolved = new Set(values.map(({ ref }) => accessPath(ref).join(".")));
+  const missing = issues.find((issue) => !resolved.has(issue.parameter));
+  if (missing === undefined) {
+    return new ValidationError(environment, issues);
+  }
+  return new DirectStartError(environment, issues, missing.parameter, thisCommand());
+}
+
+/**
+ * This process, restated as the command that would start it under `penv run`.
+ *
+ * Best effort by construction: a process cannot recover the shell line that
+ * launched it (`npm run dev` reaches here as a node invocation of a script
+ * path), and the remediation's job is to show the *shape* — `penv run -- ` in
+ * front of what you type — not to be pasted blind.
+ */
+function thisCommand(): string {
+  const [runtime, ...rest] = process.argv;
+  const command = basename(runtime ?? "node").replace(/\.exe$/i, "");
+  return [command, ...rest.map(shorten)]
+    .map((part) => (part.includes(" ") ? JSON.stringify(part) : part))
+    .join(" ");
+}
+
+/** An argument inside the project, written the way the user would type it. */
+function shorten(argument: string): string {
+  if (!isAbsolute(argument)) {
+    return argument;
+  }
+  const local = relative(process.cwd(), argument);
+  return local === "" || local.startsWith("..") ? argument : local;
 }
 
 /**

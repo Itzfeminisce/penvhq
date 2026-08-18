@@ -33,10 +33,13 @@ export type { DotenvEntry, DotenvParseResult } from "./dotenv.js";
 export { parseDotenv, serializeDotenv } from "./dotenv.js";
 export type { Envelope } from "./envelope.js";
 export { formatEnvelope, NONCE_BYTES, parseEnvelope, TAG_BYTES } from "./envelope.js";
+export type { ValidationWording } from "./errors.js";
 export {
   ConfigError,
+  DirectStartError,
   FilenameGrammarError,
   IllegalEnvironmentNameError,
+  MissingMaterializationError,
   MissingParameterError,
   NameCollisionError,
   OldLayoutError,

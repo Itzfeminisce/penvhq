@@ -13,11 +13,13 @@
 export type { InjectResult, LoadOptions, LoadOptionsFor } from "@penvhq/runtime";
 export {
   ConfigError,
+  DirectStartError,
   declaredRefs,
   defineConfig,
   FilenameGrammarError,
   inject,
   load,
+  MissingMaterializationError,
   MissingParameterError,
   NameCollisionError,
   PenvError,

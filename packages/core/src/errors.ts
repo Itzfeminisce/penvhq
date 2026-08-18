@@ -77,24 +77,87 @@ export class MissingParameterError extends PenvError {
   }
 }
 
+/** What a {@link ValidationError} subclass says instead of the general wording. */
+export interface ValidationWording {
+  readonly message: string;
+  readonly remedy: string;
+}
+
 /** The loaded configuration does not satisfy the schema. */
 export class ValidationError extends PenvError {
-  override readonly name = "ValidationError";
+  override readonly name: string = "ValidationError";
   readonly environment: string;
   readonly issues: readonly { readonly parameter: string; readonly message: string }[];
 
   constructor(
     environment: string,
     issues: readonly { readonly parameter: string; readonly message: string }[],
+    wording?: ValidationWording,
   ) {
     const lines = issues.map((i) => `  ${i.parameter}: ${i.message}`).join("\n");
     super(
       "VALIDATION_FAILED",
-      `Configuration for environment ${environment} does not match the schema:\n${lines}`,
-      `Fix the values above, or adjust the schema in .penv/env.ts if the shape is wrong.`,
+      wording?.message ??
+        `Configuration for environment ${environment} does not match the schema:\n${lines}`,
+      wording?.remedy ??
+        `Fix the values above, or adjust the schema in .penv/env.ts if the shape is wrong.`,
     );
     this.environment = environment;
     this.issues = issues;
+  }
+}
+
+/**
+ * An adopted application started outside `penv run`.
+ *
+ * The schema failed on a parameter with no value, and nothing had prepared this
+ * process's environment — so the answer is not "fix your values" but "start it
+ * the way an adopted app starts". It stays a {@link ValidationError}, carrying
+ * the same issues and the same code: it is that failure, told to the one reader
+ * whose remedy is a different command.
+ *
+ * Sealed copy (friction item 10) — the highest-traffic refusal penv has, so it
+ * is written here and asserted verbatim rather than improvised at the call site.
+ */
+export class DirectStartError extends ValidationError {
+  override readonly name = "DirectStartError";
+  /** The first required parameter with no value — what the reader came to find out. */
+  readonly parameter: string;
+  /** The command as penv can best restate it, which is what goes after `--`. */
+  readonly command: string;
+
+  constructor(
+    environment: string,
+    issues: readonly { readonly parameter: string; readonly message: string }[],
+    parameter: string,
+    command: string,
+  ) {
+    super(environment, issues, {
+      message:
+        `Missing required parameter ${parameter} for environment ${environment}, ` +
+        "and this process was not started by `penv run`",
+      remedy: `Start it with \`penv run -- ${command}\`.`,
+    });
+    this.parameter = parameter;
+    this.command = command;
+  }
+}
+
+/**
+ * Nothing is materialised for this environment — a teammate's first run after a
+ * clone, before their first `penv pull`.
+ *
+ * Sealed copy (friction item 10). It names no parameter deliberately: nothing at
+ * all resolved, so there is no single one to name, and the whole tree is what the
+ * one next command fills.
+ */
+export class MissingMaterializationError extends PenvError {
+  override readonly name = "MissingMaterializationError";
+  readonly environment: string;
+
+  constructor(environment: string) {
+    super("NO_MATERIALIZED_VALUES", `No materialized values for ${environment}`, "Run: penv pull");
+    this.environment = environment;
   }
 }
 

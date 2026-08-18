@@ -320,7 +320,10 @@ function validateProviderType(environment: string, type: string): PenvError | un
  * (invariant 10) — and it would reach it on the runs where nobody typed a name
  * to check.
  */
-function validateDefaultEnvironment(config: PenvConfig, declared: ReadonlySet<string>): PenvError[] {
+function validateDefaultEnvironment(
+  config: PenvConfig,
+  declared: ReadonlySet<string>,
+): PenvError[] {
   const value: unknown = config.defaultEnvironment;
   if (value === undefined) {
     return [];
