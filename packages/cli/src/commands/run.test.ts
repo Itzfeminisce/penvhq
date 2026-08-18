@@ -17,11 +17,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { recordsDir } from "@penvhq/core";
 import { RUN_MARKER } from "@penvhq/runtime";
+import { runCommand as runCittyCommand } from "citty";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChildHandle } from "../child.js";
 import type { PullOptions, PullResult } from "./pull.js";
 import type { RunOptions, RunResult } from "./run.js";
-import { runRun } from "./run.js";
+import { runCommand, runRun } from "./run.js";
 
 /**
  * Counts every construction of the mock provider, which is the only provider a
@@ -64,6 +65,7 @@ const SCHEMA =
 const TREE: Readonly<Record<string, string>> = { "database-url": "postgres://local/app" };
 
 const created: string[] = [];
+const originalCwd = process.cwd();
 const originalPenvEnv = process.env.PENV_ENV;
 const originalNodeEnv = process.env.NODE_ENV;
 
@@ -226,6 +228,47 @@ describe("the command after --", () => {
 
     expect(error.code).toBe("RUN_NO_COMMAND");
     expect(error.remedy).toContain("penv run -- pnpm dev");
+  });
+});
+
+describe("the command line", () => {
+  /**
+   * Through the real command, because where `--` falls is the whole contract:
+   * the command is taken from the raw arguments, so a flag *after* `--` is the
+   * child's and a flag before it is penv's.
+   */
+  it("splits at --, leaving penv's flags on penv's side", async () => {
+    const root = makeProject();
+    const out = join(root, "reported.json");
+    process.chdir(root);
+    process.exitCode = 0;
+    try {
+      await runCittyCommand(runCommand, {
+        rawArgs: ["--env", "development", "--", ...reporter(out), "--env", "production"],
+      });
+      expect(reported(out).argv).toEqual(["--env", "production"]);
+      expect(reported(out).env.PENV_ENV).toBe("development");
+      expect(process.exitCode).toBe(0);
+    } finally {
+      process.chdir(originalCwd);
+      process.exitCode = 0;
+    }
+  });
+
+  it("exits with the child's code", async () => {
+    const root = makeProject();
+    const out = join(root, "reported.json");
+    process.chdir(root);
+    process.exitCode = 0;
+    try {
+      await runCittyCommand(runCommand, {
+        rawArgs: ["--env", "development", "--", ...reporter(out, 4)],
+      });
+      expect(process.exitCode).toBe(4);
+    } finally {
+      process.chdir(originalCwd);
+      process.exitCode = 0;
+    }
   });
 });
 
