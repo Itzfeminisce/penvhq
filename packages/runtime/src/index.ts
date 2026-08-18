@@ -8,8 +8,10 @@
 
 export {
   ConfigError,
+  DirectStartError,
   defineConfig,
   FilenameGrammarError,
+  MissingMaterializationError,
   MissingParameterError,
   NameCollisionError,
   PenvError,
@@ -17,7 +19,16 @@ export {
   UnknownEnvironmentError,
   ValidationError,
 } from "@penvhq/core";
+export type { ChildEnvironment, ChildEnvironmentInput, Environment } from "./child-env.js";
+export {
+  childEnvironment,
+  consumeRunMarker,
+  ENVIRONMENT_VARIABLE,
+  RUN_MARKER,
+  strippedVariables,
+} from "./child-env.js";
 export type { InjectResult } from "./inject.js";
 export { declaredRefs, inject } from "./inject.js";
 export type { LoadOptions, LoadOptionsFor } from "./load.js";
 export { load } from "./load.js";
+export { hasRemoteSource } from "./resolve.js";

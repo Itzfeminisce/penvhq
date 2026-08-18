@@ -612,12 +612,14 @@ describe("resolveEnvironment", () => {
     expect(() => resolveEnvironment(valid, "qa")).toThrow(UnknownEnvironmentError);
   });
 
-  it("throws ConfigError explaining how to set the environment when nothing is set", () => {
+  /** Seal 3: the refusal names both remedies — the flag, and the declared key. */
+  it("throws ConfigError naming both remedies when nothing is set", () => {
     setEnv("PENV_ENV", undefined);
     setEnv("NODE_ENV", undefined);
 
     expect(() => resolveEnvironment(valid)).toThrow(ConfigError);
-    expect(() => resolveEnvironment(valid)).toThrow(/PENV_ENV/);
+    expect(() => resolveEnvironment(valid)).toThrow(/--env <environment>/);
+    expect(() => resolveEnvironment(valid)).toThrow(/defaultEnvironment/);
     expect(() => resolveEnvironment(valid)).toThrow(/development/);
   });
 
@@ -626,5 +628,57 @@ describe("resolveEnvironment", () => {
     setEnv("NODE_ENV", "production");
 
     expect(resolveEnvironment(valid)).toBe("production");
+  });
+});
+
+/**
+ * Seal 3. The key answers where the refusal used to be, and nowhere else: it is
+ * a standing decision, and `PENV_ENV`/`NODE_ENV` are what this invocation says.
+ */
+describe("defaultEnvironment", () => {
+  const withDefault: PenvConfig = { ...valid, defaultEnvironment: "development" };
+
+  it("answers when nothing else does", () => {
+    setEnv("PENV_ENV", undefined);
+    setEnv("NODE_ENV", undefined);
+
+    expect(resolveEnvironment(withDefault)).toBe("development");
+  });
+
+  it("loses to an explicit environment", () => {
+    setEnv("PENV_ENV", undefined);
+    setEnv("NODE_ENV", undefined);
+
+    expect(resolveEnvironment(withDefault, "production")).toBe("production");
+  });
+
+  it("loses to PENV_ENV and to NODE_ENV", () => {
+    setEnv("PENV_ENV", "staging");
+    setEnv("NODE_ENV", undefined);
+    expect(resolveEnvironment(withDefault)).toBe("staging");
+
+    setEnv("PENV_ENV", undefined);
+    setEnv("NODE_ENV", "production");
+    expect(resolveEnvironment(withDefault)).toBe("production");
+  });
+
+  /** Invariant 10: the whitelist judges the default like any other name. */
+  it("refuses a default the whitelist does not carry", () => {
+    setEnv("PENV_ENV", undefined);
+    setEnv("NODE_ENV", undefined);
+
+    expect(() => resolveEnvironment({ ...valid, defaultEnvironment: "qa" })).toThrow(
+      UnknownEnvironmentError,
+    );
+    expect(codesFor({ ...valid, defaultEnvironment: "qa" })).toContain("UNKNOWN_ENVIRONMENT");
+  });
+
+  it("refuses a default that is not a name at all", () => {
+    expect(codesFor({ ...valid, defaultEnvironment: "  " })).toContain("CONFIG");
+    expect(codesFor({ ...valid, defaultEnvironment: 3 as unknown as string })).toContain("CONFIG");
+  });
+
+  it("stays quiet for a declared default", () => {
+    expect(codesFor(withDefault)).toEqual(codesFor(valid));
   });
 });

@@ -39,6 +39,7 @@ import {
   formatValueFile,
   loadConfigFrom,
   openValue,
+  own,
   parameterId,
   recordsDir,
   resolveEnvironment,
@@ -47,6 +48,27 @@ import {
 } from "@penvhq/core";
 import { createFilesystemProvider } from "@penvhq/provider-filesystem";
 import { debugEnabled } from "./diagnostics.js";
+
+/**
+ * The package that always *is* the local tree. Named here rather than in core,
+ * which owns the provider contract and must not know which implementations
+ * exist; this module already builds the filesystem provider, so it is the layer
+ * that may recognise it.
+ */
+const LOCAL_TREE_TYPE = "@penvhq/provider-filesystem";
+
+/**
+ * Whether this environment's values live somewhere penv would have to pull them
+ * from.
+ *
+ * It is what separates "you have not pulled yet" from "nothing has been set
+ * yet": an environment backed by the local tree has no elsewhere, so telling its
+ * owner to run `penv pull` would send them to a command with nothing to do.
+ */
+export function hasRemoteSource(config: PenvConfig, environment: string): boolean {
+  const declared = own(config.providers, environment);
+  return declared !== undefined && declared.type !== LOCAL_TREE_TYPE;
+}
 
 /** One parameter that resolved to a present value for the target environment. */
 export interface ResolvedValue {

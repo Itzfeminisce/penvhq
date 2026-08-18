@@ -35,6 +35,7 @@ import { PenvError, recordsDir } from "@penvhq/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { keySourceFor, localTree, openProject, resolveSync } from "../project.js";
 import { EMPTY_DRIFT } from "../schema.js";
+import { visibleText } from "../style.js";
 import type { ImportReport } from "./import.js";
 import { importDotenv, renderImport } from "./import.js";
 import type { ValidateResult } from "./validate.js";
@@ -494,7 +495,11 @@ describe("--env against the environment the filename names", () => {
     // the note with no separator at all. Asserting the whole line rather than
     // `toContain` is what catches that: the first version of this ran the two
     // together into `...is setrun \`penv validate...\``.
-    expect(line).toMatch(
+    //
+    // Measured on what a terminal shows: the palette is the stream's, so a run
+    // with `FORCE_COLOR` set wraps the glyph and dims the note, and a pattern
+    // anchored to the ends of the line would be asserting the escape codes.
+    expect(visibleText(line ?? "")).toMatch(
       /^⚠ Skipped validation\s+\(no environment set — run `penv validate --env development`\)$/,
     );
   });

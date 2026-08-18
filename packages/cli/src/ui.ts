@@ -149,6 +149,17 @@ export function write(lines: readonly string[]): void {
 }
 
 /**
+ * The same lines, on stderr — for a command whose stdout belongs to something
+ * else. `penv run` is the case: the child's output is the output, and penv's
+ * own line must not land in a pipe the child is feeding.
+ */
+export function writeError(lines: readonly string[]): void {
+  for (const line of lines) {
+    process.stderr.write(`${line}\n`);
+  }
+}
+
+/**
  * A `PenvError` already names the parameter, the environment, and the remedy, so
  * it is printed as written — the remedy re-shaped into the same arrowed tip the
  * reports use. Anything else is a bug in penv and keeps its stack.
