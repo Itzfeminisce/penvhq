@@ -55,18 +55,21 @@ describe("schemaFileOf", () => {
  */
 describe("schemaInsideTree", () => {
   it("names the schema's path within the tree when it lives there", () => {
-    expect(schemaInsideTree(base)).toBe("env.ts");
-    expect(schemaInsideTree(withSchema(".penv/schema.ts"))).toBe("schema.ts");
+    expect(schemaInsideTree(withSchema(".penv/state/records/env.ts"))).toBe("env.ts");
   });
 
-  it("answers undefined when the schema lives outside the tree", () => {
+  /** The loader is next to the tree, not in it, so the walker never sees it. */
+  it("answers undefined for the scaffolded loader and anything else outside", () => {
+    expect(schemaInsideTree(base)).toBeUndefined();
+    expect(schemaInsideTree(withSchema(".penv/env.ts"))).toBeUndefined();
     expect(schemaInsideTree(withSchema("src/env.ts"))).toBeUndefined();
     expect(schemaInsideTree(withSchema("env.ts"))).toBeUndefined();
   });
 
-  /** `.penv-old/env.ts` is not in `.penv/`, and a prefix match would say it was. */
-  it("does not mistake a directory that merely starts with .penv", () => {
-    expect(schemaInsideTree(withSchema(".penv-old/env.ts"))).toBeUndefined();
+  /** `.penv-old/…` is not the tree, and a prefix match would say it was. */
+  it("does not mistake a directory that merely starts with the tree's", () => {
+    expect(schemaInsideTree(withSchema(".penv-old/state/records/env.ts"))).toBeUndefined();
+    expect(schemaInsideTree(withSchema(".penv/state/records-old/env.ts"))).toBeUndefined();
   });
 });
 
