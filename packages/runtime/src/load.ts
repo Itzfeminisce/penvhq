@@ -33,6 +33,7 @@ import {
   accessPath,
   DirectStartError,
   type OverrideKeysOf,
+  own,
   parameterId,
   schemaHarvestActive,
   ValidationError,
@@ -191,7 +192,10 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptio
   const values: { readonly ref: ParameterRef; readonly value: string }[] = [];
   const object = node();
   for (const ref of declaredRefs(schema)) {
-    const value = source[variableName(ref, config)];
+    // `own`, never a plain index: the contract is a variable penv reads back, so
+    // a parameter delivered as `constructor` must find nothing rather than the
+    // prototype's function.
+    const value = own(source, variableName(ref, config));
     if (value !== undefined) {
       values.push({ ref, value });
       place(object, accessPath(ref), value);
