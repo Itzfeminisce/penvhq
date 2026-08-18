@@ -28,6 +28,7 @@ import { add } from "./add.js";
 import type { Spawner } from "./delegate.js";
 import { type Engine, engineAt } from "./engine.js";
 import {
+  INSTALL_COMMAND,
   InstallDeclinedError,
   ManifestEntriesUnreadableError,
   NoProjectError,
@@ -219,7 +220,7 @@ async function launch(options: LauncherOptions): Promise<number> {
       return delegate(options, options.bundledEngine(), forwarded, home, cwd);
     }
     if (ADOPTS.has(first)) {
-      return adopt(options, forwarded, home, cwd);
+      return adopt(options, forwarded, home, cwd, noDownload);
     }
     throw new NoProjectError(cwd);
   }
@@ -259,12 +260,17 @@ async function launch(options: LauncherOptions): Promise<number> {
  * and read it. It happens only after the child succeeds, only where the child
  * left a `.penv/state/` behind — a preview that wrote nothing is not an adoption
  * — and never over a manifest that is already there, whoever wrote it.
+ *
+ * The pinned engine is put on the machine here too, because adoption closes by
+ * telling the developer to run `penv run -- <dev>` and that command needs bytes
+ * nothing has fetched yet.
  */
 async function adopt(
   options: LauncherOptions,
   forwarded: readonly string[],
   home: string,
   cwd: string,
+  noDownload: boolean,
 ): Promise<number> {
   const engine = options.bundledEngine();
   const code = await delegate(options, engine, forwarded, home, cwd);
@@ -287,7 +293,44 @@ async function adopt(
     serializeManifest({ format: MANIFEST_FORMAT, engine: pin, extensions: {} }),
   );
   options.io.out(`✓ ${MANIFEST_PATH} pins ${pin.package} ${pin.version}`);
+  await ensureAdoptedEngine(
+    options,
+    { name: pin.package, version: pin.version, integrity: pin.integrity },
+    home,
+    noDownload,
+  );
   return 0;
+}
+
+/**
+ * The engine this adoption just pinned, on this machine.
+ *
+ * Adoption ends with "start your app with `penv run -- …`", and that command
+ * refuses until the pinned bytes are in `$PENV_HOME`. So the download is offered
+ * while there is still somebody reading — and when there is not, or they decline,
+ * the closing message is followed by the one command that makes it true. An
+ * adoption that succeeded is not turned into a failure by it: the manifest is
+ * written and the exit code stays 0 either way.
+ */
+async function ensureAdoptedEngine(
+  options: LauncherOptions,
+  pin: Pin,
+  home: string,
+  noDownload: boolean,
+): Promise<void> {
+  try {
+    await ensure(options, "engines", pin, home, noDownload);
+  } catch (error) {
+    // Missing and declined are the two expected answers, and they read as a next
+    // step rather than a failure. Anything else — corrupt bytes, a registry that
+    // would not answer — is still reported, and still ends at the same command.
+    if (!(error instanceof PackageMissingError || error instanceof InstallDeclinedError)) {
+      report(error, options.io);
+    }
+    options.io.out(
+      `→ Run \`${INSTALL_COMMAND}\` to install ${pin.name} ${pin.version} before your first \`penv run\`.`,
+    );
+  }
 }
 
 /** The pinned bytes on disk, or the refusal that says why they are not. */

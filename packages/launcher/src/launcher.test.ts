@@ -56,12 +56,20 @@ const EXTENSION_PIN: Pin = {
 };
 
 const BUNDLED_VERSION = "0.10.0";
+const BUNDLED_TARBALL = packTar(enginePackage("@penvhq/cli", BUNDLED_VERSION));
 
 /** What a released launcher carries: the SSRI npm recorded for the engine beside it. */
 const BUNDLED_PIN: ManifestEngine = {
   package: "@penvhq/cli",
   version: BUNDLED_VERSION,
-  integrity: integrityOf(packTar(enginePackage("@penvhq/cli", BUNDLED_VERSION))),
+  integrity: integrityOf(BUNDLED_TARBALL),
+};
+
+/** The same pin, as the store reads pins. */
+const BUNDLED_STORE_PIN: Pin = {
+  name: BUNDLED_PIN.package,
+  version: BUNDLED_PIN.version,
+  integrity: BUNDLED_PIN.integrity,
 };
 
 function manifestText(options: { format?: number; extension?: boolean } = {}): string {
@@ -212,10 +220,15 @@ const REGISTRY: Readonly<Record<string, Uint8Array>> = {
   "https://registry.npmjs.org/@penvhq/provider-vault/-/provider-vault-0.9.0.tgz": EXTENSION_TARBALL,
 };
 
+/** What the registry serves the engine a released launcher ships. */
+const BUNDLED_REGISTRY: Readonly<Record<string, Uint8Array>> = {
+  [`https://registry.npmjs.org/@penvhq/cli/-/cli-${BUNDLED_VERSION}.tgz`]: BUNDLED_TARBALL,
+};
+
 async function install(home: string, pin: Pin, tarball: Uint8Array): Promise<string> {
   return installPin({
     home,
-    kind: pin === ENGINE_PIN ? "engines" : "extensions",
+    kind: pin === EXTENSION_PIN ? "extensions" : "engines",
     pin,
     fetcher: { get: () => Promise.resolve(tarball) },
   });
@@ -284,7 +297,7 @@ describe("the manifest an adoption leaves behind", () => {
       engine: BUNDLED_PIN,
       extensions: {},
     });
-    expect(test.out).toEqual([`✓ ${MANIFEST_PATH} pins @penvhq/cli ${BUNDLED_VERSION}`]);
+    expect(test.out[0]).toBe(`✓ ${MANIFEST_PATH} pins @penvhq/cli ${BUNDLED_VERSION}`);
   });
 
   it("writes what parseManifest reads back and serializeManifest writes again", async () => {
@@ -400,6 +413,80 @@ describe("the manifest an adoption leaves behind", () => {
     expect(test.err[0]).toBe(
       `✗ This penv carries the integrity of @penvhq/cli 0.9.0 and just ran ${BUNDLED_VERSION}, so it cannot record which bytes scaffolded this project`,
     );
+  });
+
+  /**
+   * Adoption closes by telling the developer to start their app with
+   * `penv run -- …`, and nothing had put the engine that command needs in
+   * `$PENV_HOME` — so the very next thing they typed refused. The install is
+   * offered here, where there is still somebody reading.
+   */
+  describe("the engine the adoption pinned", () => {
+    const NEXT_STEP = `→ Run \`penv install\` to install @penvhq/cli ${BUNDLED_VERSION} before your first \`penv run\`.`;
+
+    function adopting(overrides: Partial<Parameters<typeof harness>[0]> = {}) {
+      const cwd = scratch("penv-adopt-");
+      return {
+        cwd,
+        test: harness({
+          argv: ["init", "--yes"],
+          cwd,
+          home: scratch("penv-home-"),
+          serve: BUNDLED_REGISTRY,
+          onSpawn: () => {
+            scaffold(cwd);
+          },
+          ...overrides,
+        }),
+      };
+    }
+
+    function installedIn(home: string): boolean {
+      return existsSync(
+        join(packageDir(home, "engines", "@penvhq/cli", BUNDLED_VERSION), "bin.js"),
+      );
+    }
+
+    it("is installed after one consent line", async () => {
+      const { test } = adopting({ interactive: true, consent: true });
+      const home = test.options.env[PENV_HOME_VAR] ?? "";
+
+      expect(await runLauncher(test.options)).toBe(0);
+      expect(test.questions).toEqual([
+        `penv needs @penvhq/cli ${BUNDLED_VERSION} for this project. Download and verify it now?`,
+      ]);
+      expect(installedIn(home)).toBe(true);
+      expect(test.out).not.toContain(NEXT_STEP);
+    });
+
+    it("names `penv install` as the next step when the download is declined", async () => {
+      const { test } = adopting({ interactive: true, consent: false });
+
+      expect(await runLauncher(test.options)).toBe(0);
+      expect(test.out).toContain(NEXT_STEP);
+      expect(installedIn(test.options.env[PENV_HOME_VAR] ?? "")).toBe(false);
+    });
+
+    /** Nobody to ask is not a reason to close with a command that refuses. */
+    it("names `penv install` as the next step with nobody at the terminal", async () => {
+      const { test } = adopting({ interactive: false });
+
+      expect(await runLauncher(test.options)).toBe(0);
+      expect(test.questions).toEqual([]);
+      expect(test.out).toContain(NEXT_STEP);
+    });
+
+    /** The quiet case: the bytes are already there, so there is nothing to ask. */
+    it("asks nothing when the pinned engine is already installed", async () => {
+      const home = scratch("penv-home-");
+      await install(home, BUNDLED_STORE_PIN, BUNDLED_TARBALL);
+      const { test } = adopting({ home, interactive: true, consent: true });
+
+      expect(await runLauncher(test.options)).toBe(0);
+      expect(test.questions).toEqual([]);
+      expect(test.asked).toEqual([]);
+      expect(test.out).not.toContain(NEXT_STEP);
+    });
   });
 });
 
