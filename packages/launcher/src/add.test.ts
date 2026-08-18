@@ -10,7 +10,13 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { EXTENSIONS_PATH, MANIFEST_PATH, type Manifest, serializeManifest } from "@penvhq/core";
+import {
+  EXTENSIONS_PATH,
+  LOCAL_EXTENSIONS_PATH,
+  MANIFEST_PATH,
+  type Manifest,
+  serializeManifest,
+} from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { type AddOptions, add } from "./add.js";
 import type { Fetcher } from "./fetcher.js";
@@ -861,6 +867,122 @@ describe("the onboarding offer", () => {
   });
 });
 
+/* Local — the path with no release behind it. */
+
+const OWN = "@acme/provider-consul";
+
+/** Installs `name` into the project's own `node_modules`, the way a workspace link would. */
+function installLocally(
+  root: string,
+  name: string,
+  options: { readonly version?: string; readonly penv?: Record<string, string> } = {},
+): void {
+  const dir = join(root, "node_modules", ...name.split("/"));
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "package.json"),
+    `${JSON.stringify(
+      {
+        name,
+        version: options.version ?? "0.0.0",
+        main: "index.js",
+        ...(options.penv === undefined ? {} : { penv: options.penv }),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  writeFileSync(join(dir, "index.js"), "exports.penvProviderFactory = () => ({});\n");
+}
+
+function localExtensionsIn(root: string): unknown {
+  return JSON.parse(readFileSync(join(root, ...LOCAL_EXTENSIONS_PATH.split("/")), "utf8"));
+}
+
+describe("add --local", () => {
+  it("records the name, declares the type, and leaves the manifest alone", async () => {
+    const root = projectAt();
+    installLocally(root, OWN, { version: "0.0.0" });
+    const test = harness({ argv: ["--local", OWN], root });
+    const before = manifestTextIn(root);
+
+    await add(test.options);
+
+    expect(localExtensionsIn(root)).toEqual([OWN]);
+    expect(manifestTextIn(root)).toBe(before);
+    expect(declarationIn(root, OWN)).toContain(
+      `// Written by \`penv add --local ${OWN}\`, and committed.`,
+    );
+    expect(declarationIn(root, OWN)).toContain(
+      "resolved from this project, not from a published release",
+    );
+    expect(test.out).toContain(`✓ ${OWN} resolves from this project — nothing is pinned`);
+    // No release was read, so no registry was.
+    expect(test.asked).toEqual([]);
+  });
+
+  it("adds a second one without losing the first", async () => {
+    const root = projectAt();
+    installLocally(root, OWN);
+    installLocally(root, "@acme/provider-etcd");
+    await add(harness({ argv: ["--local", OWN], root }).options);
+    await add(harness({ argv: ["--local", "@acme/provider-etcd"], root }).options);
+
+    expect(localExtensionsIn(root)).toEqual(["@acme/provider-consul", "@acme/provider-etcd"]);
+  });
+
+  it("refuses a package the project cannot resolve", async () => {
+    const root = projectAt();
+    const test = harness({ argv: ["--local", OWN], root });
+
+    await expect(add(test.options)).rejects.toMatchObject({
+      code: "PENV_LOCAL_EXTENSION_UNRESOLVED",
+    });
+    expect(existsSync(join(root, ...LOCAL_EXTENSIONS_PATH.split("/")))).toBe(false);
+  });
+
+  it("refuses the flags that describe a published release", async () => {
+    const root = projectAt();
+    installLocally(root, OWN);
+
+    await expect(
+      add(harness({ argv: ["--local", `${OWN}@1.2.3`], root }).options),
+    ).rejects.toMatchObject({
+      code: "PENV_ADD_LOCAL_FLAG",
+      message: expect.stringContaining("a version"),
+    });
+    await expect(
+      add(
+        harness({ argv: ["--local", OWN, "--registry", "https://npm.acme.internal"], root })
+          .options,
+      ),
+    ).rejects.toMatchObject({ code: "PENV_ADD_LOCAL_FLAG" });
+    await expect(
+      add(harness({ argv: ["--local", OWN, "--trust-young"], root }).options),
+    ).rejects.toMatchObject({ code: "PENV_ADD_LOCAL_FLAG" });
+  });
+
+  it("refuses in CI, where nobody is deciding what the project develops", async () => {
+    const root = projectAt();
+    installLocally(root, OWN);
+    const test = harness({ argv: ["--local", OWN], root });
+
+    await expect(add({ ...test.options, ci: true })).rejects.toMatchObject({
+      code: "PENV_ADD_LOCAL_IN_CI",
+    });
+  });
+
+  /** The registry path is untouched: an ordinary add still pins and still asks nothing extra. */
+  it("leaves the pinned path alone", async () => {
+    const test = harness({ argv: [VAULT], serve: VAULT_REGISTRY, interactive: true });
+
+    await add(test.options);
+
+    expect(existsSync(join(test.root, ...LOCAL_EXTENSIONS_PATH.split("/")))).toBe(false);
+    expect(manifestIn(test.root)).toMatchObject({ extensions: { [VAULT]: { version: "0.9.0" } } });
+  });
+});
+
 /* What `add` will not even try. */
 
 describe("what add refuses to parse", () => {
@@ -871,8 +993,8 @@ describe("what add refuses to parse", () => {
       code: "PENV_ADD_FLAG",
       message:
         "`penv add` does not understand `--force`\n" +
-        "  Run `penv add <package>` with `--trust-young` or `--registry <url>` — those are the " +
-        "two it takes.",
+        "  Run `penv add <package>` with `--trust-young`, `--registry <url>`, or `--local` — " +
+        "those are the three it takes.",
     });
   });
 

@@ -84,7 +84,7 @@ import {
   sourceProviderFor,
   targetEnvironment,
 } from "../project.js";
-import { LOCAL_TREE_TYPE } from "../registry.js";
+import { LOCAL_TREE_TYPE, localExtensions } from "../registry.js";
 import type { DriftReport } from "../schema.js";
 import { computeDrift, lookup, minLengthOf } from "../schema.js";
 import { out } from "../style.js";
@@ -132,6 +132,7 @@ export type DoctorCheck =
   | "projection-manual-edit"
   | "projection-value-drift"
   | "environment-flag-shadow"
+  | "local-extension"
   | "artifact-in-tree";
 
 export interface DoctorFinding {
@@ -292,6 +293,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   }
   findings.push(...(await providerDriftFindings(project, environment, options.source)));
   findings.push(...(await projectionFindings(project, environment, options.projection)));
+  findings.push(...localExtensionFindings(project));
   findings.push(...artifactFindings(project));
 
   findings.push({
@@ -1004,6 +1006,39 @@ function scannableFiles(directory: string, out: string[]): void {
  * The scan is bounded by what the writer produces: canonical JSON, so `.json`
  * files only, under a megabyte, outside `.git` and `node_modules`.
  */
+/**
+ * The extensions this project develops rather than pins.
+ *
+ * Nothing is wrong with the arrangement — a repository that writes a provider
+ * has to be able to use it — but nothing pins the bytes either, so penv cannot
+ * say the adapter here is the adapter anyone else gets. That is the `?` verdict:
+ * reported so the state is visible in the same place every other decision is,
+ * rather than living only in whoever's `node_modules` happens to hold it.
+ */
+function localExtensionFindings(project: Project): DoctorFinding[] {
+  const names = localExtensions(project.root);
+  if (names.length === 0) {
+    return [
+      {
+        check: "local-extension",
+        severity: "pass",
+        label: "Extensions",
+        subject: "every extension this project names is pinned",
+      },
+    ];
+  }
+  return [
+    {
+      check: "local-extension",
+      severity: "unknown",
+      label: "Extensions",
+      subject: names.join(", "),
+      detail: "resolved from this project's node_modules — no release, no pinned bytes",
+      remedy: `publish it and run \`penv add ${names[0]}\` when this stops being a development path`,
+    },
+  ];
+}
+
 function artifactFindings(project: Project): DoctorFinding[] {
   const files: string[] = [];
   scannableFiles(project.root, files);

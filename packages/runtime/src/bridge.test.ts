@@ -192,7 +192,9 @@ describe("what an uncaught bridge refusal prints", () => {
 
   it("keeps the caller's frames and drops penv's own", () => {
     const refusal = loadFails({ ...AMBIENT }) as DirectStartError;
-    const frames = (refusal.stack ?? "").split("\n").filter((line) => line.trim().startsWith("at "));
+    const frames = (refusal.stack ?? "")
+      .split("\n")
+      .filter((line) => line.trim().startsWith("at "));
 
     expect(frames.length).toBeGreaterThan(0);
     expect(frames.some((frame) => /load\.ts/.test(frame))).toBe(false);

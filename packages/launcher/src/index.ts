@@ -24,6 +24,8 @@ export type { Engine } from "./engine.js";
 export { bundledEngine, ENGINE_BIN, engineAt } from "./engine.js";
 export {
   AddFlagError,
+  AddLocalFlagError,
+  AddLocalInCiError,
   AddNoDownloadError,
   AddNotInteractiveError,
   AddPackageNameError,
@@ -39,6 +41,8 @@ export {
   EnginePinUnreleasedError,
   INSTALL_COMMAND,
   InstallDeclinedError,
+  LOCAL_FLAG,
+  LocalExtensionUnresolvedError,
   MIN_PACKAGE_AGE_DAYS,
   NoProjectError,
   OfficialRegistryError,

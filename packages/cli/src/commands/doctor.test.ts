@@ -8,7 +8,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { recordsDir } from "@penvhq/core";
+import { localExtensionsFile, recordsDir, serializeLocalExtensions } from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DoctorCheck, DoctorFinding, DoctorSeverity } from "./doctor.js";
 import { runDoctor } from "./doctor.js";
@@ -807,6 +807,42 @@ describe("artifact-in-tree", () => {
   });
 });
 
+describe("local-extension", () => {
+  it("fires on an extension this project develops rather than pins", async () => {
+    const root = makeProject({
+      schema: "apiUrl: z.string()",
+      tree: { "api-url.production": "https://api.example.com" },
+    });
+    writeFileSync(
+      localExtensionsFile(root),
+      serializeLocalExtensions(["@acme/provider-consul"]),
+      "utf8",
+    );
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+    const fired = firedFor(report.findings, "local-extension");
+
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.severity).toBe("unknown");
+    expect(fired[0]?.subject).toBe("@acme/provider-consul");
+    expect(fired[0]?.remedy).toContain("penv add @acme/provider-consul");
+    // Deliberate development state, not a fault.
+    expect(report.ok).toBe(true);
+  });
+
+  it("stays quiet on a project that records none", async () => {
+    const root = makeProject({
+      schema: "apiUrl: z.string()",
+      tree: { "api-url.production": "https://api.example.com" },
+    });
+
+    const report = await runDoctor({ cwd: root, environment: "production" });
+
+    expect(firedFor(report.findings, "local-extension")).toEqual([]);
+    expect(severityOf(report.findings, "local-extension")).toBe("pass");
+  });
+});
+
 describe("the report", () => {
   it("prints a passing line for every check when nothing is wrong", async () => {
     const root = makeProject({
@@ -839,6 +875,7 @@ describe("the report", () => {
       "rotation-overdue",
       "rotation-stuck",
       "provider-value-drift",
+      "local-extension",
       "artifact-in-tree",
       "provider",
     ]);

@@ -25,6 +25,10 @@ const MODULE_SPECIFIER = /(?:\bfrom|\bmodule|\bimport|\brequire)\s*\(?\s*(["'])(
 
 /** What an extension's `package.json` tells `add`, and nothing more. */
 export interface ExtensionPackage {
+  /** The package's own name, which is what identifies the directory as its own. */
+  readonly name: string | undefined;
+  /** The package's own version. Only a local add reads it; a release pins the registry's. */
+  readonly version: string | undefined;
   /** A path inside the package to a self-contained declaration file. */
   readonly types: string | undefined;
   /** The engine command that finishes setting this provider up, e.g. `cloud login`. */
@@ -51,10 +55,15 @@ export function readExtensionPackage(dir: string): ExtensionPackage {
   try {
     parsed = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
   } catch {
-    return { types: undefined, onboard: undefined };
+    return { name: undefined, version: undefined, types: undefined, onboard: undefined };
   }
   const penv = field(parsed, "penv");
-  return { types: text(field(penv, "types")), onboard: text(field(penv, "onboard")) };
+  return {
+    name: text(field(parsed, "name")),
+    version: text(field(parsed, "version")),
+    types: text(field(penv, "types")),
+    onboard: text(field(penv, "onboard")),
+  };
 }
 
 export interface DeclarationSubject {
@@ -62,14 +71,19 @@ export interface DeclarationSubject {
   readonly version: string;
   /** Recorded in the header: what npm knew about where these bytes came from. */
   readonly attested: boolean;
+  /** The package is this project's own, resolved from it rather than pinned. */
+  readonly local?: boolean;
 }
 
 function header(subject: DeclarationSubject): string {
-  const provenance = subject.attested
-    ? "npm records a provenance attestation for it"
-    : "npm records no provenance attestation for it";
+  const local = subject.local === true;
+  const provenance = local
+    ? "resolved from this project, not from a published release"
+    : subject.attested
+      ? "npm records a provenance attestation for it"
+      : "npm records no provenance attestation for it";
   return (
-    `// Written by \`penv add ${subject.name}\`, and committed.\n` +
+    `// Written by \`penv add ${local ? "--local " : ""}${subject.name}\`, and committed.\n` +
     `// ${subject.name} ${subject.version} — ${provenance}.\n` +
     "//\n" +
     "// Types only: this declares the shape of the provider's `penv.config.ts`\n" +

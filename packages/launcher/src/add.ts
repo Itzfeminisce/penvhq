@@ -21,21 +21,39 @@
  * `--no-download` and a run with nobody at it are both refused before the first
  * request, and CI gets `penv install`, which installs what the manifest already
  * pins rather than choosing what it should.
+ *
+ * `--local` is the one path with no release behind it: a repository that writes
+ * a provider adds the package it already builds. Nothing is fetched and nothing
+ * is pinned, so the manifest is not touched — see {@link addLocal}.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
-import { relative, sep } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import type { Manifest, ManifestExtension, ManifestTrust } from "@penvhq/core";
-import { findConfigFile, MANIFEST_PATH, OFFICIAL_SCOPE, serializeManifest } from "@penvhq/core";
+import {
+  findConfigFile,
+  LOCAL_EXTENSIONS_PATH,
+  localExtensionsFile,
+  MANIFEST_PATH,
+  OFFICIAL_SCOPE,
+  parseLocalExtensions,
+  serializeLocalExtensions,
+  serializeManifest,
+} from "@penvhq/core";
 import { readProviderEntries, setProviderType } from "./config-edit.js";
 import { readExtensionPackage, writeDeclaration } from "./declaration.js";
 import {
   AddFlagError,
+  AddLocalFlagError,
+  AddLocalInCiError,
   AddNoDownloadError,
   AddNotInteractiveError,
   AddPackageNameError,
   AddRegistryError,
   AddSubjectError,
+  LOCAL_FLAG,
+  LocalExtensionUnresolvedError,
   ManifestEntriesUnreadableError,
   MIN_PACKAGE_AGE_DAYS,
   OfficialRegistryError,
@@ -89,6 +107,8 @@ interface Request {
   /** Absent means npmjs, which the manifest never names. */
   readonly registry: string | undefined;
   readonly trustYoung: boolean;
+  /** The package is this project's own — resolved from it, pinned nowhere. */
+  readonly local: boolean;
 }
 
 /** npmjs under any spelling is not a registry the manifest records. */
@@ -118,9 +138,14 @@ function parseRequest(argv: readonly string[]): Request {
   let spec: string | undefined;
   let registry: string | undefined;
   let trustYoung = false;
+  let local = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index] ?? "";
+    if (token === LOCAL_FLAG) {
+      local = true;
+      continue;
+    }
     if (token === TRUST_YOUNG_FLAG) {
       trustYoung = true;
       continue;
@@ -150,7 +175,21 @@ function parseRequest(argv: readonly string[]): Request {
   if (!PACKAGE_NAME.test(name) || version === "") {
     throw new AddPackageNameError(spec);
   }
-  return { name, version, registry, trustYoung };
+  // A local extension is whatever this checkout builds, so every flag that
+  // describes a published release contradicts it. Refused rather than ignored:
+  // silently dropping `--registry` would answer a different question than asked.
+  if (local) {
+    if (version !== undefined) {
+      throw new AddLocalFlagError("a version");
+    }
+    if (registry !== undefined) {
+      throw new AddLocalFlagError(`\`${REGISTRY_FLAG}\``);
+    }
+    if (trustYoung) {
+      throw new AddLocalFlagError(`\`${TRUST_YOUNG_FLAG}\``);
+    }
+  }
+  return { name, version, registry, trustYoung, local };
 }
 
 function tierOf(request: Request): Tier {
@@ -333,9 +372,98 @@ async function offerOnboarding(
   return undefined;
 }
 
+/**
+ * The directory of a package the project can already reach, or `undefined`.
+ *
+ * Resolution is anchored at the project, exactly where the engine anchors it
+ * when it loads a provider — so what `--local` records is the same package the
+ * next command will import, not a second answer to the same question.
+ */
+function resolvePackageDir(name: string, root: string): string | undefined {
+  const require = createRequire(resolve(root, "noop.js"));
+  try {
+    return dirname(require.resolve(`${name}/package.json`));
+  } catch {
+    // A package whose `exports` hides its own package.json still resolves by
+    // entry point; walk up from there to the directory that declares the name.
+    let dir: string;
+    try {
+      dir = dirname(require.resolve(name));
+    } catch {
+      return undefined;
+    }
+    for (let current = dir, parent = dirname(dir); current !== parent; parent = dirname(current)) {
+      if (readExtensionPackage(current).name === name) {
+        return current;
+      }
+      current = parent;
+    }
+    return undefined;
+  }
+}
+
+/** Adds `name` to the committed list, leaving the manifest untouched. */
+function recordLocalExtension(root: string, name: string): void {
+  const file = localExtensionsFile(root);
+  let current: string;
+  try {
+    current = readFileSync(file, "utf8");
+  } catch {
+    current = "[]";
+  }
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, serializeLocalExtensions([...parseLocalExtensions(current), name]));
+}
+
+/**
+ * `penv add --local <package>` — the path a repository that *writes* a provider
+ * takes.
+ *
+ * Nothing is fetched, nothing is pinned, and the manifest is not opened: there
+ * is no release to record, and inventing a version and an integrity for a
+ * working copy would put a promise in a committed file that the file cannot
+ * keep. What it writes is the declaration — so `penv.config.ts` is typed for the
+ * provider it names — and the package's name in a list beside the manifest, so a
+ * reviewer and `penv doctor` can both see that this project reads an adapter out
+ * of itself.
+ */
+async function addLocal(options: AddOptions, request: Request): Promise<AddResult> {
+  const { io, root } = options;
+  if (options.ci === true) {
+    throw new AddLocalInCiError(request.name);
+  }
+
+  const dir = resolvePackageDir(request.name, root);
+  if (dir === undefined) {
+    throw new LocalExtensionUnresolvedError(request.name, root);
+  }
+
+  const installed = readExtensionPackage(dir);
+  const declaration = writeDeclaration({
+    root,
+    dir,
+    name: request.name,
+    version: installed.version ?? "unpublished",
+    attested: false,
+    local: true,
+    types: installed.types,
+  });
+  recordLocalExtension(root, request.name);
+
+  io.out(`✓ ${request.name} resolves from this project — nothing is pinned`);
+  io.out(`✓ ${LOCAL_EXTENSIONS_PATH} records it`);
+  io.out(`✓ ${declaration} declares its config type`);
+
+  await offerConfigEdit(options, request.name);
+  return { onboard: await offerOnboarding(io, request.name, installed.onboard) };
+}
+
 export async function add(options: AddOptions): Promise<AddResult> {
   const { io, fetcher, home, root, manifestFile } = options;
   const request = parseRequest(options.argv);
+  if (request.local) {
+    return addLocal(options, request);
+  }
   const tier = tierOf(request);
   const now = (options.now ?? (() => new Date()))();
 
