@@ -21,6 +21,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -29,7 +30,7 @@ import { fileURLToPath } from "node:url";
 import { CUTOVER_PATH, ROLLBACK_DOTENV_PATH } from "@penvhq/core";
 import { runCommand as runCittyCommand } from "citty";
 import { afterEach, describe, expect, it } from "vitest";
-import { runCleanup, runUndo } from "../cutover.js";
+import { bundleDotenvFiles, bundledFiles, readCutover, runCleanup, runUndo } from "../cutover.js";
 import type { DotenvFile } from "../dotenv-files.js";
 import type { InstallPlan, InstallRuntime } from "../install.js";
 import { engineVersion } from "../install.js";
@@ -711,6 +712,96 @@ describe("undo", () => {
       "Run `penv init` to adopt your dotenv files; undo puts them back afterwards.",
     );
   });
+
+  it("finds the project from a subdirectory", async () => {
+    const root = makeProject(FIXTURE);
+    await cutover(root);
+    const nested = join(root, "apps", "web");
+    mkdirSync(nested, { recursive: true });
+
+    expect([...runUndo({ cwd: nested }).restored].sort()).toEqual(
+      Object.keys(FIXTURE.files).sort(),
+    );
+    expect(existsSync(join(root, ".env"))).toBe(true);
+  });
+});
+
+/**
+ * The cutover's crash window: between the first rename and the last, some files
+ * are in the bundle and some are still at the project root. Everything here is
+ * about the one guarantee that matters there — no file is lost, whatever the
+ * interruption did.
+ */
+describe("an interrupted cutover", () => {
+  const FIXTURE: Fixture = {
+    files: { ".env": "DATABASE_URL=postgres://localhost/app\n", ".env.development": "DEBUG=true\n" },
+  };
+
+  /** The record names what the move *intends*, so a move that dies partway is still described. */
+  it("records every file before it moves any", () => {
+    const root = makeProject({ files: { ".env": "A=1\n" } });
+
+    // The second name is not on disk, so the second rename throws — a real
+    // interruption, with the first file already in the bundle.
+    expect(() => bundleDotenvFiles(root, [".env", ".env.production"], ["development"])).toThrow();
+
+    expect(readCutover(root)?.files).toEqual([".env", ".env.production"]);
+    expect(bundledFiles(root)).toEqual([".env"]);
+  });
+
+  /** Interrupted between two renames, undo puts back the one that moved and keeps the one that did not. */
+  it("is undone without losing a file", async () => {
+    const root = makeProject(FIXTURE);
+    const before = readFileSync(join(root, ".env.development"), "utf8");
+    await cutover(root);
+    // The state a crash after the first rename leaves: one file bundled, one still at the root.
+    renameSync(
+      join(root, ...ROLLBACK_DOTENV_PATH.split("/"), ".env.development"),
+      join(root, ".env.development"),
+    );
+
+    const result = runUndo({ cwd: root });
+
+    expect(result.restored).toEqual([".env"]);
+    expect(result.alreadyBack).toEqual([".env.development"]);
+    expect(result.missing).toEqual([]);
+    expect(existsSync(join(root, ".env"))).toBe(true);
+    expect(readFileSync(join(root, ".env.development"), "utf8")).toBe(before);
+  });
+
+  /** A bundle whose record was deleted by hand is still a bundle, and still blocks a second cutover. */
+  it("refuses a re-run while the bundle is unresolved", async () => {
+    const root = makeProject(FIXTURE);
+    await cutover(root);
+    rmSync(join(root, ...CUTOVER_PATH.split("/")));
+    writeFileSync(join(root, ".env"), "DATABASE_URL=postgres://localhost/app\n", "utf8");
+
+    const error = refusalFrom(() => planFor(root, { selected: [".env"] }));
+
+    expect(error.code).toBe("INIT_BUNDLE_UNRESOLVED");
+  });
+
+  /** And undo reads it, because the bundle keeps every file under its exact original name. */
+  it("is undone from the bundle alone when the record is gone", async () => {
+    const root = makeProject(FIXTURE);
+    await cutover(root);
+    rmSync(join(root, ...CUTOVER_PATH.split("/")));
+
+    expect([...runUndo({ cwd: root }).restored].sort()).toEqual([".env", ".env.development"]);
+    expect(existsSync(join(root, ".env.development"))).toBe(true);
+  });
+
+  /** Only cleanup deletes: undo is what stands between an interruption and a lost file. */
+  it("leaves nothing for cleanup to drop once it has been undone", async () => {
+    const root = makeProject(FIXTURE);
+    await cutover(root);
+    runUndo({ cwd: root });
+
+    const result = runCleanup({ cwd: root });
+
+    expect(result).toMatchObject({ cleaned: false, removed: [] });
+    expect(existsSync(join(root, ".env"))).toBe(true);
+  });
 });
 
 describe("cleanup", () => {
@@ -742,6 +833,20 @@ describe("cleanup", () => {
 
     expect(result).toMatchObject({ cleaned: false, removed: [] });
     expect(renderCleanup(result).join("\n")).toContain("No dotenv rollback bundle to clean up.");
+  });
+
+  it("finds the project from a subdirectory", async () => {
+    const root = makeProject({
+      files: { ".env": "DATABASE_URL=postgres://localhost/app\n", ".env.development": "DEBUG=1\n" },
+    });
+    await cutover(root);
+    const nested = join(root, "apps", "web");
+    mkdirSync(nested, { recursive: true });
+
+    expect(runCleanup({ cwd: nested })).toMatchObject({
+      cleaned: true,
+      removed: [".env", ".env.development"],
+    });
   });
 });
 
@@ -820,7 +925,7 @@ describe("a second migration", () => {
       "The dotenv files from the last cutover are still in .penv/state/rollback/dotenv/, and penv will not migrate a second time over them",
     );
     expect(error.remedy).toBe(
-      "Run `penv cleanup` to drop that bundle once you are happy with the migration.",
+      "Run `penv init undo` to put them back, or `penv cleanup` to drop them once you are happy with the migration.",
     );
   });
 

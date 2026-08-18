@@ -22,8 +22,14 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
-import { CUTOVER_PATH, PenvError, ROLLBACK_DOTENV_PATH, ROLLBACK_PATH } from "@penvhq/core";
+import { dirname, join, resolve } from "node:path";
+import {
+  CUTOVER_PATH,
+  findConfigFile,
+  PenvError,
+  ROLLBACK_DOTENV_PATH,
+  ROLLBACK_PATH,
+} from "@penvhq/core";
 
 /** The only cutover format penv reads. A later one is a penv the project needs. */
 export const CUTOVER_FORMAT = 1;
@@ -49,6 +55,39 @@ export function bundleDir(root: string): string {
 
 export function cutoverFile(root: string): string {
   return fileFor(root, CUTOVER_PATH);
+}
+
+/**
+ * The project `undo` and `cleanup` act on: the directory holding the
+ * `penv.config.ts` this one is inside, exactly as every other command finds it.
+ *
+ * Rooted at the working directory instead, both commands would report nothing to
+ * do from any subdirectory of the project they were meant to recover.
+ */
+export function cutoverRoot(cwd: string): string {
+  const file = findConfigFile(cwd);
+  return file === undefined ? resolve(cwd) : dirname(file);
+}
+
+/** The filenames the rollback bundle holds, sorted. Empty when there is no bundle. */
+export function bundledFiles(root: string): string[] {
+  try {
+    return readdirSync(bundleDir(root)).sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * True while a cutover is still waiting on `penv init undo` or `penv cleanup`.
+ *
+ * The bundle counts on its own, not only the record that names it: a bundle with
+ * no `cutover.json` is a cutover whose record was deleted by hand, and reading it
+ * as "no cutover" is how a second migration would move a second set of files over
+ * the first one's — into a gitignored directory nothing would ever look in again.
+ */
+export function bundleUnresolved(root: string): boolean {
+  return readCutover(root) !== undefined || bundledFiles(root).length > 0;
 }
 
 /**
@@ -115,10 +154,15 @@ export function serializeCutover(cutover: Cutover): string {
 }
 
 /**
- * Moves the selected dotenv files into the bundle and records them. The move is
- * last in a cutover — everything else has already been written and validated —
- * so a failure here leaves a project that reads its values from penv with its
- * dotenv files still in place, which is the state a re-run recovers from.
+ * Records the cutover, then moves the selected dotenv files into the bundle.
+ *
+ * The move is last in a cutover — everything else has already been written and
+ * validated — so a failure before it leaves a project whose dotenv files are
+ * exactly where they were. Within the move, the record goes first and names every
+ * file the move intends: a crash or a file lock between two renames then leaves a
+ * bundle penv can still describe, and `penv init undo` puts back what arrived.
+ * Written the other way round, the files already moved would be orphaned in a
+ * gitignored directory no command knew to look in.
  */
 export function bundleDotenvFiles(
   root: string,
@@ -126,11 +170,6 @@ export function bundleDotenvFiles(
   environments: readonly string[],
   now: Date = new Date(),
 ): Cutover {
-  const bundle = bundleDir(root);
-  mkdirSync(bundle, { recursive: true });
-  for (const name of files) {
-    renameSync(join(root, name), join(bundle, name));
-  }
   const cutover: Cutover = {
     format: CUTOVER_FORMAT,
     movedAt: now.toISOString(),
@@ -140,6 +179,12 @@ export function bundleDotenvFiles(
   const file = cutoverFile(root);
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, serializeCutover(cutover), "utf8");
+
+  const bundle = bundleDir(root);
+  mkdirSync(bundle, { recursive: true });
+  for (const name of files) {
+    renameSync(join(root, name), join(bundle, name));
+  }
   return cutover;
 }
 
@@ -147,20 +192,29 @@ export interface UndoResult {
   readonly root: string;
   /** The files put back, in the order they were moved. */
   readonly restored: readonly string[];
+  /** Recorded names already at the project root — what an interrupted undo had reached. */
+  readonly alreadyBack: readonly string[];
+  /** Recorded names in neither the bundle nor the project root. Nothing penv can restore. */
+  readonly missing: readonly string[];
 }
 
 /**
  * Puts every bundled file back under its exact original name, then drops the
  * bundle and the state that named it.
  *
- * Nothing is restored until every name is checked, for the same reason the
- * cutover preflights: a half-restored project has some values in penv and some
- * in dotenv, and no command can tell which is current.
+ * Undo is resumable, because the thing it recovers from is an interruption. A
+ * name already at the project root and no longer in the bundle is a file an
+ * earlier run put back, not a collision — only a name that is in both places at
+ * once is, and that is the one case worth refusing over, since restoring would
+ * write over whatever came back. A name in neither place is reported rather than
+ * refused: the old refusal's remedy was `penv cleanup`, which would have deleted
+ * every file that was still recoverable.
  */
 export function runUndo(options: { readonly cwd: string }): UndoResult {
-  const root = options.cwd;
+  const root = cutoverRoot(options.cwd);
   const cutover = readCutover(root);
-  if (cutover === undefined) {
+  const bundled = bundledFiles(root);
+  if (cutover === undefined && bundled.length === 0) {
     throw new PenvError(
       "INIT_UNDO_NOTHING",
       "There is no dotenv cutover to undo in this project",
@@ -168,29 +222,40 @@ export function runUndo(options: { readonly cwd: string }): UndoResult {
     );
   }
 
+  // The record's order, then anything the bundle holds that it does not name.
+  // Only a cutover ever writes into the bundle, so a file filed there belongs at
+  // the project root under the name it is filed under, recorded or not.
+  const recorded = cutover?.files ?? [];
+  const names = [...recorded, ...bundled.filter((name) => !recorded.includes(name))];
+
   const bundle = bundleDir(root);
-  for (const name of cutover.files) {
-    if (!existsSync(join(bundle, name))) {
-      throw new PenvError(
-        "INIT_UNDO_INCOMPLETE",
-        `${ROLLBACK_DOTENV_PATH}/${name} is gone, so penv cannot put your dotenv files back as they were`,
-        "Run `penv cleanup` to drop what is left of the bundle — your values are in .penv/state/records/.",
-      );
-    }
-    if (existsSync(join(root, name))) {
-      throw new PenvError(
-        "INIT_UNDO_OCCUPIED",
-        `${name} exists again, and restoring the one penv moved aside would write over it`,
-        `Move ${name} out of the way, or run \`penv cleanup\` to keep it and drop the bundle. Nothing was restored.`,
-      );
-    }
+  const held = new Set(bundled);
+  const occupied = names.filter((name) => held.has(name) && existsSync(join(root, name)));
+  if (occupied.length > 0) {
+    const listed = occupied.join(", ");
+    const many = occupied.length > 1;
+    throw new PenvError(
+      "INIT_UNDO_OCCUPIED",
+      `${listed} ${many ? "exist" : "exists"} again, and restoring what penv moved aside would write over ${many ? "them" : "it"}`,
+      `Move ${listed} out of the way, or run \`penv cleanup\` to keep ${many ? "them" : "it"} and drop the bundle. Nothing was restored.`,
+    );
   }
 
-  for (const name of cutover.files) {
-    renameSync(join(bundle, name), join(root, name));
+  const restored: string[] = [];
+  const alreadyBack: string[] = [];
+  const missing: string[] = [];
+  for (const name of names) {
+    if (held.has(name)) {
+      renameSync(join(bundle, name), join(root, name));
+      restored.push(name);
+    } else if (existsSync(join(root, name))) {
+      alreadyBack.push(name);
+    } else {
+      missing.push(name);
+    }
   }
   removeBundle(root);
-  return { root, restored: cutover.files };
+  return { root, restored, alreadyBack, missing };
 }
 
 export interface CleanupResult {
@@ -206,9 +271,8 @@ export interface CleanupResult {
  * end of the migration, not the end of the adoption.
  */
 export function runCleanup(options: { readonly cwd: string }): CleanupResult {
-  const root = options.cwd;
-  const bundle = bundleDir(root);
-  const held = existsSync(bundle) ? readdirSync(bundle).sort() : [];
+  const root = cutoverRoot(options.cwd);
+  const held = bundledFiles(root);
   const cleaned =
     held.length > 0 || existsSync(cutoverFile(root)) || existsSync(fileFor(root, ROLLBACK_PATH));
   removeBundle(root);
