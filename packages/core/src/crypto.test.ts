@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   decryptValue,
   KeyUnavailableError,
+  openSealed,
   openValue,
   sameKey,
   sealValue,
   UndecryptableValueError,
 } from "./crypto.js";
 import { formatEnvelope, parseEnvelope, TAG_BYTES } from "./envelope.js";
+import { formatValueFile } from "./grammar.js";
 import type { KeySource } from "./keys.js";
 import { KEY_BYTES, nullKeySource } from "./keys.js";
 import type { ParameterRef, Scope, ValueFile } from "./types.js";
@@ -181,6 +183,30 @@ describe("decryptValue binds a value to its address", () => {
       kind: "plaintext",
       value: "hunter2",
     });
+  });
+});
+
+/**
+ * The deployment artifact carries a ciphertext beside the address it was sealed
+ * at, and is opened where no config exists to parse that address back into a
+ * value file. The binding must be exactly as strict through that door.
+ */
+describe("openSealed, the artifact's door", () => {
+  it("opens what decryptValue opens, addressed by the same string", () => {
+    const file = valueFile(production);
+
+    expect(openSealed(formatValueFile(file), seal(file, "hunter2"), keys)).toEqual({
+      kind: "plaintext",
+      value: "hunter2",
+    });
+  });
+
+  it("refuses a ciphertext carried under another address", () => {
+    const sealed = seal(valueFile(production), "hunter2");
+
+    const result = openSealed("redis/password", sealed, keys);
+
+    expect(result).toMatchObject({ kind: "failed", failure: { reason: "undecipherable" } });
   });
 });
 

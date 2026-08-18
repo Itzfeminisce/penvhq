@@ -11,6 +11,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { recordsDir } from "@penvhq/core";
 import { runCommand } from "citty";
 import { afterEach, describe, expect, it } from "vitest";
 import { openProject } from "../project.js";
@@ -64,7 +65,7 @@ function makeProject(fixture: Fixture): string {
     `export default ${JSON.stringify(config)};\n`,
     "utf8",
   );
-  mkdirSync(join(root, ".penv"), { recursive: true });
+  mkdirSync(recordsDir(root), { recursive: true });
   // Only at its declared path: a stray `.penv/env.ts` beside a schema that has
   // moved is a file the grammar would read as a parameter.
   const schemaFile = join(root, fixture.schemaFile ?? DEFAULT_SCHEMA_FILE);
@@ -77,7 +78,7 @@ function makeProject(fixture: Fixture): string {
   );
 
   for (const [name, contents] of Object.entries(fixture.tree ?? {})) {
-    const file = join(root, ".penv", name);
+    const file = join(recordsDir(root), name);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, contents, "utf8");
   }

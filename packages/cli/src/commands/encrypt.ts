@@ -25,12 +25,12 @@ import {
   openValue,
   PenvError,
   parameterId,
+  recordPath,
   sealValue,
 } from "@penvhq/core";
 import { defineCommand } from "citty";
 import type { Project } from "../project.js";
-import { keySourceFor, openProject, PENV_DIR, refFromKey, targetEnvironment } from "../project.js";
-import { refreshSnapshot } from "../snapshot.js";
+import { keySourceFor, openProject, refFromKey, targetEnvironment } from "../project.js";
 import { CHECK, formatRows, guard, write } from "../ui.js";
 import type { ScopeOptions } from "./set.js";
 import { targetScope } from "./set.js";
@@ -95,8 +95,8 @@ export async function runEncrypt(options: ResealOptions): Promise<ResealResult> 
     throw new PenvError(
       "PARAMETER_ABSENT",
       already === undefined
-        ? `Parameter ${parameter} has no value file at ${PENV_DIR}/${formatValueFile(plain)}`
-        : `Parameter ${parameter} is already encrypted at ${PENV_DIR}/${formatValueFile(sealed)}`,
+        ? `Parameter ${parameter} has no value file at ${recordPath(formatValueFile(plain))}`
+        : `Parameter ${parameter} is already encrypted at ${recordPath(formatValueFile(sealed))}`,
       already === undefined
         ? `Write it first with \`penv set ${options.key} --env ${environment}\`, which seals it ` +
             "automatically when the parameter's meta declares it a secret."
@@ -110,9 +110,6 @@ export async function runEncrypt(options: ResealOptions): Promise<ResealResult> 
   // which the value exists nowhere, and the value is the thing being protected.
   await project.provider.write(sealed, text);
   await project.provider.remove(plain);
-
-  // A newly sealed value is exactly what the snapshot ships; refresh it.
-  refreshSnapshot(project);
 
   return {
     parameter,
@@ -144,7 +141,7 @@ export async function runDecrypt(options: ResealOptions): Promise<ResealResult> 
   if (stored === undefined) {
     throw new PenvError(
       "PARAMETER_ABSENT",
-      `Parameter ${parameter} has no encrypted value file at ${PENV_DIR}/${formatValueFile(sealed)}`,
+      `Parameter ${parameter} has no encrypted value file at ${recordPath(formatValueFile(sealed))}`,
       `Nothing to decrypt. \`penv get ${options.key} --env ${environment} --explain\` shows every file penv looked at.`,
     );
   }
@@ -162,9 +159,6 @@ export async function runDecrypt(options: ResealOptions): Promise<ResealResult> 
   await project.provider.write(plain, opened.value);
   await project.provider.remove(sealed);
 
-  // A sealed value became plaintext, so it leaves the snapshot; refresh it.
-  refreshSnapshot(project);
-
   return {
     parameter,
     location: formatValueFile(plain),
@@ -177,7 +171,7 @@ class UndecryptableAt extends PenvError {
   constructor(parameter: string, environment: string, location: string, detail: string) {
     super(
       "VALUE_UNDECRYPTABLE",
-      `Parameter ${parameter} for environment ${environment} is sealed at ${PENV_DIR}/${location}, and penv could not open it: ${detail}`,
+      `Parameter ${parameter} for environment ${environment} is sealed at ${recordPath(location)}, and penv could not open it: ${detail}`,
       "Make the key available and run the command again. penv will not replace a value it " +
         "cannot read.",
     );
@@ -189,8 +183,8 @@ export function renderReseal(result: ResealResult, verb: "Encrypted" | "Decrypte
     {
       glyph: CHECK,
       label: verb,
-      subject: `${PENV_DIR}/${result.location}`,
-      detail: `${PENV_DIR}/${result.removed} removed`,
+      subject: recordPath(result.location),
+      detail: `${recordPath(result.removed)} removed`,
     },
   ]);
 }

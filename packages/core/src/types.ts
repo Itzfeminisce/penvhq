@@ -153,12 +153,17 @@ export interface ProviderConfig {
 
 /**
  * What penv hands a provider package's `penvProviderFactory` to build a provider
- * rooted at one project's `.penv`. Declared here because it is the seam every
- * provider package builds against — the CLI supplies it, the package consumes
- * it, and neither imports the other's internals.
+ * for one project. Declared here because it is the seam every provider package
+ * builds against — the CLI supplies it, the package consumes it, and neither
+ * imports the other's internals.
  */
 export interface ProviderFactoryContext {
-  /** The `.penv/` directory, absolute. */
+  /**
+   * The project root — the directory holding `penv.config.ts` — absolute. It is
+   * the project rather than any directory inside it because where penv keeps its
+   * own state is penv's business: a provider that needs a path derives it from
+   * the root, and one that needs none is unaffected when the layout moves.
+   */
   readonly root: string;
   /**
    * Required because a provider parses environment segments, and a segment is an
@@ -322,6 +327,17 @@ export interface PenvConfig {
   readonly environments: readonly string[];
   readonly providers: Readonly<Record<string, ProviderConfig>>;
   /**
+   * The environment a command acts on when `--env` is absent and nothing in the
+   * environment says otherwise. It must be one of {@link environments}.
+   *
+   * A declared decision, not inference: invariant 10 is untouched, because the
+   * name still comes from this file rather than from a branch, a folder, or
+   * `NODE_ENV`. It exists so the daily command is `penv run -- pnpm dev` instead
+   * of a flag retyped all day. CI names `--env` anyway — a pipeline that leans on
+   * this key is one config edit away from deploying the wrong environment.
+   */
+  readonly defaultEnvironment?: string;
+  /**
    * Where the module holding the schema lives, relative to this config.
    * Defaults to `.penv/env.ts`.
    *
@@ -361,37 +377,6 @@ export interface PenvConfig {
    * has no key source, which is not the same as having no key — see `keys.ts`.
    */
   readonly keys?: Readonly<Record<string, KeyConfig>>;
-}
-
-/**
- * A committed, bundler-traversable projection of a project — the evaluated config
- * and every committed sealed value — so `load()` resolves in a bundled or
- * serverless runtime where no `penv.config.ts` or `.penv/` tree is on disk (a
- * Vercel `/var/task` bundle, say). The CLI generates it as `penv.snapshot.ts` at
- * the project root and the runtime falls back to it only when file discovery finds
- * no config; on disk, live edits always win.
- *
- * `values` holds sealed records *only* — `*.enc` envelope strings keyed by their
- * filename-grammar address (`formatValueFile`). Plaintext is never embedded, at
- * any scope, so the snapshot ships exactly what a git clone already sees:
- * ciphertext that a `PENV_KEY_*` opens at boot, and nothing a key does not.
- * Deliberately distinct from the plaintext, name-mapped `ProjectionProvider`
- * vocabulary — this preserves sealed records at their grammar addresses.
- */
-export interface PenvSnapshot {
-  readonly v: 1;
-  /** The evaluated config; no key material. */
-  readonly config: PenvConfig;
-  /** `formatValueFile(file)` → sealed envelope string. Sealed records only. */
-  readonly values: Readonly<Record<string, string>>;
-  /**
-   * The digest of the inputs this snapshot projects, so staleness is checkable
-   * rather than assumed — `penv snapshot --check` recomputes it in CI, and
-   * `load()` warns when the tree it just read no longer digests to this.
-   * Optional because a snapshot generated before digests exist is still
-   * loadable; it is unverifiable, which is what a missing digest reports.
-   */
-  readonly digest?: string;
 }
 
 /**

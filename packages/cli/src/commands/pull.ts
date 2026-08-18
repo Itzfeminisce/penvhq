@@ -29,7 +29,6 @@ import {
   targetEnvironment,
 } from "../project.js";
 import { LOCAL_TREE_TYPE } from "../registry.js";
-import { refreshSnapshot } from "../snapshot.js";
 import { CHECK, formatRows, guard, WARN, write } from "../ui.js";
 
 export interface PullOptions {
@@ -156,10 +155,6 @@ export async function runPull(options: PullOptions): Promise<PullResult> {
     tree.writeMetaSync(ref, block);
     meta += 1;
   }
-
-  // Pulled values cross verbatim, sealed ones included, so a committed sealed
-  // value may have landed in the tree; refresh the snapshot.
-  refreshSnapshot(project);
 
   return { environment, source: source.type, localSource: false, values, meta, refs: refs.length };
 }

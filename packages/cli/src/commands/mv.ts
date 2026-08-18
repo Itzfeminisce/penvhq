@@ -30,6 +30,7 @@ import {
   openValue,
   PenvError,
   parameterId,
+  recordPath,
   sealValue,
 } from "@penvhq/core";
 import { defineCommand } from "citty";
@@ -38,11 +39,9 @@ import {
   assertWritableKey,
   keySourceFor,
   openProject,
-  PENV_DIR,
   refFromKey,
   schemaShapeFileOf,
 } from "../project.js";
-import { refreshSnapshot } from "../snapshot.js";
 import { CHECK, formatRows, guard, type Row, tip, write } from "../ui.js";
 
 export interface MoveOptions {
@@ -115,7 +114,7 @@ async function planFile(
   if (environment === undefined) {
     throw new PenvError(
       "SECRET_SCOPE_AMBIGUOUS",
-      `${PENV_DIR}/${formatValueFile(source)} is encrypted at a scope that names no environment, so penv cannot tell which key would re-seal it`,
+      `${recordPath(formatValueFile(source))} is encrypted at a scope that names no environment, so penv cannot tell which key would re-seal it`,
       "Keys are declared per environment in the `keys` block of penv.config.ts. Decrypt it with " +
         "`penv decrypt`, move the parameter, then encrypt it again at its new address.",
     );
@@ -126,7 +125,7 @@ async function planFile(
   if (opened.kind === "failed") {
     throw new PenvError(
       "VALUE_UNDECRYPTABLE",
-      `${PENV_DIR}/${formatValueFile(source)} could not be decrypted, so penv cannot re-seal it at its new address: ${opened.failure.detail}`,
+      `${recordPath(formatValueFile(source))} could not be decrypted, so penv cannot re-seal it at its new address: ${opened.failure.detail}`,
       "A sealed value is bound to the file it lives in, so moving it means opening it and " +
         "sealing it again. Make the key available and run this again. Nothing has been moved.",
     );
@@ -213,10 +212,6 @@ export async function runMove(options: MoveOptions): Promise<MoveResult> {
     await project.provider.removeMeta(from);
   }
 
-  // A sealed value was re-sealed at a new address, so its snapshot key changed;
-  // refresh it.
-  refreshSnapshot(project);
-
   return {
     from: parameterId(from),
     to: parameterId(to),
@@ -238,11 +233,11 @@ export function renderMove(result: MoveResult): string[] {
   const rows: Row[] = result.files.map((file) => ({
     glyph: CHECK,
     label: "Moved",
-    subject: `${PENV_DIR}/${file.to}`,
+    subject: recordPath(file.to),
     ...(file.resealed ? { detail: "re-sealed for its new address" } : {}),
   }));
   if (result.meta !== undefined) {
-    rows.push({ glyph: CHECK, label: "Moved", subject: `${PENV_DIR}/${result.meta}` });
+    rows.push({ glyph: CHECK, label: "Moved", subject: recordPath(result.meta) });
   }
 
   const lines = formatRows(rows);

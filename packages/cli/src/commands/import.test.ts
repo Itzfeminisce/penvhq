@@ -3,7 +3,7 @@
  * else's file into penv's tree. Two of its failures are destructive rather than
  * merely wrong, so both are tested for what the tree looks like *afterwards*:
  *
- *  - A reserved name (invariant 11) written as `.penv/enc` re-parses as a scope
+ *  - A reserved name (invariant 11) written as `.penv/state/records/enc` re-parses as a scope
  *    segment, so every later `list()` throws and the project cannot be read,
  *    repaired, or even `remove`d through penv. Reporting it afterwards is too
  *    late; the file must never exist.
@@ -31,10 +31,11 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PenvError } from "@penvhq/core";
+import { PenvError, recordsDir } from "@penvhq/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { keySourceFor, localTree, openProject, resolveSync } from "../project.js";
 import { EMPTY_DRIFT } from "../schema.js";
+import { visibleText } from "../style.js";
 import type { ImportReport } from "./import.js";
 import { importDotenv, renderImport } from "./import.js";
 import type { ValidateResult } from "./validate.js";
@@ -92,9 +93,9 @@ function makeProject(fixture: Fixture): string {
   return root;
 }
 
-/** Every file below `.penv/`, so a test can assert the tree is clean. */
+/** Every file in the records tree, so a test can assert the tree is clean. */
 function penvTree(root: string): string[] {
-  const dir = join(root, ".penv");
+  const dir = recordsDir(root);
   return existsSync(dir) ? readdirSync(dir, { recursive: true }).map(String).sort() : [];
 }
 
@@ -145,7 +146,7 @@ afterEach(() => {
 describe("a variable that is a reserved token", () => {
   /**
    * Invariant 11, and the whole reason this is an error rather than a warning:
-   * `.penv/enc` is not a bad import, it is an unreadable project.
+   * `.penv/state/records/enc` is not a bad import, it is an unreadable project.
    */
   it("fails, naming the variable as the .env spells it", () => {
     const root = makeProject({ dotenv: "ENC=some-secret\n", config: CONFIG });
@@ -164,7 +165,7 @@ describe("a variable that is a reserved token", () => {
     importFails(root);
 
     expect(penvTree(root)).toEqual([]);
-    expect(existsSync(join(root, ".penv", "enc"))).toBe(false);
+    expect(existsSync(join(recordsDir(root), "enc"))).toBe(false);
   });
 
   it.each(["JSON", "TOML", "YML", "LOCAL"])("refuses %s for the same reason", (variable) => {
@@ -177,7 +178,7 @@ describe("a variable that is a reserved token", () => {
   /**
    * Shared decision (A): the reserved set is every declared environment plus the
    * static tokens, so `PRODUCTION=1` collides exactly the way `ENC=1` does —
-   * `.penv/production` would re-parse as a scope segment with no parameter.
+   * `.penv/state/records/production` would re-parse as a scope segment with no parameter.
    */
   it("refuses a variable named after a declared environment", () => {
     const root = makeProject({ dotenv: "PRODUCTION=eu-west-1\n", config: CONFIG });
@@ -202,7 +203,7 @@ describe("a variable that is a reserved token", () => {
     const report = importDotenv({ cwd: root, file: ".env" });
 
     expect(report.variables).toBe(1);
-    expect(existsSync(join(root, ".penv", "production"))).toBe(true);
+    expect(existsSync(join(recordsDir(root), "production"))).toBe(true);
   });
 
   /** Nothing partial: the good variables in the file are not imported either. */
@@ -257,7 +258,7 @@ describe("a variable that does not round-trip", () => {
     const report = importDotenv({ cwd: root, file: ".env" });
 
     expect(report.variables).toBe(1);
-    expect(existsSync(join(root, ".penv", "my-var"))).toBe(true);
+    expect(existsSync(join(recordsDir(root), "my-var"))).toBe(true);
   });
 
   /** An override that renames it to something *else* still round-trips badly. */
@@ -494,7 +495,11 @@ describe("--env against the environment the filename names", () => {
     // the note with no separator at all. Asserting the whole line rather than
     // `toContain` is what catches that: the first version of this ran the two
     // together into `...is setrun \`penv validate...\``.
-    expect(line).toMatch(
+    //
+    // Measured on what a terminal shows: the palette is the stream's, so a run
+    // with `FORCE_COLOR` set wraps the glyph and dims the note, and a pattern
+    // anchored to the ends of the line would be asserting the escape codes.
+    expect(visibleText(line ?? "")).toMatch(
       /^⚠ Skipped validation\s+\(no environment set — run `penv validate --env development`\)$/,
     );
   });
@@ -677,21 +682,7 @@ describe("a shape the import kept", () => {
     // The wrapper carries the loader and re-exports the shape.
     const wrapper = readFileSync(join(root, ".penv", "env.ts"), "utf8");
     expect(wrapper).toContain('import { schema } from "../penv.schema.js";');
-    expect(wrapper).toContain("export const env = load(schema, { snapshot });");
-  });
-
-  /** The scaffold pre-wires the bundled-runtime path: env.ts imports a real file. */
-  it("scaffolds penv.snapshot.ts that env.ts imports", () => {
-    const root = makeProject({ dotenv: KEPT.dotenv, config: CONFIG });
-
-    importDotenv({ cwd: root, file: ".env" });
-
-    expect(existsSync(join(root, "penv.snapshot.ts"))).toBe(true);
-    // Import writes plaintext, so a fresh import embeds no values — but the module
-    // is present, so the wrapper's `import { snapshot }` resolves.
-    const snapshot = readFileSync(join(root, "penv.snapshot.ts"), "utf8");
-    expect(snapshot).toContain("satisfies PenvSnapshot");
-    expect(snapshot).toContain('"values": {}');
+    expect(wrapper).toContain("export const env = load(schema);");
   });
 });
 

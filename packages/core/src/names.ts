@@ -64,6 +64,26 @@ export function variableName(ref: ParameterRef, config: PenvConfig): string {
   return defaultVariableName(ref);
 }
 
+/**
+ * The delivery contract for a set of parameters: parameter id → the variable it
+ * is delivered under, sorted.
+ *
+ * This is the whole of what a process penv started needs to know about naming.
+ * The application's bridge reads the injected environment and has no
+ * `penv.config.ts` to consult — a container running from an artifact has no
+ * project at all — so `penv run` hands the map down and the bridge reads it back
+ * as an `override` block, which is exactly what it is.
+ */
+export function deliveryNames(
+  refs: readonly ParameterRef[],
+  config: PenvConfig,
+): Record<string, string> {
+  const entries = refs
+    .map((ref): [string, string] => [parameterId(ref), variableName(ref, config)])
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return Object.fromEntries(entries);
+}
+
 /** The runtime access path — `redis/password` → `["redis", "password"]`. */
 export function accessPath(ref: ParameterRef): string[] {
   return [...ref.namespace, ref.name].map(camelSegment);

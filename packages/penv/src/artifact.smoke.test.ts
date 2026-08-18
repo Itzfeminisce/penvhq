@@ -15,7 +15,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -71,15 +71,12 @@ describe("the published artifact", () => {
     expect(tree.dependencies?.["@penvhq/penv"]?.missing).not.toBe(true);
   });
 
-  it("runs `npx penv` — the bin the quickstart leads with", () => {
-    // A CJS dependency bundled into the ESM output makes this throw
-    // `Dynamic require of "os" is not supported` before printing anything.
-    const help = run("npx", ["penv", "--help"], project);
-
-    expect(help).toContain("penv");
-    for (const command of ["init", "import", "generate", "get", "set", "validate", "doctor"]) {
-      expect(help).toContain(command);
-    }
+  /** PRD §3: this package is the typed runtime surface, and the global `penv` is the launcher's. */
+  it("ships no command line", () => {
+    const installed: unknown = JSON.parse(
+      readFileSync(join(project, "node_modules", "@penvhq", "penv", "package.json"), "utf8"),
+    );
+    expect((installed as { bin?: unknown }).bin).toBeUndefined();
   });
 
   it('serves `import { load } from "@penvhq/penv"` from the ESM build', () => {

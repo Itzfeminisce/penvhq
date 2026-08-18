@@ -7,10 +7,9 @@
  */
 
 import type { ValueFile } from "@penvhq/core";
-import { formatValueFile } from "@penvhq/core";
+import { formatValueFile, recordPath } from "@penvhq/core";
 import { defineCommand } from "citty";
-import { openProject, PENV_DIR, refFromKey } from "../project.js";
-import { refreshSnapshot } from "../snapshot.js";
+import { openProject, refFromKey } from "../project.js";
 import { CHECK, formatRows, guard, type Row, WARN, write } from "../ui.js";
 import { type ScopeOptions, targetScope } from "./set.js";
 
@@ -21,7 +20,7 @@ export interface RemoveOptions extends ScopeOptions {
 
 export interface RemoveResult {
   readonly parameter: string;
-  /** The value files that existed and are now gone, relative to `.penv/`. */
+  /** The value files that existed and are now gone, relative to the records tree. */
   readonly removed: readonly string[];
   /** Both files penv looked at, whether or not they were there. */
   readonly considered: readonly string[];
@@ -52,9 +51,6 @@ export async function runRemove(options: RemoveOptions): Promise<RemoveResult> {
     removed.push(formatValueFile(file));
   }
 
-  // A removed sealed value leaves the snapshot; refresh it.
-  refreshSnapshot(project);
-
   return {
     parameter: options.key,
     removed,
@@ -69,7 +65,7 @@ export function renderRemove(result: RemoveResult): string[] {
       {
         glyph: WARN,
         label: "Nothing to remove",
-        subject: `${PENV_DIR}/${first}`,
+        subject: recordPath(first),
         detail: "no value file at that scope",
       },
     ]);
@@ -77,7 +73,7 @@ export function renderRemove(result: RemoveResult): string[] {
   const rows: Row[] = result.removed.map((location) => ({
     glyph: CHECK,
     label: "Removed",
-    subject: `${PENV_DIR}/${location}`,
+    subject: recordPath(location),
   }));
   return formatRows(rows);
 }

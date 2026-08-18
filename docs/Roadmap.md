@@ -29,13 +29,23 @@ Everything below describes the *finished* design (see docs). This table says whe
 | `readPrevious` — the retention capability, declared per provider | Yes | v0.5 |
 | AWS SSM, Kubernetes providers | Yes | v0.6 |
 | Provider portability as a *proven* claim | Yes | v0.5 (Vault), generalized v0.6 |
-| Provider unification — `sinks` deleted, `@penvhq/provider-github`, `push`/`pull` against every provider | Yes | v0.7 (in progress) |
-| Embedded snapshot — `penv snapshot`, `load()` in bundled/serverless runtimes, `source` pinning, digest staleness (`penv snapshot --check`) | Yes | v0.8 |
-| Ambient delivery — blessed `process.env` mirror, schema exclusivity, per-framework seams, `override` rename | RFC only | v0.8 (planned) |
-| Two-module scaffold — `penv.schema.ts` shape + `.penv/env.ts` loader, tooling `load(schema.pick({…}))`, stray-code-file diagnosis | Yes | v0.8 (planned) |
-| Fully-qualified provider `type`, declaration-merged config types, `location` | Yes | v0.7 (in progress) |
-| Install-what-you-use providers — Vault, SSM, Kubernetes, GitHub external to the CLI | Yes | v0.7 (in progress) |
-| `--destination` one-shot push, environment shorthand flags, `ensureTarget` create-on-approval | Yes | v0.7 (in progress) |
+| Provider unification — `sinks` deleted, `@penvhq/provider-github`, `push`/`pull` against every provider | Yes | v0.7 (npm 0.5.0) |
+| Ambient delivery — blessed `process.env` mirror via `load(schema, { inject: true })`, schema exclusivity, per-framework seams, `override` rename | Yes | v0.8 (npm 0.6.0–0.7.0) |
+| `doctor`'s `ambient-shadow` check | Yes | after v0.9 |
+| `penv upgrade [version]` — moving the pinned engine and the runtime dependency together | Yes | after v0.9 |
+| Two-module scaffold — `penv.schema.ts` shape + `.penv/env.ts` loader, tooling `load(schema.pick({…}))`, stray-code-file diagnosis | Yes | v0.8 (npm 0.8.0) |
+| Embedded snapshot — `penv snapshot`, `penv.snapshot.ts`, `source` pinning, digest staleness | No longer | shipped v0.8 (npm 0.8.0); **retired v0.9** |
+| Fully-qualified provider `type`, declaration-merged config types, `location` | Yes | v0.7 (npm 0.5.0) |
+| Install-what-you-use providers — Vault, SSM, Kubernetes, GitHub external to the CLI | Yes | v0.7 (npm 0.5.0) |
+| `--destination` one-shot push, environment shorthand flags, `ensureTarget` create-on-approval | Yes | v0.7 (npm 0.5.0) |
+| Global launcher + pinned engine — `.penv/state/manifest.json`, `$PENV_HOME`, one visible version | Yes | v0.9 |
+| One runtime dependency — `@penvhq/penv` alone, extensions installed by the launcher | Yes | v0.9 |
+| `.penv/state/` layout and `penv migrate` | Yes | v0.9 |
+| `penv run` — opaque child, owned child environment, network-forbidden, `--watch` opt-in | Yes | v0.9 |
+| `penv init` as a complete dotenv cutover, with `penv init undo` and `penv cleanup` | Yes | v0.9 |
+| `penv add` and the extension trust model (official / third-party / private) | Yes | v0.9 |
+| Sealed deployment artifacts — `penv artifact build`, `penv run --source snapshot` | Yes | v0.9 |
+| Platform-native serverless delivery (Vercel, Cloudflare) | Yes | v0.9 |
 | `.json` meta format | Yes | v0.2 |
 | `.toml` / `.yml` meta formats | Yes | post-v1.0, pluggable |
 | Azure Key Vault, Google Secret Manager, Cloudflare providers | Yes | post-v1.0, community SDK |
@@ -153,7 +163,7 @@ This is a real cost, stated plainly: v0.3 no longer retires the rotation risk, a
 
 **One bend has already been found, and priced.** Reading the three providers' documentation before v0.5 begins established that retention is not portable — Vault has it on a TTL, SSM on a fixed count of 100, Kubernetes not at all. Had that surfaced here instead, it would have reopened the provider-proof milestone after the fact. It surfaced early, so retention enters v0.5 as an optional capability rather than leaving v0.6 as a casualty. What that does *not* license is assuming the rest of the contract is safe: the remaining verbs are still unproven against a real network provider, and the rule stands.
 
-## v0.7 — Provider unification (in progress)
+## v0.7 — Provider unification (closed)
 
 **Retires:** the friction the sink/provider split imposed on users — two config keys, two half-commands, and a migration between stores that the vocabulary made inexpressible.
 
@@ -164,24 +174,47 @@ Decided 2026-07-19; the [provider unification plan](./provider-unification-plan.
 - The CLI pre-installs only the filesystem and mock providers; Vault, SSM, Kubernetes, and GitHub are installed by the projects that use them.
 - `penv push --destination <package> --location <place>` as a one-shot, unpersisted target; `ensureTarget` with a CLI prompt (and `--yes`) when a push's destination does not exist yet; whitelisted environments usable as bare flags (`--production`).
 
-Ships on npm as **0.5.0** — a breaking release: configs naming short provider types or a `sinks` key are refused with the exact rewrite named in the error.
+Shipped on npm as **0.5.0** — a breaking release: configs naming short provider types or a `sinks` key are refused with the exact rewrite named in the error.
 
-**Gate to advance:** the full migration loop runs — pull names and meta down from GitHub, fill values locally, `validate` to green, push the tree to a freshly-declared Vault — with the contract suite passing unchanged for every record-holding provider and `doctor` reporting exactly (Vault) and honestly-partially (GitHub) at each step.
+**Gate:** the full migration loop runs — pull names and meta down from GitHub, fill values locally, `validate` to green, push the tree to a freshly-declared Vault — with the contract suite passing unchanged for every record-holding provider and `doctor` reporting exactly (Vault) and honestly-partially (GitHub) at each step.
 
-## v0.8 — Ambient delivery (planned)
+## v0.8 — Ambient delivery (closed)
 
 **Retires:** the per-SDK bridge file — the hand-written mapping of `@env` values onto the exact `process.env` keys a third-party SDK reads, first written inside penv's own hosted product, which is what made the gap undeniable.
 
-Decided 2026-07-19; the [v0.8 plan](./v0.8-plan.md) owns *how*, the RFC's "The ambient surface is a projection, and the schema is the pin list" owns *why*. In brief:
+Decided 2026-07-19; the [v0.8 plan](./v0.8-plan.md) owns *how*, the RFC's "The ambient surface is a projection, and the schema is the pin list" owns *why*. Shipped across npm **0.6.0** (seams and selective inject), **0.7.0**, and **0.8.0** (the two-module scaffold). In brief:
 
-- `import "@penvhq/penv/config"` is promoted from compat-only to blessed: it validates through `load()` before writing, writes generated (`override`-bent) names, and is exclusive over the schema — a declared parameter is written when it resolves and deleted when it does not, so nothing configures an SDK behind `@env`'s back.
+- `load(schema, { inject: true })`, called from `.penv/env.ts`, is the blessed ambient surface: it validates before writing, writes generated (`override`-bent) names, and is exclusive over the schema — a declared parameter is written when it resolves and deleted when it does not, so nothing configures an SDK behind `@env`'s back. The bare `import "@penvhq/penv/config"` stays the schemaless compat path, because it never sees the schema.
 - `penv init` scaffolds the import at the detected framework's guaranteed pre-app seam (Next `instrumentation.ts`, Nitro plugin, SvelteKit `hooks.server.ts`, `node --import`), plus the build-time seam for client-inlined variables. Halves scaffolded only where they exist; unknown frameworks are asked, never guessed.
 - `names` becomes `override`, with schema-typed keys: the scaffolded `penv.schema.ts` registers the schema's shape on `PenvSchemaShape` (a type-only `declare module`, erased at runtime), and `override` keys narrow to the parameters the schema declares. Breaking; rides the 0.5.0 release train.
 - The schema splits into two scaffolded modules: `penv.schema.ts` at the project root holds the *shape* (the `z.object` plus the `PenvSchemaShape` registration) and loads nothing, and `.penv/env.ts` becomes the thin loader that imports it, re-exports `schema`, and calls `load()`. Making the one schema importable without side effects is what lets a tooling config — `drizzle.config.ts`, a `playwright.config.ts`, a CI script — `load(schema.pick({ … }))` the same schema instead of hand-inlining a second `z.object` that drifts. This is the fourth config consumer (tooling evaluated outside the app runtime), joining `@env`, `inject`, and the client bundle.
 - Stray-code-file diagnosis: a `.ts`/`.js` module dropped into `.penv/` that is not the file `schemaFile` declares is reported as a stray code module (`STRAY_CODE_FILE`) rather than misparsed as a value file — the safeguard that comes with the shape moving to the root, where the parameter tree has nothing to exclude.
-- `doctor` gains `ambient-shadow`.
 
-**Gate to advance:** penv-cloud deletes its WorkOS bridge files, declares the SDK's surface in its schema plus one `override` entry, and WorkOS authenticates with no penv-aware code in the app — including the exclusivity proof: a stray exported `WORKOS_API_HOSTNAME` never reaches the SDK.
+**Gate:** penv-cloud deletes its WorkOS bridge files, declares the SDK's surface in its schema plus one `override` entry, and WorkOS authenticates with no penv-aware code in the app — including the exclusivity proof: a stray exported `WORKOS_API_HOSTNAME` never reaches the SDK.
+
+**Two things this milestone carried that its title does not name.** The **embedded snapshot** shipped here (npm 0.8.0): `penv snapshot` generated a committed `penv.snapshot.ts` that the bundler traversed, so `load()` resolved inside a Next middleware chunk or a `/var/task` function with no `penv.config.ts` on disk. It is **retired at v0.9** and replaced by an external sealed artifact — see the v0.9 entry below and the RFC's "The deployment artifact is external, and the source stays out of the bundle". And `doctor`'s **`ambient-shadow`** check did not ship; it is resequenced after v0.9, because the rebuild changes where the resolved values come from and a check written against the old resolution path would have to be written twice.
+
+## v0.9 — Developer-first execution and delivery
+
+**Retires:** two risks at once — that adoption asks a newcomer to assemble penv-specific commands from documentation before anything works, and that delivery is coupled to the application's source tree and bundler.
+
+Decided 2026-08-17; the [PRD](./PRD-Developer-First-Execution-and-Delivery.md) (including its sealed adoption-friction review) owns *what*, the `docs/rebuild/` issue set owns *how*, and the RFC's five new sections — the launcher/engine split, `.penv/state/`, the all-or-nothing cutover, the external artifact, and the run-ergonomics seals — own *why*. In brief:
+
+- A **global launcher** (`penv`) and a project-pinned **engine** (`@penvhq/cli`). `.penv/state/manifest.json` is the committed contract naming the exact engine and extension versions with their integrity; the launcher resolves them from `$PENV_HOME` and delegates. A newer launcher never upgrades a project — the committed manifest is the only thing that moves a pin, and `penv install` fetches exactly what it names. One user-visible version: `penv --version` prints one line.
+- **One runtime dependency**, `@penvhq/penv`, pinned to the engine's version. Provider extensions are installed by the launcher via `penv add <package>` and never enter `package.json`; each contributes a committed, type-only declaration under `.penv/state/extensions/`.
+- **`.penv/state/`** holds Penv-managed project state — manifest, records, extension declarations, and adoption recovery state — under one committed safety boundary. `penv migrate` converts an existing project on approval; the engine reads only the new layout and refuses an unmigrated one by name. This supersedes the PRD's "migration window" sentence: there is no dual-layout engine, because a fallback is how a layout silently becomes two layouts.
+- **`penv run -- <command>`** starts the developer's command as an opaque child of a validated, penv-owned environment. `--source` defaults to `project`; `--env` falls back to a declared `defaultEnvironment`. It contacts no provider, ever; `--watch` is the one opt-in mode that may synchronize.
+- **`penv init` becomes a complete dotenv cutover** — detect, select, preflight everything, import, validate, then move the prior dotenv files into one ignored rollback bundle. `penv init undo` restores them exactly; `penv cleanup` closes the migration.
+- **Sealed deployment artifacts.** `penv artifact build --env <e> --out <path>` produces an external, environment-specific artifact that CI packages or mounts, and `penv run --source snapshot` consumes it from `PENV_SNAPSHOT`. It is not application source, is not committed, and needs neither provider adapters nor network at start. Managed serverless platforms take **platform-native delivery** instead: penv writes to the platform's own encrypted environment store before the build.
+- The embedded snapshot (`penv snapshot`, `penv.snapshot.ts`, the `snapshot-stale` and `bundle-invisible-plaintext` checks) is deleted, with no compat shim.
+
+Ships as one breaking release: the launcher (`penv`), the engine (`@penvhq/cli`), and `@penvhq/penv` carry the same version, which is what makes "one visible version" true on the npm side as well as at the keyboard.
+
+**Gate to advance:** the PRD's first-user journey runs end to end on a real project — `penv init` adopts a detected dotenv cascade with no partial state, the first `penv run -- pnpm dev` after cutover starts the app with zero edits to the drafted `penv.schema.ts`, and a container release built by `penv artifact build` starts from the artifact alone, with no `penv.config.ts`, no `.penv/` tree, no provider adapter, and no network.
+
+**Resequenced after v0.9.** `penv upgrade [version]` — the one command that moves the manifest's engine pin and the project's `@penvhq/penv` dependency together — is not built at v0.9. The launcher ships `penv install` and `penv add`; until `upgrade` lands, a pin moves by editing the committed manifest and the runtime dependency, which is the same edit `upgrade` will make on your behalf.
+
+**Accepted cost, carried from the PRD's friction review.** Retiring the committed snapshot means a clone no longer deploys by itself: CI must build the sealed artifact. Copy-paste artifact recipes for the major CI systems and platform-native delivery guides for Vercel and Cloudflare ship with this milestone, not after it.
 
 ## v1.0 — Stable SDK
 

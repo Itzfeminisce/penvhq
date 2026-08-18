@@ -6,11 +6,12 @@
  * tool, whatever package a symbol happens to live in.
  */
 
-export type { PenvSnapshot } from "@penvhq/core";
 export {
   ConfigError,
+  DirectStartError,
   defineConfig,
   FilenameGrammarError,
+  MissingMaterializationError,
   MissingParameterError,
   NameCollisionError,
   PenvError,
@@ -18,8 +19,28 @@ export {
   UnknownEnvironmentError,
   ValidationError,
 } from "@penvhq/core";
+export type {
+  ChildEnvironment,
+  ChildEnvironmentInput,
+  DeclaredCredentials,
+  DeliveredEnvironmentInput,
+  DeliveredValue,
+  Delivery,
+  Environment,
+} from "./child-env.js";
+export {
+  childEnvironment,
+  consumeDelivery,
+  DELIVERY_VARIABLE,
+  deliveredEnvironment,
+  ENVIRONMENT_VARIABLE,
+  RUN_MARKER,
+  SNAPSHOT_VARIABLE,
+  strippedVariables,
+} from "./child-env.js";
+export { assertDeliverableNames } from "./control.js";
 export type { InjectResult } from "./inject.js";
 export { declaredRefs, inject } from "./inject.js";
 export type { LoadOptions, LoadOptionsFor } from "./load.js";
 export { load } from "./load.js";
-export type { LoadSource } from "./resolve.js";
+export { hasRemoteSource } from "./resolve.js";

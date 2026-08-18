@@ -9,18 +9,23 @@
  */
 
 import type { ParameterRef, Provider, Scope, ValueFile } from "@penvhq/core";
-import { formatValueFile, isSecret, PenvError, parameterId, sealValue } from "@penvhq/core";
+import {
+  formatValueFile,
+  isSecret,
+  PenvError,
+  parameterId,
+  recordPath,
+  sealValue,
+} from "@penvhq/core";
 import { defineCommand } from "citty";
 import type { Project } from "../project.js";
 import {
   assertWritableKey,
   keySourceFor,
   openProject,
-  PENV_DIR,
   refFromKey,
   targetEnvironment,
 } from "../project.js";
-import { refreshSnapshot } from "../snapshot.js";
 import { CHECK, formatRows, guard, write } from "../ui.js";
 
 export interface ScopeOptions {
@@ -37,7 +42,7 @@ export interface SetOptions extends ScopeOptions {
 
 export interface SetResult {
   readonly parameter: string;
-  /** The value file written, relative to `.penv/`. */
+  /** The value file written, relative to the records tree. */
   readonly location: string;
   /** Whether meta's policy sealed it. Reported, so the marker is never a surprise. */
   readonly encrypted: boolean;
@@ -135,7 +140,7 @@ function sealFor(
   if (environment === undefined) {
     throw new PenvError(
       "SECRET_SCOPE_AMBIGUOUS",
-      `Parameter ${parameter} is a secret, and ${PENV_DIR}/${formatValueFile(file)} names no environment`,
+      `Parameter ${parameter} is a secret, and ${recordPath(formatValueFile(file))} names no environment`,
       "Keys are declared per environment in the `keys` block of penv.config.ts, so penv cannot " +
         "tell which key should seal a file that every environment reads. Write it at an " +
         "environment scope — add `--env <environment>` — or drop `secret` from the parameter's meta.",
@@ -165,7 +170,7 @@ export interface SealAwareWriteOptions {
 export interface SealAwareWriteResult {
   /** Whether meta's policy sealed it. */
   readonly encrypted: boolean;
-  /** The value file written, relative to `.penv/`. */
+  /** The value file written, relative to the records tree. */
   readonly location: string;
 }
 
@@ -245,11 +250,6 @@ export async function runSet(options: SetOptions): Promise<SetResult> {
     environment,
   });
 
-  // A committed sealed value may have changed, so refresh the snapshot the bundle
-  // reads from. A no-op for a project that commits none, and never a rewrite when
-  // nothing sealed changed.
-  refreshSnapshot(project);
-
   return { parameter: options.key, location, encrypted };
 }
 
@@ -258,7 +258,7 @@ export function renderSet(result: SetResult): string[] {
     {
       glyph: CHECK,
       label: "Wrote",
-      subject: `${PENV_DIR}/${result.location}`,
+      subject: recordPath(result.location),
       // The `.enc` suffix says this already, but only to a reader who knows the
       // grammar. Meta decided it, not the command line, so the command says so.
       ...(result.encrypted ? { detail: "encrypted, per the parameter's meta policy" } : {}),

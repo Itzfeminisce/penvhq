@@ -46,7 +46,6 @@ import { defineCommand } from "citty";
 import type { Project } from "../project.js";
 import { openProject, refFromKey, sourceProviderFor, targetEnvironment } from "../project.js";
 import { LOCAL_TREE_TYPE } from "../registry.js";
-import { refreshSnapshot } from "../snapshot.js";
 import { CHECK, formatRows, guard, write } from "../ui.js";
 import { readStdin, sealAwareWrite } from "./set.js";
 
@@ -146,9 +145,6 @@ async function writeRotatedValue(
       value,
       environment,
     });
-    // Only the local-tree branch touches committed sealed values; a backend
-    // rotation leaves the snapshot untouched.
-    refreshSnapshot(project);
     return;
   }
   await provider.write(rotatingFile(ref, environment), value);

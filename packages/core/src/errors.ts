@@ -77,34 +77,87 @@ export class MissingParameterError extends PenvError {
   }
 }
 
+/** What a {@link ValidationError} subclass says instead of the general wording. */
+export interface ValidationWording {
+  readonly message: string;
+  readonly remedy: string;
+}
+
 /** The loaded configuration does not satisfy the schema. */
 export class ValidationError extends PenvError {
-  override readonly name = "ValidationError";
+  override readonly name: string = "ValidationError";
   readonly environment: string;
   readonly issues: readonly { readonly parameter: string; readonly message: string }[];
-  /**
-   * Where the values came from — a config-file path, or the embedded snapshot.
-   * Named in the message because "which of the two sources did penv actually
-   * read" is the first question a failure in a bundled runtime raises, and
-   * answering it from the error beats reading the bundle to find out.
-   */
-  readonly source: string | undefined;
 
   constructor(
     environment: string,
     issues: readonly { readonly parameter: string; readonly message: string }[],
-    source?: string,
+    wording?: ValidationWording,
   ) {
     const lines = issues.map((i) => `  ${i.parameter}: ${i.message}`).join("\n");
-    const via = source === undefined ? "" : `, resolved via ${source}`;
     super(
       "VALIDATION_FAILED",
-      `Configuration for environment ${environment} does not match the schema${via}:\n${lines}`,
-      `Fix the values above, or adjust the schema in .penv/env.ts if the shape is wrong.`,
+      wording?.message ??
+        `Configuration for environment ${environment} does not match the schema:\n${lines}`,
+      wording?.remedy ??
+        `Fix the values above, or adjust the schema in .penv/env.ts if the shape is wrong.`,
     );
     this.environment = environment;
     this.issues = issues;
-    this.source = source;
+  }
+}
+
+/**
+ * An adopted application started outside `penv run`.
+ *
+ * The schema failed on a parameter with no value, and nothing had prepared this
+ * process's environment — so the answer is not "fix your values" but "start it
+ * the way an adopted app starts". It stays a {@link ValidationError}, carrying
+ * the same issues and the same code: it is that failure, told to the one reader
+ * whose remedy is a different command.
+ *
+ * Sealed copy (friction item 10) — the highest-traffic refusal penv has, so it
+ * is written here and asserted verbatim rather than improvised at the call site.
+ */
+export class DirectStartError extends ValidationError {
+  override readonly name = "DirectStartError";
+  /** The first required parameter with no value — what the reader came to find out. */
+  readonly parameter: string;
+  /** The command as penv can best restate it, which is what goes after `--`. */
+  readonly command: string;
+
+  constructor(
+    environment: string,
+    issues: readonly { readonly parameter: string; readonly message: string }[],
+    parameter: string,
+    command: string,
+  ) {
+    super(environment, issues, {
+      message:
+        `Missing required parameter ${parameter} for environment ${environment}, ` +
+        "and this process was not started by `penv run`",
+      remedy: `Start it with \`penv run -- ${command}\`.`,
+    });
+    this.parameter = parameter;
+    this.command = command;
+  }
+}
+
+/**
+ * Nothing is materialised for this environment — a teammate's first run after a
+ * clone, before their first `penv pull`.
+ *
+ * Sealed copy (friction item 10). It names no parameter deliberately: nothing at
+ * all resolved, so there is no single one to name, and the whole tree is what the
+ * one next command fills.
+ */
+export class MissingMaterializationError extends PenvError {
+  override readonly name = "MissingMaterializationError";
+  readonly environment: string;
+
+  constructor(environment: string) {
+    super("NO_MATERIALIZED_VALUES", `No materialized values for ${environment}`, "Run: penv pull");
+    this.environment = environment;
   }
 }
 
@@ -167,11 +220,32 @@ export class StrayCodeFileError extends PenvError {
       "STRAY_CODE_FILE",
       `${filename} looks like a code module, not a value file`,
       `Value files are named \`<key>.<environment>\`, but \`.${extension}\` is a source-file ` +
-        "extension. Move the code out of `.penv/`, or declare it as `schemaFile` in " +
+        "extension. Move the code out of the records tree, or declare it as `schemaFile` in " +
         "penv.config.ts.",
     );
     this.filename = filename;
     this.extension = extension;
+  }
+}
+
+/**
+ * The project still keeps its records directly under `.penv/`.
+ *
+ * penv reads one layout, so this is the whole of what an unmigrated project
+ * hears — every command refuses the same way, naming the one command that
+ * converts it. A second search path would be an engine with two truths about
+ * where a project's values live.
+ */
+export class OldLayoutError extends PenvError {
+  override readonly name = "OldLayoutError";
+
+  constructor() {
+    super(
+      "OLD_LAYOUT",
+      "This project keeps its records directly under `.penv/`, and penv reads `.penv/state/records/`",
+      "Run `penv migrate` — it previews the move first, and leaves penv.schema.ts, " +
+        "penv.config.ts and .penv/env.ts byte-identical.",
+    );
   }
 }
 

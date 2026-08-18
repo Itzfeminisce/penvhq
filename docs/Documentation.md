@@ -12,50 +12,79 @@ This is the reference for **penv as designed**: the complete system, every capab
 
 1. [Install](#install)
 2. [Quickstart](#quickstart)
-3. [How typing works](#how-typing-works)
-4. [Concepts](#concepts)
-5. [The parameter tree](#the-parameter-tree)
-6. [Value resolution](#value-resolution)
-7. [Meta files](#meta-files)
-8. [Schema and types](#schema-and-types)
-9. [Runtime API](#runtime-api)
-10. [Configuration reference](#configuration-reference)
-11. [Providers](#providers)
-12. [Projection providers](#projection-providers-github-actions-secrets)
-13. [Encryption](#encryption)
-14. [Rotation](#rotation)
-15. [`penv doctor`](#penv-doctor)
-16. [CLI reference](#cli-reference)
-17. [Migrating and leaving](#migrating-and-leaving)
-18. [Design tradeoffs](#design-tradeoffs)
+3. [Running your app](#running-your-app)
+4. [How typing works](#how-typing-works)
+5. [Concepts](#concepts)
+6. [The parameter tree](#the-parameter-tree)
+7. [Value resolution](#value-resolution)
+8. [Meta files](#meta-files)
+9. [Schema and types](#schema-and-types)
+10. [Runtime API](#runtime-api)
+11. [Deployment](#deployment)
+12. [Configuration reference](#configuration-reference)
+13. [Providers](#providers)
+14. [Provider extensions](#provider-extensions)
+15. [Projection providers](#projection-providers-github-actions-secrets)
+16. [Encryption](#encryption)
+17. [Rotation](#rotation)
+18. [`penv doctor`](#penv-doctor)
+19. [CLI reference](#cli-reference)
+20. [Migrating and leaving](#migrating-and-leaving)
+21. [Design tradeoffs](#design-tradeoffs)
 
 ---
 
 ## Install
 
+penv is two programs, and you install exactly one of them yourself:
+
 ```bash
-npm install @penvhq/penv        # or bun add @penvhq/penv / pnpm add @penvhq/penv
+npm install -g penv
 ```
+
+That is the **launcher** — small, stable, and not the thing that runs your project. Inside a project it reads `.penv/state/manifest.json`, the committed file naming the exact **engine** and provider extensions the project pins, finds them in `$PENV_HOME`, verifies their integrity, and hands your command over. So CI runs the penv your repository pins, a newer launcher on your laptop changes nothing about your project, and `penv upgrade` is what moves the pin — together with the project's runtime dependency, never one without the other.
+
+Your project gains exactly one penv dependency, written by `penv init`:
+
+```json
+{ "dependencies": { "@penvhq/penv": "<the version the manifest pins>" } }
+```
+
+That package is the typed `@env` surface and its validation helpers. The CLI engine and every provider extension live in the launcher's cache instead, so a project that talks to Vault does not ship Vault's SDK to production.
+
+There is one version to know: `penv --version` prints one line — the engine your project pins when you are inside a project.
 
 ## Quickstart
 
-If you already have a `.env`, adopting penv is one command:
+Adopting penv is one conversational command. It shows you what it found, asks what to adopt, and moves nothing until everything it needs has passed:
 
 ```
-$ penv import .env
+$ penv init
 
-✓ Found 34 variables
-✓ Created .penv/
-✓ Generated penv.schema.ts     (draft schema — review it, it's yours)
-✓ Generated .penv/env.ts       (loads the shape — yours to edit)
-✓ Generated penv.config.ts
+Found dotenv files. Which should penv adopt?
+
+  [x] .env                      shared default
+  [x] .env.local                local override
+  [x] .env.development          development
+  [x] .env.development.local    development-local
+  [ ] .env.production           production
+
+✓ Declared environment       development
+✓ Generated penv.schema.ts   (draft schema — review it, it's yours)
+✓ Generated .penv/env.ts     (loads the shape — yours to edit)
+✓ Generated penv.config.ts   defaultEnvironment: "development"
 ✓ Added @env path alias to tsconfig.json
-✓ Updated .gitignore
-✓ Created .env.backup
-✓ Validated configuration
+✓ Installed @penvhq/penv
+✓ Imported 34 parameters
+✓ Validated development
+✓ Moved 4 dotenv files       .penv/state/rollback/dotenv/   (penv init undo restores them)
 
-Done. .penv/ is now your source of truth.
+Done. Start your app with penv:
+
+  penv run -- pnpm dev
 ```
+
+Selecting an environment-scoped file is what *declares* that environment — `.env` alone declares nothing, and penv never invents `production` from a filename. The cutover is all or nothing: if any part of the preflight fails, no file moves, nothing is imported, and penv does not claim a partial migration. Changed your mind? `penv init undo` puts the original dotenv files back under their exact names.
 
 Then read configuration anywhere your code runs on a server, fully typed:
 
@@ -72,6 +101,26 @@ Generate a flat `.env` for deploy targets that expect one, any time:
 penv generate
 ```
 
+## Running your app
+
+`penv run` is how an adopted project starts. It resolves the parameter tree, validates it against your schema, builds a child environment it owns, and starts the exact command after `--`:
+
+```bash
+penv run -- pnpm dev
+```
+
+That is the whole daily form. `--source` defaults to the local project tree, and `--env` falls back to the `defaultEnvironment` your config declares, so the two flags you would otherwise retype all day are decisions your repository already recorded. A pipeline names both explicitly — see [Deployment](#deployment) for the CI form — because a deploy that relies on a default is one config edit away from shipping the wrong environment. The other source, `snapshot`, is always named out loud; no run ever resolves from a place nobody chose.
+
+**The command after `--` is yours, untouched.** penv starts it as an opaque child process: argument boundaries, pipes, redirects, shell syntax, `predev`/`postdev` lifecycle hooks, exit code, and signals all belong to the child. penv never parses, rewrites, or emulates any of it, which is why `penv run --` works identically in front of a package-manager script, `node index.js`, a Python entrypoint, or a compiled binary.
+
+**Wrap outside the script, not inside it.** `penv run -- pnpm dev` runs your package manager under penv, so `predev` and `postdev` see penv's environment too. Writing the wrapper *inside* a `package.json` script is supported and entirely yours to author, with one difference to know: a script's `pre*` and `post*` hooks run outside the script body, so they start before penv's environment exists. An outer wrapper meeting an in-script one is refused, naming both invocations, rather than nesting two owned environments.
+
+**The child environment is penv's, deliberately.** Every schema-declared parameter is written to the child under its generated name — or *deleted* from the child when it is optional and absent, so a stale variable in your shell cannot stand in for a value penv resolved to nothing. Unrelated variables like `PATH` are left alone. penv's own key variables, provider credentials, and internal control variables are stripped before your command starts.
+
+**`penv run` never contacts a provider.** It reads what is already materialised locally — the project tree, or a sealed artifact — and a missing materialisation is a named failure with the `penv pull` line to run, not an invitation to fetch. A remote provider being down is not a reason your application cannot start. The one exception is opt-in and never production: `penv run --watch -- pnpm dev` refreshes from the configured provider, preserves your `.local` overrides, validates the complete next state, and only then restarts the child — a failed pull or a failed validation leaves your running child exactly where it was.
+
+Starting an adopted app *without* `penv run` fails at the first read, naming the missing parameter and printing the `penv run` line to use. An application that starts without penv is an application reading configuration nothing validated.
+
 ## Where penv sits next to a framework
 
 A browser has no filesystem, and penv reads files. Frameworks bridge that gap by **substituting text at build time**: Next replaces the literal `process.env.NEXT_PUBLIC_API_URL` in your source with a string before it ships, and Vite does the same for `import.meta.env.VITE_*`. That substitution is why every tool in this space — penv included — asks you to write those reads out longhand: a build step can only replace text it can see.
@@ -79,16 +128,15 @@ A browser has no filesystem, and penv reads files. Frameworks bridge that gap by
 So the division is:
 
 - **Server code** — route handlers, server components, scripts, `next.config.ts` — reads `import { env } from "@env"`. This is penv's blessed path, and it is where secrets live.
-- **Client code** reads whatever its framework inlines. penv feeds that in one line:
+- **Client code** reads whatever its framework inlines. penv feeds that by starting the build under `penv run`:
 
-```ts
-// next.config.ts
-import "@penvhq/penv/config";       // loads .penv/ into process.env before the build reads it
+```bash
+penv run -- next build
 ```
 
-Next then inlines `NEXT_PUBLIC_*` from `.penv/` exactly as it would from a `.env`. Your parameter tree is the source of truth for both halves; only the delivery differs. `penv generate` is the other route, and the one deploy targets that read a `.env` file already expect.
+The build runs inside penv's child environment, so Next inlines `NEXT_PUBLIC_*` from your parameter tree exactly as it would from a `.env`. Your tree is the source of truth for both halves; only the delivery differs. `penv generate` is the other route, and the one deploy targets that read a `.env` file already expect.
 
-Two more consumers read the same tree with no browser in sight: a third-party SDK that reads `process.env` directly — WorkOS, Prisma, NextAuth — fed by `load(schema, { inject: true })` from `.penv/env.ts`; and tooling that runs outside your application entirely — a `drizzle.config.ts`, a `playwright.config.ts`, a CI script — which imports the schema *shape* and loads only the keys it needs. That is four kinds of code, one schema, four deliveries. [One schema, many consumers](#one-schema-many-consumers) is the full treatment, including why the shape has to be importable without loading anything.
+Two more consumers read the same tree with no browser in sight: a third-party SDK that reads `process.env` directly — WorkOS, Prisma, NextAuth — which finds its variables already present, because `penv run` wrote every declared parameter into the child environment under its generated name; and tooling that runs outside your application entirely — a `drizzle.config.ts`, a `playwright.config.ts`, a CI script — which starts under `penv run --` like everything else, imports the schema *shape*, and reads only the keys it needs out of the environment penv handed it. That is four kinds of code, one schema, four deliveries. [One schema, many consumers](#one-schema-many-consumers) is the full treatment, including why the shape has to be importable without loading anything.
 
 The framework's prefix is the boundary, and the framework enforces it: nothing without `NEXT_PUBLIC_` reaches a browser. penv's job there is to catch the case the framework cannot — a parameter your meta calls a secret whose *name* makes the framework publish it. Declare `publicPrefixes` and `penv doctor` reports it as a failure.
 
@@ -133,12 +181,12 @@ export { schema };
 export const env = load(schema);
 ```
 
-The split is deliberate, and its full payoff is [One schema, many consumers](#one-schema-many-consumers): `penv.schema.ts` is *side-effect free*, so a test, a `drizzle.config.ts`, or a CI script can import the one schema for its type — or `pick` a subset of it — without loading and validating a whole environment. `.penv/env.ts` is the one module that calls `load()`.
+The split is deliberate, and its full payoff is [One schema, many consumers](#one-schema-many-consumers): `penv.schema.ts` is *side-effect free*, so a test, a `drizzle.config.ts`, or a CI script can import the one schema for its type — or `pick` a subset of it — without loading and validating a whole environment. `.penv/env.ts` is the one module your application calls `load()` through.
 
 `load` is generic:
 
 ```ts
-function load<T extends z.ZodType>(schema: T): z.infer<T>;
+function load<T extends z.ZodType>(schema: T, options?: LoadOptionsFor<T>): z.infer<T>;
 ```
 
 Because `load` returns `z.infer<T>`, `env` is typed as exactly the shape of *your* schema, with autocomplete on every nested namespace. `z.infer` is evaluated entirely at compile time from the schema's structure — `z.url()` becomes `string`, `.optional()` becomes `| undefined`, nesting becomes nesting.
@@ -151,7 +199,7 @@ The `@env` alias is written into your `tsconfig.json` by `penv init` so the impo
 
 Two properties follow from this design, and both are intentional:
 
-- **The type is only true because the value is validated at runtime.** `load` parses the loaded values against the same schema before returning them and throws on mismatch. Compile-time inference and runtime validation come from one schema, so the type you code against and the value you receive cannot diverge.
+- **The type is only true because the value is validated at runtime.** `load` parses the environment `penv run` handed this process against the same schema before returning it, and throws on mismatch. Compile-time inference and runtime validation come from one schema, so the type you code against and the value you receive cannot diverge.
 - **`penv.schema.ts` and `.penv/env.ts` are yours, never regenerated.** penv scaffolds each once. They are real files where the schema is visible and the loader call is explicit — not codegen that could drift from your intent. penv generates the *alias*, not the files.
 
 ## Concepts
@@ -164,35 +212,44 @@ Two properties follow from this design, and both are intentional:
 
 **penv owns the translation, and makes it visible.** The mapping from a penv record to a provider path is explicit configuration, not magic. penv's value is that this translation is defined once, validated, and legible.
 
-**Every store your config names is a provider, and what each one can do is declared, not guessed.** Your application reads none of them — it always reads the local tree. A record-holding provider is a system of record penv can read back, so `doctor` compares both copies value by value. A provider that declares it *withholds values* — GitHub Actions Secrets, whose API returns names but never a value, by design — gets the honest subset: `doctor` compares names and push times and says plainly that it cannot compare values. One question separates the two kinds, and the provider itself answers it: **can penv read the value back out?**
+**Every store your config names is a provider, and what each one can do is declared, not guessed.** Your application reads none of them — it reads the environment `penv run` resolved for it, from the local tree or a sealed artifact. A record-holding provider is a system of record penv can read back, so `doctor` compares both copies value by value. A provider that declares it *withholds values* — GitHub Actions Secrets, whose API returns names but never a value, by design — gets the honest subset: `doctor` compares names and push times and says plainly that it cannot compare values. One question separates the two kinds, and the provider itself answers it: **can penv read the value back out?**
 
 ## The parameter tree
+
+A penv project has three ownership zones, and the layout makes them visible: your files at the root, the loader you own once it is scaffolded, and everything penv manages under `.penv/state/`.
 
 ```
 project-root/
 ├── package.json
-├── penv.config.ts          # environments, providers, name overrides
-├── penv.schema.ts          # the schema shape (side-effect free; import for types/tooling)
+├── penv.config.ts          # yours — environments, providers, name overrides
+├── penv.schema.ts          # yours — the schema shape (side-effect free; import for types/tooling)
 ├── tsconfig.json           # contains the @env alias
 └── .penv/
-    ├── env.ts              # loads the shape (import { env } from "@env")
-    │
-    ├── database-url                    # unscoped default value
-    ├── database-url.production.enc     # production override, encrypted
-    ├── database-url.json               # per-parameter meta
-    │
-    ├── app/
-    │   ├── jwt-secret.development
-    │   ├── jwt-secret.production.enc
-    │   └── jwt-secret.json
-    │
-    └── redis/
-        ├── host.production
-        ├── password.production.enc
-        └── password.json
+    ├── env.ts              # yours after scaffolding — loads the shape (import { env } from "@env")
+    └── state/              # penv-managed
+        ├── manifest.json           # committed — the exact engine and extensions this project pins
+        ├── .gitignore              # committed — the safety boundary for everything below
+        ├── extensions/
+        │   └── provider-vault.d.ts # committed — type-only, no adapter code
+        └── records/
+            ├── database-url                    # unscoped default value
+            ├── database-url.production.enc     # production override, encrypted
+            ├── database-url.json               # per-parameter meta
+            │
+            ├── app/
+            │   ├── jwt-secret.development
+            │   ├── jwt-secret.production.enc
+            │   └── jwt-secret.json
+            │
+            └── redis/
+                ├── host.production
+                ├── password.production.enc
+                └── password.json
 ```
 
 Each value file holds exactly one value. Each parameter has at most one meta file.
+
+`state/` means current state penv manages, never secret history — provider history stays provider-owned. Its `.gitignore` is one committed file that draws the whole boundary: structure, meta, the manifest, and the generated extension declarations are committed, because each is a decision worth reviewing in a pull request; every plaintext value, and the temporary rollback bundle `penv init` writes, never are. During an adoption `state/` also holds `cutover.json` and `rollback/dotenv/`, which `penv init undo` reads and `penv cleanup` removes.
 
 ### Filename grammar
 
@@ -249,7 +306,7 @@ Most-specific scope wins. This is flat override, not merging — a value file ho
 
 ```bash
 penv get database-url --env production --explain
-# → resolves to .penv/database-url.production.enc
+# → resolves to .penv/state/records/database-url.production.enc
 ```
 
 ## Meta files
@@ -298,21 +355,21 @@ The schema is split across two files on purpose, and the split is what makes the
 - **`penv.schema.ts`** — the *shape*, at the project root beside `penv.config.ts`. A `z.object` and a type registration, and nothing that loads: importing it (or `z.infer<typeof schema>`) reads the definition without touching configuration. This is the one representation every consumer derives from.
 - **`.penv/env.ts`** — the *loader*. It imports the shape, re-exports it, and calls `load()`. It is the module the `@env` alias resolves to, so `import { env } from "@env"` is unchanged.
 
-The shape has to be importable *without side effects*, and that is not a nicety — it is what keeps the schema single. A consumer that only wants the schema's structure must not be forced to load and validate a whole environment to get it: a test wants the type, a database migration tool wants one URL, and neither should throw because production's secrets are absent on your laptop. Put the `z.object` in a module that also calls `load()` and every importer pays for the load — so a tool reaching for the schema hand-writes a *second* `z.object` over the same store instead. That second definition is the drift penv exists to delete, rebuilt inside your own tooling.
+The shape has to be importable *without side effects*, and that is not a nicety — it is what keeps the schema single. A consumer that only wants the schema's structure must not be forced to load and validate a whole environment to get it: a test wants the type, a database migration tool wants one URL, and neither should have to reach the definition through a load. Put the `z.object` in a module that also calls `load()` and every importer pays for the load — so a tool reaching for the schema hand-writes a *second* `z.object` over the same store instead. That second definition is the drift penv exists to delete, rebuilt inside your own tooling.
 
 **Four kinds of code read your configuration, and each derives from the one schema by a single rule:**
 
 | Consumer | Reads | The rule |
 |---|---|---|
 | Your app code | `import { env } from "@env"` | Import `env` — loaded, validated, resolved for the current environment. |
-| Third-party SDKs reading `process.env` | the variables `load(schema, { inject: true })` writes | Declare the parameter; penv delivers it under its generated name. Don't hand-map names — the schema is the pin list. |
+| Third-party SDKs reading `process.env` | the variables `penv run` writes into the child environment | Declare the parameter; penv delivers it under its generated name. Don't hand-map names — the schema is the pin list. Where a platform starts the process instead of penv, `load(schema, { inject: true })` writes the same surface from inside it. |
 | Client bundles the framework inlines | `NEXT_PUBLIC_*` / `VITE_*` | Name the parameter so it generates the prefixed variable; declare `publicPrefixes` so `doctor` guards it. |
-| Tooling evaluated outside the app | `load(schema.pick({ ... }))` | Import `schema` from `penv.schema.ts` and `pick` the keys you need — never a second `z.object`. |
+| Tooling evaluated outside the app | the same child environment, started with `penv run -- <tool>` | Import `schema` from `penv.schema.ts` and `load(schema.pick({ ... }))` the keys you need — never a second `z.object`. |
 
-**The tooling rule, stated once so it is unmissable: a tooling config never declares a shape.** It imports `schema` from `penv.schema.ts` and calls `load(schema.pick({ ... }))`, so a rename or a type change in the one schema breaks the tooling config *at compile time* instead of silently diverging. A `drizzle.config.ts`, a `playwright.config.ts`, a `vitest` setup file, a CI script — each runs outside your application's runtime, and each used to reach for `process.env` or re-declare the two fields it cared about. Both are seams; `pick` closes them:
+**The tooling rule, stated once so it is unmissable: a tooling config never declares a shape.** It imports `schema` from `penv.schema.ts` and calls `load(schema.pick({ ... }))`, so a rename or a type change in the one schema breaks the tooling config *at compile time* instead of silently diverging. A `drizzle.config.ts`, a `playwright.config.ts`, a `vitest` setup file, a CI script — each runs outside your application's runtime, and each used to reach for `process.env` or re-declare the two fields it cared about. Both are seams; `pick` closes them. The tool is started the way your app is, `penv run -- drizzle-kit migrate`, so what it validates is the same child environment penv resolved once:
 
 ```ts
-// drizzle.config.ts — evaluated by drizzle-kit, outside your app's runtime
+// drizzle.config.ts — evaluated by drizzle-kit under `penv run -- drizzle-kit migrate`
 import { defineConfig } from "drizzle-kit";
 import { load } from "@penvhq/penv";
 import { schema } from "./penv.schema.js";
@@ -346,7 +403,7 @@ export const schema = z.object({
 
 Declaring it optional is the whole trick: `fill`, `set`, and `doctor` see one schema and prompt for, write, and diagnose the migration URL like any other parameter, while `load(schema)` in the running app tolerates its absence. Leave it *out* of the schema and it becomes a tooling-only key invisible to penv — the loose value the split exists to prevent.
 
-**Where the shape lives.** `penv.schema.ts` sits at the project root, beside `penv.config.ts`, and that is where `penv init` scaffolds it; it is the recommended location and the shape stays there regardless of anything else. The loader, `.penv/env.ts`, is what `schemaFile` names, and it may move to wherever your framework keeps such modules — `src/env.ts` is common. A schema module that lives *inside* `.penv/` is tolerated only at exactly the path `schemaFile` declares, because the grammar has to exclude that one file from the parameter tree by name; any other `.ts`/`.js` file that lands in `.penv/` is diagnosed as a stray code module rather than misread as a value file. Keeping the shape at the root sidesteps the exclusion entirely — there is nothing in the tree to skip.
+**Where the shape lives.** `penv.schema.ts` sits at the project root, beside `penv.config.ts`, and that is where `penv init` scaffolds it; it is the recommended location and the shape stays there regardless of anything else. The loader, `.penv/env.ts`, is what `schemaFile` names, and it may move to wherever your framework keeps such modules — `src/env.ts` is common. A `.ts`/`.js` file that lands inside the records tree is diagnosed as a stray code module rather than misread as a value file: code and values do not share a directory, and one that appears there is a mistake worth naming.
 
 ### Name mapping
 
@@ -367,7 +424,7 @@ Value files are lower-case and hyphenated. A camelCase schema key like `database
 ## Runtime API
 
 ```ts
-import { env } from "@env";       // blessed path — typed, validated, resolved for NODE_ENV
+import { env } from "@env";       // blessed path — typed, validated, the environment `penv run` resolved
 
 env.databaseUrl;
 env.app.jwtSecret;
@@ -375,11 +432,13 @@ env.app.jwtSecret;
 
 Importing `env` loads configuration eagerly and validates it, so invalid configuration fails at startup with a clear, parameter-named error — not later at first use. A required parameter that is missing or invalid throws then, naming the parameter and environment, so there is no separate assertion step to call at the point of use. Code that only needs the *type* imports `schema` (or `z.infer<typeof schema>`) instead, which does not trigger loading.
 
+**What the bridge validates is the environment penv handed it.** `penv run` has already resolved the cascade, applied your name mappings, and built the child environment before your process existed, so `.penv/env.ts` reads that environment and checks it against the schema. It does not reopen the parameter tree, does not read an artifact, and never calls a provider — one resolution, done once, in the parent. That is why the same `env.ts` works unchanged whether the values came from your local tree or from a sealed artifact in a container, and why a process that was not started by penv has nothing to validate and says so.
+
 The eager export never gets between the CLI and your schema. `penv validate` / `fill` / `doctor` evaluate `.penv/env.ts` only to read its `schema` export, and while they do, `load()` defers instead of resolving — so in a fresh project with no values yet, the module's own `export const env = load(schema)` cannot throw the schema out of reach, and `penv fill` sees exactly the parameters it should prompt for. The deferral exists only inside that one CLI read; application imports of `@env` are eager and fail-fast, always.
 
 The schema module may also guard itself with `import "server-only"` — the Next.js pattern for a module that must never reach a client bundle. The CLI resolves that import the way a React Server environment would (its empty, no-throw variant), so the guard protects your app without blinding penv's own tooling.
 
-When a load does not do what you expect, `PENV_DEBUG=1` makes it say so: which environment it settled on, which source answered and where that source was — a config-file path, or the embedded snapshot — and which value file won for every parameter. The same provenance is folded into the failure itself, so a `ValidationError` names the source that produced the values it is rejecting.
+When a load does not do what you expect, `PENV_DEBUG=1` makes it say so on stderr: the environment it read, how many parameters the injected environment delivered, and the variable each one arrived under. Which value file won is `penv run`'s question rather than the bridge's — `penv get <key> --explain` answers that one.
 
 A `process.env`-populating compatibility form exists for adopting penv without changing existing code:
 
@@ -387,48 +446,50 @@ A `process.env`-populating compatibility form exists for adopting penv without c
 import "@penvhq/penv/config";              // populates process.env, dotenv-shaped
 ```
 
-Like dotenv, this form must run before any module reads `process.env`. The typed `import { env } from "@env"` surface is the recommended path and has no ordering hazard. It is also disk-only: a bare side-effect import receives no snapshot, so it cannot serve a bundled runtime — reach for `@env` there.
+Like dotenv, this form must run before any module reads `process.env`. It is also schemaless — it never sees your schema, so it can neither validate nor be exclusive over what it writes. The typed `import { env } from "@env"` surface is the recommended path, has no ordering hazard, and is the one that validates.
 
-## Bundled and serverless runtimes
+## Deployment
 
-`load()` finds your config by walking up from the working directory to the nearest `penv.config.ts`, then reads the `.penv/` tree beside it. A compiled bundle has neither: a Next.js middleware chunk, a Vercel `/var/task` function, any build that traces only the modules it imports leaves `penv.config.ts` and `.penv/` behind, and `load()` throws `No penv.config.ts found…`. File tracing does not reliably fix this — the config is evaluated, not imported, so a tracer cannot see it.
+Production has one question the local loop does not: how do an environment's values reach a machine that has no parameter tree, no provider credentials, and possibly no network at start? penv answers it two ways, chosen by who owns the process.
 
-The answer is a committed data module the bundler *does* traverse, because your code imports it:
+### Containers and VMs: a sealed artifact
+
+Your pipeline builds one artifact per environment and release, and the release starts from it:
+
+```text
+penv pull  →  penv validate  →  penv artifact build  →  package or mount the artifact
+```
 
 ```bash
-npx penv snapshot
+penv pull --env production
+penv validate --env production
+penv artifact build --env production --out build/production.artifact
 ```
 
-This generates `penv.snapshot.ts` at your project root and wires your `env.ts` to pass it to `load()`:
+The runtime consumes it by path, with `PENV_SNAPSHOT` naming the artifact and CI naming everything else — the fully-qualified form of the command the daily loop shortens:
 
-```ts
-import { load } from "@penvhq/penv";
-import { schema } from "../penv.schema.js";
-import { snapshot } from "../penv.snapshot.js";
-
-export { schema };
-export const env = load(schema, { snapshot });
+```bash
+PENV_SNAPSHOT=/run/secrets/production.artifact \
+  penv run --env production --source snapshot -- node server.js
 ```
 
-The snapshot embeds the evaluated config and **every committed sealed (`.enc`) value** — ciphertext, exactly what a git clone already sees, keyed by its filename address. It never embeds plaintext, at any scope, and never a `.local` value. At runtime, file discovery still comes first: on disk, in development, a live edit to a value file wins and the snapshot is never consulted while the config file can serve. In the bundle, `load()` resolves from the snapshot instead, decrypting under the same `PENV_KEY_*` a filesystem load would.
+**What the artifact is.** Canonical data, not application source: the final resolved non-local winner for every parameter your schema declares for that environment, sealed where your policy encrypts, plus the environment name, the engine and format it is compatible with, a non-secret digest of the delivery mappings it carries, and the identifier of the key source that opens it.
 
-Finding a config file is not the same as finding a project. A `penv.config.ts` with **no `.penv/` tree beside it** is a bundling artifact — a tracer copied the config in because something referenced it, and left the tree behind because nothing imports it — so `load()` resolves from the snapshot there rather than throwing, warning on stderr as it does (it is never silent). That check happens *before* the config is evaluated, which is what keeps the fallback narrow: with a tree present you are in a real project, and your config must load. A syntax error, a missing default export, an import that does not resolve — all still fail the load, because a broken config is your file to fix and a warning you can scroll past is not an answer. Everything downstream is your data and is never fallen back from either: an undecryptable value, an undeclared environment, and a tree that is present but incomplete all still throw.
+**What it never contains.** Provider configuration, provider credentials, key material, plaintext for a sealed value, `.local` values of any scope, or the fallback records that lost the cascade. The artifact carries the answer, not the reasoning.
 
-The config search is bounded, too. penv climbs to the workspace root — a directory holding `.git`, `pnpm-workspace.yaml`, `lerna.json`, or a `package.json` declaring `workspaces` — and no further, so an unrelated `penv.config.ts` sitting a layer above `/var/task` in a container image is never picked up. A package boundary is not a stop: an app in `apps/web` still reads the config at the monorepo root. If a config *does* exist just outside the boundary, `load()` names it rather than skipping it quietly.
+**Where it lives.** Outside your source tree and outside Git — it is release-specific, and it is data your pipeline hands to a machine, not a file your repository carries. `penv doctor` reports an artifact found inside the repository as a finding, because a committed artifact is a value store that outlives the release it was built for.
 
-Pin the source when a deployment knows which one it runs on:
+**What happens before your process starts.** `penv run --source snapshot` checks the artifact whole before it opens anything: its format against the one this engine reads, its own delivery mappings against the digest it declares for them, its engine version against the running engine, and its environment against the one you asked for — then decrypts in memory and builds the child environment. Each mismatch is its own refusal, naming what is wrong and what to do about it, before your command runs. The digest is the artifact checked against itself rather than against your schema — a release container has no schema to check — so what it catches is an artifact edited after it was built. No source files, no provider adapters, and no network are involved: the artifact plus its key is the entire input.
 
-```ts
-export const env = load(schema, { snapshot, source: "snapshot" });
+### Managed serverless: the platform's own store
+
+Vercel, Cloudflare, and their peers own the parent process and build your application themselves, so nothing penv could put in `dist` is loaded by anything — and configuration is often needed at *build* time, before any penv process could run. The correct mechanism there is the platform's own encrypted environment store, written before the build:
+
+```bash
+penv push --env production          # to the platform's environment store, via its provider extension
 ```
 
-`source` is `"auto"` by default (the behavior above). `"disk"` refuses the snapshot and `"snapshot"` refuses the filesystem — each fails by name instead of quietly resolving from the other.
-
-Commit `penv.snapshot.ts` beside `penv.config.ts`. The mutating commands (`set`, `encrypt`, `remove`, `mv`, `rotate`, `import`, `pull`, `fill`) refresh it for you whenever a committed sealed value or the config changes, and `penv doctor` reports `snapshot-stale` when it has drifted — run `penv snapshot` to refresh it. A `penv init` on a new project scaffolds it and the pre-wired `env.ts` from the start.
-
-A snapshot that has fallen behind is a build that bakes one value in and serves another, so staleness is checkable rather than assumed. Every snapshot carries a digest of the config and sealed values it projects. `penv snapshot --check` recomputes it, writes nothing, and exits non-zero when the committed snapshot no longer matches or is missing entirely — the shape CI wants. And when `load()` holds both sources at once, in development, it compares them and warns on drift; the disk tree still wins, drift is only ever reported.
-
-Because the snapshot carries sealed records only, a **plaintext** team-scope value is invisible to a bundle — value files are gitignored, so neither git nor the snapshot ships it. `penv doctor` flags this as `bundle-invisible-plaintext`: seal it (`penv encrypt <key> --env <env>`) to ship it, or supply it to the runtime another way.
+The platform then supplies `process.env` exactly as it always has, and your typed bridge validates that environment on the way in. This is delivery, not a fallback: an artifact placed in a build output does not make a platform read it, so penv does not pretend one is the serverless answer.
 
 ## Configuration reference
 
@@ -439,6 +500,7 @@ import { defineConfig } from "@penvhq/penv";
 
 export default defineConfig({
   environments: ["development", "staging", "production"],
+  defaultEnvironment: "development",
 
   providers: {
     development: { type: "@penvhq/provider-filesystem" },
@@ -469,8 +531,9 @@ It will not invent `environments`. penv cannot observe your deployment topology 
 | Field | Meaning |
 |---|---|
 | `environments` | Whitelist of valid environment names. The only source of truth for what counts as an environment; segments are matched against this list, never inferred — including by `penv init`, which asks rather than inventing them. |
+| `defaultEnvironment` | The environment a command uses when `--env` is absent. It must be one of `environments` — a declared decision, never inference from `NODE_ENV`, a branch, or a filename. `init` proposes `development` when it adopted the development cascade. CI names `--env` anyway. |
 | `providers` | Per-environment backend — where an environment's values live, and what `penv pull` reads from. |
-| `providers.*.type` | The provider package's fully-qualified name — `@penvhq/provider-vault`. The name is the import specifier: penv resolves it from your own `node_modules`, so install what you declare (`npm i @penvhq/provider-vault`). The filesystem tree and the mock ship with the CLI; every other provider — and any third-party one — is a dependency of your project. Each package brings its own config types along, so your editor checks the entry against the provider's own declaration. |
+| `providers.*.type` | The provider package's fully-qualified name — `@penvhq/provider-vault`. The name is what `penv add @penvhq/provider-vault` records in the manifest and installs into the launcher's cache — never into your `package.json`. The filesystem tree and the mock ship with the engine; every other provider, including any third-party one, is added this way. Each package brings its own config types along through a committed type-only declaration, so your editor checks the entry against the provider's own definition without the adapter ever being importable from your app. |
 | `providers.*.location` | The place inside the provider that penv maps your tree onto. The format is the provider's own — a Vault KV base path, a Kubernetes `namespace/secretName`, an SSM path prefix — and its package documents it; the field name never changes between providers. This explicit mapping is the translation penv owns on your behalf. |
 | `schemaFile` | Where the *loader* module — the one that calls `load()`, re-exports the schema, and the `@env` alias resolves to — lives, relative to this config. Defaults to `.penv/env.ts`; `src/env.ts` is where most framework projects put it. The schema *shape* lives separately in `penv.schema.ts` at the project root (see [One schema, many consumers](#one-schema-many-consumers)). Both files are yours — penv scaffolds each once and never regenerates it. |
 | `publicPrefixes` | The variable prefixes your framework inlines into its client bundle — `["NEXT_PUBLIC_"]`, `["VITE_"]`. penv does not enforce them; the framework already does. Declaring them is what lets `doctor` catch a secret whose name makes the framework publish it. |
@@ -495,16 +558,20 @@ penv maps its record `(production, redis, password)` onto the provider-side plac
 
 This is the load-bearing distinction, and everything else about providers follows from it.
 
-A provider is the system of record for an environment's values. It is not something your application talks to at boot. `penv pull` materialises the parameter tree from the provider, and the runtime reads that tree:
+A provider is the system of record for an environment's values. It is not something your application talks to at boot. `penv pull` materialises the parameter tree from the provider, `penv run` resolves that tree, and your application reads what `run` handed it:
 
 ```
 vault:secret/production/redis/password
         │
-        │  penv pull          ← penv talks to the provider
+        │  penv pull                     ← penv talks to the provider
         ▼
-.penv/redis/password.production
+.penv/state/records/redis/password.production
         │
-        │  import { env } from "@env"    ← your app talks to the tree
+        │  penv run -- <command>         ← penv resolves and validates, once
+        ▼
+the child environment your command starts in
+        │
+        │  import { env } from "@env"    ← your app talks to that environment
         ▼
 env.redis.password
 ```
@@ -513,20 +580,44 @@ The two halves are deliberately separate. Reading is always local, always synchr
 
 This is also how these providers are consumed in practice: the Vault Agent Injector writes files, the Secrets Store CSI driver mounts them, and External Secrets Operator syncs into Kubernetes Secrets. penv's tree is the same shape those tools already produce. `penv pull` is penv's own version of that step, for deploys that do not already have one.
 
-The consequence, stated rather than hidden: a deploy must pull before it starts, or mount a tree something else has already materialised. penv does not fetch secrets for you at import time, and a tree that was never pulled resolves to whatever is on disk — which is what `penv doctor`'s drift check is for.
+The consequence, stated rather than hidden: a deploy must materialise before it starts — a `penv pull` in the pipeline, a tree something else mounted, or the sealed artifact of [Deployment](#deployment). penv does not fetch secrets for you at start time, and a tree that was never pulled resolves to whatever is on disk — which is what `penv doctor`'s drift check is for.
 
-Supported providers: Filesystem, HashiCorp Vault, AWS SSM Parameter Store, Kubernetes Secrets, and GitHub Actions Secrets. The filesystem tree and the rehearsal mock ship with the CLI; every other provider is a package your project installs — `npm i -D @penvhq/provider-vault` — and the `type` in your config is that package's name.
+Supported providers: Filesystem, HashiCorp Vault, AWS SSM Parameter Store, Kubernetes Secrets, and GitHub Actions Secrets. The filesystem tree and the rehearsal mock ship with the engine; every other provider arrives as an extension — `penv add @penvhq/provider-vault` — and the `type` in your config is that package's name. See [Provider extensions](#provider-extensions).
 
 A provider declares its **capabilities**, and penv reads them rather than guessing. Two axes: what the store *holds* — penv records verbatim, or a resolved projection of them — and whether its values can be *read back*. Vault, SSM, and Kubernetes hold records and read back; they satisfy the full record contract, with the filesystem provider as its reference implementation. GitHub Actions Secrets holds a projection and withholds values — see [Projection providers](#projection-providers-github-actions-secrets) below.
 
 **Not every provider retains a previous value, and that is declared rather than assumed.** Rotation's grace window reads the previous value back from the provider, which Vault (KV v2) and AWS SSM support natively and Kubernetes Secrets do not support at all — a Secret is a current-state object with no history to read. A provider therefore declares whether it retains. `dual-valid` rotation requires one that does; `atomic-cutover` does not; and `penv doctor` tells you which of those an environment can perform rather than letting you discover it mid-rotation. This is the same asymmetry the filesystem has always had, and Kubernetes sits on the same side of it.
+
+## Provider extensions
+
+A provider your config names is an **extension**: code the launcher owns, not a dependency of your application.
+
+```bash
+penv add @penvhq/provider-vault
+```
+
+`add` resolves the exact version, records it in `.penv/state/manifest.json` with its integrity hash, installs it into the launcher's cache, writes a committed type-only declaration under `.penv/state/extensions/`, and offers — never assumes — the one-line edit to `penv.config.ts` and whatever onboarding step the provider declares (`penv cloud login`, for instance). Your `package.json` is untouched.
+
+**The blessed path asks nothing.** An official `@penvhq/`-scoped extension verifies its provenance silently and installs. The trust ceremony exists for strangers, and only strangers pay it:
+
+| Extension | What `add` requires |
+|---|---|
+| Official (`@penvhq/*`) | Nothing. Provenance is verified, the manifest records version and integrity, and you are asked only about the config edit. |
+| Public third-party | A seven-day minimum package age. Adding a younger one takes an explicit override, which commits a trust block naming the publisher, the exact integrity, the timestamp, and your reason in your own words. |
+| Private or custom | An explicit trust acknowledgement, recorded the same way. The registry URL is committed; credentials never are — your `.npmrc` owns those. |
+
+`add` takes two flags and no others: `--registry <https-url>` names a private registry, which is what puts a package in the private tier, and `--trust-young` is the override for the seven-day age gate. Pin a version with `penv add <package>@<version>`; without one, `add` takes what `latest` points at and records the exact version it resolved.
+
+**What a provider declares about itself.** Two optional fields in the extension's own `package.json`, under a `penv` key. `penv.types` names a self-contained declaration file inside the package — `add` commits its text as the type declaration, so your config entry is checked against the provider's own definition; a provider that ships none gets the open base shape under its package name. `penv.onboard` names the engine command that finishes setup — `"cloud login"` becomes the `penv cloud login` that `add` offers to run. A declaration reaching for any module other than `@penvhq/core` is refused rather than committed: it would resolve to nothing in a repository where the adapter is not installed.
+
+**Integrity is not trust, and penv does not confuse the two.** A hash proves the bytes you install are the bytes that were published; it says nothing about what that code does. So an extension is loaded only for an explicit provider operation — `pull`, `push`, `doctor` against a live store — and never because an application started. When it runs, it receives the credentials its own configuration declares, not the environment of whoever invoked it. The declaration it contributes to your repository is types only: no adapter code, no credentials, no values, no key material.
 
 ## Projection providers (GitHub Actions Secrets)
 
 Every store your config names is a provider, and `penv push` and `penv pull` work against all of them. What differs is what each store can honestly do, and the store says so itself — a declared capability, not a config key you learn:
 
 ```
-                    .penv/  ← the working copy
+           .penv/state/records/  ← the working copy
                        │
         penv push      │      penv push / penv pull
    ┌───────────────────┴───────────────────┐
@@ -692,7 +783,14 @@ Reporting is all it does. penv will not materialise a value file from a declarat
 
 | Command | Purpose |
 |---|---|
-| `penv init` | Initialize a project (`.penv/`, `env.ts`, config, `@env` alias, gitignore). |
+| `penv init` | Adopt a project: detect dotenv files, declare environments, draft the schema, install the runtime dependency, import, validate, and move the prior dotenv files into one rollback bundle. All or nothing. `--yes` sets up `development` on the filesystem provider and nothing else. |
+| `penv init undo` | Restore the dotenv files the last cutover moved, under their exact names. |
+| `penv cleanup` | Close a finished migration — removes the rollback bundle and its cutover state, and nothing else. |
+| `penv run -- <command>` | Resolve, validate, and start `<command>` in a penv-owned child environment. `--source` defaults to `project`; `--env` falls back to `defaultEnvironment`; `--watch` opts into provider-backed restarts. |
+| `penv migrate` | Convert a project written under an earlier layout to `.penv/state/`. Previews first, moves records on approval, leaves your schema, config, and loader byte-identical. |
+| `penv add <package>[@<version>]` | Add a provider extension: record it in the manifest with its integrity, install it into the launcher's cache, generate its type declaration, offer the config edit and any onboarding step. `--registry <url>` for a private registry; `--trust-young` overrides the seven-day age gate. |
+| `penv upgrade [version]` | Move the pinned engine and the project's `@penvhq/penv` dependency together. |
+| `penv install` | Install the exact engine and extensions the manifest pins. The preinstall step for CI and production, which never download during a run. |
 | `penv import <file>` | Import an existing dotenv file; it becomes the source of truth. The filename names the scope the values are written at (`.env.production` → `<name>.production`); `--env` names it for a file that doesn't, and contradicting the filename is an error. |
 | `penv generate` | Write a standard `.env` artifact for deploy targets. |
 | `penv pull` | Materialise the parameter tree for an environment from its provider. Supports `--env`. |
@@ -706,20 +804,26 @@ Reporting is all it does. penv will not materialise a value file from a declarat
 | `penv list` | List parameters. |
 | `penv encrypt` / `penv decrypt` | Encrypt / decrypt one parameter's value file at one scope. Both need `--env`. |
 | `penv key create` | Generate a key for an environment. penv prints it and stores nothing. |
-| `penv snapshot` | Generate `penv.snapshot.ts` and wire it into `env.ts`, so `load()` resolves in a bundled or serverless runtime. `--check` reports whether the committed snapshot is current, writes nothing, and exits non-zero when it is not. |
+| `penv artifact build` | Build the sealed delivery artifact for one environment. `--env` is required — an artifact for whichever environment happened to be the default is a footgun — and `--out` names the path. |
 | `penv validate` | Validate configuration against the schema; non-zero on failure. |
 | `penv doctor` | Report drift, missing, unused, weak, fallback, plaintext-secret, encryption, and rotation issues. |
-| `penv watch` | Re-validate whenever `.penv/` or `penv.config.ts` changes. Supports `--env`. |
+| `penv watch` | Re-validate whenever the parameter tree or `penv.config.ts` changes. Supports `--env`. |
 
 `penv generate` writes plaintext, so it refuses an encrypted value unless you pass `--allow-decrypt`, and says how many secrets it unsealed when you do. The leaving guarantee below is why the flag exists rather than a refusal; the flag is why it is never a surprise.
 
 ## Migrating and leaving
 
-**Adopting** is `penv import .env`. After it runs, `.penv/` is your source of truth and `.env` is generated. Editing the generated `.env` by hand and expecting penv to absorb the change is not supported — edit in `.penv/` and regenerate. This one-directional flow is deliberate: two-way sync would recreate the very drift penv removes.
+**Adopting** is `penv init`, and it is a complete cutover: penv adopts the dotenv files you select, imports and validates them, and then moves the originals into an ignored rollback bundle so your framework cannot read two sources at once. A partial adoption is refused rather than half-performed — configuration coming from two places, with load order deciding, is the exact drift penv exists to remove. `penv import <file>` remains for bringing one more dotenv file into an adopted project.
+
+After adoption the parameter tree is your source of truth and `.env` is generated. Editing a generated `.env` by hand and expecting penv to absorb the change is not supported — edit the tree and regenerate. This one-directional flow is deliberate: two-way sync would recreate the very drift penv removes. `penv run` refuses to start while a framework-active `.env`, `.env.local`, or `.env.<environment>` file has reappeared, so the second source cannot come back quietly; `.env.example` and its documentation siblings are excluded, because they configure nothing.
+
+**Changing your mind, and closing the migration.** `penv init undo` restores the moved dotenv files under their exact names and returns the project to its pre-adoption shape. `penv cleanup` does the opposite — it removes the rollback bundle once you are staying. Until one of the two runs, the bundle is unresolved and a second adoption refuses, because two overlapping recoveries have no defined restore. The bundle is recovery for one migration, never a local version store.
+
+**Moving an existing penv project forward.** `penv migrate` converts a project written under an earlier layout: it previews exactly what moves and what is created, converts on your approval, and leaves `penv.schema.ts`, `penv.config.ts`, and `.penv/env.ts` byte-identical. Running it twice is a no-op that says so. penv reads one layout, so an unmigrated project is refused by name rather than read two ways.
 
 **What import carries across.** Every variable's key and value round-trips exactly. A comment sitting directly above a variable is a description of it, so it becomes that parameter's `description` in meta, and `generate` re-emits it as a comment — annotations survive in both directions. A comment attached to nothing in particular — a file header, or one separated from the next variable by a blank line — has no parameter to belong to; `import` reports how many it dropped rather than discarding them silently. Ordering is normalized: `generate` emits parameters in a deterministic sorted order rather than the source file's sequence, which makes generated output stable and diffable across machines.
 
-**Committing safely.** `penv init` and `penv import` write a `.gitignore` so value files are ignored and only structure, `env.ts`, meta, and config are committed. A committed plaintext secret is a `penv doctor` failure, not a soft warning.
+**Committing safely.** `penv init` writes the `.gitignore` under `.penv/state/` so value files and the rollback bundle are ignored, while structure, meta, the manifest, and the extension declarations are committed. A committed plaintext secret is a `penv doctor` failure, not a soft warning.
 
 **Leaving.** `penv generate` produces a working `.env` at any time, so you are never locked behind a proprietary store. Encrypted values are part of that guarantee rather than an exception to it: `penv generate --allow-decrypt` unseals them into the artifact, because a store you cannot leave with your own secrets is the thing penv exists not to be. The flag is there because unsealing a secret should be a moment you chose, not a side effect of a command you ran for another reason — and `generate` says how many it unsealed. Your `penv.schema.ts` is an ordinary Zod schema you own; the schema and its inferred types port to plain tooling without penv.
 

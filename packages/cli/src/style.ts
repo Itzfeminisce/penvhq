@@ -83,8 +83,17 @@ export const err: Palette = paletteFor(process.stderr);
  */
 const STYLE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 
+/**
+ * The bytes a terminal actually shows. The one place that knows what a style
+ * sequence looks like, so measuring a line and reading one back never disagree
+ * — a test asserting a whole line uses this rather than a pattern of its own.
+ */
+export function visibleText(text: string): string {
+  return text.replace(STYLE_PATTERN, "");
+}
+
 export function visibleWidth(text: string): number {
-  return text.replace(STYLE_PATTERN, "").length;
+  return visibleText(text).length;
 }
 
 /** `padEnd` measured on visible width, so styled and plain cells align in one table. */

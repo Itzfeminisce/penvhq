@@ -1,11 +1,11 @@
 /**
  * Opening a penv project from a working directory, and the pieces every command
  * needs once it is open: the config, the environment to act on, the provider
- * rooted at `.penv/`, and the parameter a CLI key names.
+ * rooted at the records tree, and the parameter a CLI key names.
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import type {
   AnyProvider,
   DecryptFailure,
@@ -16,6 +16,7 @@ import type {
   ResolutionCandidate,
 } from "@penvhq/core";
 import {
+  assertMigrated,
   candidatesFor,
   formatValueFile,
   isCanonicalSegment,
@@ -25,6 +26,7 @@ import {
   PenvError,
   parameterId,
   ReservedTokenError,
+  recordsDir,
   refFromAccessPath,
   resolveEnvironment,
   resolveKeySource,
@@ -40,14 +42,13 @@ import {
   LOCAL_TREE_TYPE,
 } from "./registry.js";
 
-export const PENV_DIR = ".penv";
-
 export interface Project {
   /** The directory holding `penv.config.ts`. */
   readonly root: string;
   readonly configFile: string;
   readonly config: PenvConfig;
-  readonly penvDir: string;
+  /** The parameter tree, absolute — `.penv/state/records/`. */
+  readonly recordsDir: string;
   /**
    * The project's provider, as the contract — never the concrete
    * implementation. Shared commands speak the async interface and nothing more;
@@ -60,7 +61,9 @@ export interface Project {
 export function openProject(cwd: string): Project {
   const { config, file } = loadConfig(cwd);
   const root = dirname(file);
-  const penvDir = resolve(root, PENV_DIR);
+  // A project whose records still sit directly under `.penv/` is refused here,
+  // once, rather than read as an empty tree by every command downstream.
+  assertMigrated(root, config);
   // Refuse a config naming a provider this build cannot construct here, at open
   // time, rather than as a crash from whichever command first reached it. Plugin
   // types are resolved against the project (`root`), where the user installed them.
@@ -69,8 +72,8 @@ export function openProject(cwd: string): Project {
     root,
     configFile: file,
     config,
-    penvDir,
-    provider: createProvider(LOCAL_TREE_TYPE, { root: penvDir, config }),
+    recordsDir: recordsDir(root),
+    provider: createProvider(LOCAL_TREE_TYPE, { root, config }),
   };
 }
 
@@ -154,7 +157,7 @@ export async function sourceProviderFor(
 ): Promise<AnyProvider> {
   const providerConfig = project.config.providers[environment];
   if (providerConfig === undefined) {
-    return createProvider(LOCAL_TREE_TYPE, { root: project.penvDir, config: project.config });
+    return createProvider(LOCAL_TREE_TYPE, { root: project.root, config: project.config });
   }
   // A declared backend may be a plugin (`penv-cloud`, a third-party provider), so
   // this goes through the async, plugin-aware path rather than the built-in-only
@@ -163,7 +166,7 @@ export async function sourceProviderFor(
   // `holdsRecords`/`holdsProjection` and never call a method the capability
   // declaration did not promise.
   return createSourceProvider(providerConfig.type, {
-    root: project.penvDir,
+    root: project.root,
     config: project.config,
     providerConfig,
     environment,

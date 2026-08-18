@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Meta, ProjectionProvider, ValueFile } from "@penvhq/core";
+import { recordsDir } from "@penvhq/core";
 import { createFilesystemProvider } from "@penvhq/provider-filesystem";
 import { createMockProvider } from "@penvhq/provider-mock";
 import { afterEach, describe, expect, it } from "vitest";
@@ -39,7 +40,7 @@ function makeProject(config: Record<string, unknown> = {}): string {
     `export default ${JSON.stringify({ ...CONFIG, ...config })};\n`,
     "utf8",
   );
-  mkdirSync(join(root, ".penv"), { recursive: true });
+  mkdirSync(recordsDir(root), { recursive: true });
   writeFileSync(join(root, ".penv", "env.ts"), "export const schema = {};\n", "utf8");
   return root;
 }
@@ -51,7 +52,7 @@ function mockSource(root: string) {
 
 /** The local tree, to read back what a pull wrote. */
 function localTree(root: string, config: Record<string, unknown> = {}) {
-  return createFilesystemProvider({ root: join(root, ".penv"), config: { ...CONFIG, ...config } });
+  return createFilesystemProvider({ root: recordsDir(root), config: { ...CONFIG, ...config } });
 }
 
 const UNSCOPED: ValueFile = {

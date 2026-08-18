@@ -7,7 +7,17 @@
  * contract: what is not re-exported here is an implementation detail.
  */
 
-export type { ConfigSearch } from "./config.js";
+export type { Artifact, ArtifactEntry, ArtifactExpectation } from "./artifact.js";
+export {
+  ARTIFACT_BUILD_COMMAND,
+  ARTIFACT_FORMAT,
+  ArtifactError,
+  assertArtifactFor,
+  deliveryDigest,
+  parseArtifact,
+  serializeArtifact,
+  UnsupportedArtifactFormatError,
+} from "./artifact.js";
 export {
   assertEnvironment,
   defineConfig,
@@ -19,28 +29,32 @@ export {
   resolveEnvironment,
   SCHEMA_HARVEST_ENV,
   schemaHarvestActive,
-  searchConfigFile,
   validateConfig,
 } from "./config.js";
 export type { DecryptResult } from "./crypto.js";
 export {
   decryptValue,
   KeyUnavailableError,
+  openSealed,
   openValue,
   sameKey,
   sealValue,
   UndecryptableValueError,
 } from "./crypto.js";
-export type { DotenvEntry, DotenvParseResult } from "./dotenv.js";
+export type { DotenvDiagnostic, DotenvEntry, DotenvParseResult } from "./dotenv.js";
 export { parseDotenv, serializeDotenv } from "./dotenv.js";
 export type { Envelope } from "./envelope.js";
 export { formatEnvelope, NONCE_BYTES, parseEnvelope, TAG_BYTES } from "./envelope.js";
+export type { ValidationWording } from "./errors.js";
 export {
   ConfigError,
+  DirectStartError,
   FilenameGrammarError,
   IllegalEnvironmentNameError,
+  MissingMaterializationError,
   MissingParameterError,
   NameCollisionError,
+  OldLayoutError,
   PenvError,
   ReservedTokenError,
   StrayCodeFileError,
@@ -50,6 +64,7 @@ export {
 export {
   formatMetaFile,
   formatValueFile,
+  isCodeModule,
   isLegalEnvironmentName,
   isParameterFile,
   isReservedToken,
@@ -64,16 +79,54 @@ export {
   createKeychainKeySource,
   KEY_BYTES,
   KEYCHAIN_SERVICE,
+  keySourceFrom,
+  keySourceIdentifier,
+  NO_KEY_SOURCE,
   nullKeySource,
   resolveKeySource,
   setKeychain,
   validateKeys,
 } from "./keys.js";
+export {
+  assertMigrated,
+  CUTOVER_PATH,
+  EXTENSIONS_PATH,
+  MANIFEST_PATH,
+  oldLayoutEntries,
+  PENV_DIR,
+  penvDir,
+  RECORDS_PATH,
+  ROLLBACK_DOTENV_PATH,
+  ROLLBACK_PATH,
+  recordPath,
+  recordsDir,
+  renderStateGitignore,
+  STATE_GITIGNORE_PATH,
+  STATE_PATH,
+  stateDir,
+} from "./layout.js";
+export type {
+  LauncherUpdate,
+  Manifest,
+  ManifestEngine,
+  ManifestExtension,
+  ManifestTrust,
+} from "./manifest.js";
+export {
+  ENGINE_PACKAGE,
+  MANIFEST_FORMAT,
+  ManifestError,
+  OFFICIAL_SCOPE,
+  parseManifest,
+  serializeManifest,
+  UnsupportedManifestFormatError,
+} from "./manifest.js";
 export { effectiveMeta, isRequired, isSecret, parseMeta, serializeMeta } from "./meta.js";
 export {
   accessPath,
   checkNameCollisions,
   defaultVariableName,
+  deliveryNames,
   isCanonicalSegment,
   refFromAccessPath,
   refFromVariable,
@@ -105,8 +158,6 @@ export {
   validatePublicPrefixes,
   validateSchemaFile,
 } from "./schema-file.js";
-export type { SyncValueSource } from "./snapshot.js";
-export { sealedSnapshotValues, snapshotDigest } from "./snapshot.js";
 export type {
   AnyProvider,
   DecryptFailure,
@@ -125,7 +176,6 @@ export type {
   PenvConfig,
   PenvErrorLike,
   PenvSchemaShape,
-  PenvSnapshot,
   ProjectionProvider,
   ProjectionSecret,
   Provider,

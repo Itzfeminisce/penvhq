@@ -5,7 +5,7 @@
  * It lives in the CLI, not in `@penvhq/core` and not in `@penvhq/runtime`. Core owns
  * the `Provider` *contract* and must not know which implementations exist —
  * knowing would make the interface answerable to its callers. The runtime never
- * selects a provider at all: it reads the local `.penv` tree whatever an
+ * selects a provider at all: it reads the local records tree whatever an
  * environment declares (see `runtime/src/resolve.ts`), so a registry there would
  * be the ability to dial a network provider at boot, which the design forbids.
  *
@@ -19,21 +19,21 @@
  */
 
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AnyProvider, PenvConfig, Provider, ProviderFactoryContext } from "@penvhq/core";
-import { holdsProjection, PenvError } from "@penvhq/core";
+import { holdsProjection, PENV_DIR, PenvError, recordsDir } from "@penvhq/core";
 import { createFilesystemProvider } from "@penvhq/provider-filesystem";
 import { createMockProvider } from "@penvhq/provider-mock";
 
 /**
- * What a factory needs to build a provider rooted at one project's `.penv`.
- * The shape is core's: it is the seam provider packages build against, so the
- * CLI consumes the same declaration they do rather than restating it.
+ * What a factory needs to build a provider for one project. The shape is core's:
+ * it is the seam provider packages build against, so the CLI consumes the same
+ * declaration they do rather than restating it.
  */
 export type ProviderContext = ProviderFactoryContext;
 
-/** Turns a project's `.penv` context into a provider of one `type`. */
+/** Turns one project's context into a provider of one `type`. */
 export type ProviderFactory = (context: ProviderContext) => Provider;
 
 /** The factory shape a provider package exports. May be async. */
@@ -43,7 +43,7 @@ type PluginProviderFactory = (context: ProviderContext) => AnyProvider | Promise
 const PLUGIN_FACTORY_EXPORT = "penvProviderFactory";
 
 /**
- * The local `.penv` tree is always served by the filesystem provider: it is the
+ * The local records tree is always served by the filesystem provider: it is the
  * working copy `penv pull` materialises and every command edits, whatever backend
  * an environment's source of truth lives in. Naming it here keeps the one string
  * literal that means "the tree on disk" out of `openProject`.
@@ -56,10 +56,13 @@ export const LOCAL_TREE_TYPE = "@penvhq/provider-filesystem";
  * rotation. Every other provider is a package the project depends on.
  */
 const REGISTRY = new Map<string, ProviderFactory>([
-  [LOCAL_TREE_TYPE, ({ root, config }) => createFilesystemProvider({ root, config })],
+  [
+    LOCAL_TREE_TYPE,
+    ({ root, config }) => createFilesystemProvider({ root: recordsDir(root), config }),
+  ],
   [
     "@penvhq/provider-mock",
-    ({ root }) => createMockProvider({ storePath: resolve(root, ".penv-mock.json") }),
+    ({ root }) => createMockProvider({ storePath: resolve(root, PENV_DIR, ".penv-mock.json") }),
   ],
 ]);
 
@@ -121,9 +124,8 @@ export async function createSourceProvider(
 }
 
 async function loadPluginProvider(type: string, context: ProviderContext): Promise<AnyProvider> {
-  const fromDir = resolutionBase(context);
-
-  const resolved = resolvePlugin(type, fromDir);
+  // Resolution starts at the project, which is where the user installed the package.
+  const resolved = resolvePlugin(type, context.root);
   if (resolved === undefined) {
     throw unknownProvider(type, context.environment);
   }
@@ -174,13 +176,6 @@ export function assertProvidersRegistered(config: PenvConfig, projectRoot: strin
       throw unknownProvider(provider.type, environment);
     }
   }
-}
-
-/** The project the user installed the provider into — where resolution must start. */
-function resolutionBase(context: ProviderContext): string {
-  // `context.root` is the `.penv/` directory; its parent is the project root,
-  // where `penv.config.ts` and the project's `node_modules` live.
-  return dirname(context.root);
 }
 
 /**

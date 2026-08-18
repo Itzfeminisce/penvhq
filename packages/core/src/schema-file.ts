@@ -24,14 +24,18 @@ export const DEFAULT_SCHEMA_FILE = ".penv/env.ts";
  * `schemaFile` (above) names the *wrapper* that loads — the module the `@env`
  * alias resolves to, which may move to `src/env.ts`. The shape it derives from is
  * fixed here: a side-effect-free `z.object` every consumer imports without loading
- * configuration. It is outside `.penv/`, so the grammar never reads it as a
+ * configuration. It is outside the records tree, so the grammar never reads it as a
  * parameter — but that also means nothing in the tree watches it, so `watch` has
  * to watch this path on its own.
  */
 export const SCHEMA_SHAPE_FILE = "penv.schema.ts";
 
-/** The directory the parameter tree lives in, relative to the config. */
-const PENV_DIR = ".penv";
+/**
+ * The parameter tree, relative to the config. Spelled out here rather than
+ * imported from `layout.ts`: layout asks this module where the schema is, and a
+ * path constant is not worth a cycle between the two.
+ */
+const RECORDS_PATH = ".penv/state/records";
 
 /** The extensions penv can evaluate, matching the config file's own set. */
 const EXTENSIONS = [".ts", ".js", ".mjs"] as const;
@@ -50,16 +54,18 @@ export function schemaFileOf(config: PenvConfig): string {
 }
 
 /**
- * The schema's path relative to `.penv/`, or `undefined` when it lives outside.
+ * The schema's path relative to the records tree, or `undefined` when it lives
+ * outside it — which, with the tree under `.penv/state/records/` and the loader
+ * at `.penv/env.ts`, is every project that did not deliberately put code in
+ * penv-managed state.
  *
  * The grammar reads every file in the tree as a parameter, so a schema *inside*
- * the tree has to be excluded by name — and a schema outside it never needs to
- * be, which is the quiet reason moving it out is a simplification rather than a
- * feature. Answering `undefined` is how the grammar learns it has nothing to skip.
+ * the tree has to be excluded by name. Answering `undefined` is how the grammar
+ * learns it has nothing to skip.
  */
 export function schemaInsideTree(config: PenvConfig): string | undefined {
   const file = schemaFileOf(config);
-  const prefix = `${PENV_DIR}/`;
+  const prefix = `${RECORDS_PATH}/`;
   return file.startsWith(prefix) ? file.slice(prefix.length) : undefined;
 }
 

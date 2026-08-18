@@ -12,7 +12,7 @@
 
 import { resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ParameterRef, ValueFile } from "@penvhq/core";
+import type { ParameterRef, Resolution, ValueFile } from "@penvhq/core";
 import {
   accessPath,
   checkNameCollisions,
@@ -309,9 +309,35 @@ async function loadSchemaExclusively(
   return { schema: exported, issues: [] };
 }
 
+/**
+ * One environment, checked — and everything the check produced on the way.
+ *
+ * The verdict is `result` and it is the only verdict penv has. The rest is what
+ * `penv run` needs to build a child environment, handed back rather than
+ * recomputed: a second walk of the same tree could disagree with the one the
+ * verdict was reached on, and then `run` would start a process `validate`
+ * refuses.
+ */
+export interface EnvironmentCheck {
+  readonly result: ValidateResult;
+  /** Absent when the schema module could not be evaluated — `result.issues` says why. */
+  readonly schema?: z.ZodType;
+  /** Every parameter the tree holds, resolved for this environment. */
+  readonly resolutions: readonly Resolution[];
+  /** The schema-validated object. Present only when the verdict passed. */
+  readonly validated?: unknown;
+}
+
 export async function runValidate(options: ValidateOptions): Promise<ValidateResult> {
   const project = openProject(options.cwd);
   const environment = targetEnvironment(project, options.environment, options.envFlags);
+  return (await checkEnvironment(project, environment)).result;
+}
+
+export async function checkEnvironment(
+  project: Project,
+  environment: string,
+): Promise<EnvironmentCheck> {
   const schemaPath = schemaFileOf(project.config);
   const schemaShapeFile = schemaShapeFileOf(project);
   const issues: ValidateIssue[] = [];
@@ -326,11 +352,14 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
       throw error;
     }
     return {
-      ok: false,
-      environment,
-      parameters: 0,
-      issues: [issueFrom(error, schemaPath)],
-      drift: EMPTY_DRIFT,
+      result: {
+        ok: false,
+        environment,
+        parameters: 0,
+        issues: [issueFrom(error, schemaPath)],
+        drift: EMPTY_DRIFT,
+      },
+      resolutions: [],
     };
   }
 
@@ -356,9 +385,11 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
   issues.push(...schemaIssues);
 
   let drift: DriftReport = EMPTY_DRIFT;
+  let resolutions: readonly Resolution[] = [];
+  let validated: unknown;
 
   if (schema !== undefined) {
-    const resolutions = await resolveAll(
+    resolutions = await resolveAll(
       environment,
       project.provider,
       keySourceFor(project, environment),
@@ -395,7 +426,9 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
     });
 
     const result = schema.safeParse(object);
-    if (!result.success) {
+    if (result.success) {
+      validated = result.data;
+    } else {
       for (const problem of result.error.issues) {
         const path = problem.path.join(".");
         // One absence, one line. The schema is right that nothing is there, but
@@ -416,7 +449,12 @@ export async function runValidate(options: ValidateOptions): Promise<ValidateRes
     }
   }
 
-  return { ok: issues.length === 0, environment, parameters: refs.length, issues, drift };
+  return {
+    result: { ok: issues.length === 0, environment, parameters: refs.length, issues, drift },
+    ...(schema === undefined ? {} : { schema }),
+    resolutions,
+    ...(validated === undefined ? {} : { validated }),
+  };
 }
 
 export function renderValidate(result: ValidateResult): string[] {

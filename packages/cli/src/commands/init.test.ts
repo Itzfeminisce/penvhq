@@ -11,11 +11,14 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { recordsDir } from "@penvhq/core";
+import { runCommand as runCittyCommand } from "citty";
 import { afterEach, describe, expect, it } from "vitest";
 import type { InitDecisions, InitPlan, InitResult, InitTarget, PromptIo } from "./init.js";
 import {
   DEFAULT_DECISIONS,
   environmentsFromFlag,
+  initCommand,
   insertEnvAlias,
   planInit,
   promptForDecisions,
@@ -26,6 +29,7 @@ import {
 } from "./init.js";
 
 const created: string[] = [];
+const originalCwd = process.cwd();
 
 function makeDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "penv-init-"));
@@ -78,6 +82,7 @@ function read(root: string, ...path: string[]): string {
 }
 
 afterEach(() => {
+  process.chdir(originalCwd);
   for (const dir of created.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -94,7 +99,6 @@ describe("scaffolding", () => {
       "schema",
       "env",
       "config",
-      "snapshot",
       "tsconfig",
       "gitignore",
     ]);
@@ -113,14 +117,8 @@ describe("scaffolding", () => {
     // The `.js` extension is the output extension nodenext requires on a relative
     // import; TypeScript maps it back to `penv.schema.ts` for the type.
     expect(wrapper).toContain('import { schema } from "../penv.schema.js";');
-    // The wrapper is pre-wired for bundled runtimes: it imports the committed
-    // snapshot and passes it to load().
-    expect(wrapper).toContain('import { snapshot } from "../penv.snapshot.js";');
     expect(wrapper).toContain("export { schema };");
-    expect(wrapper).toContain("export const env = load(schema, { snapshot });");
-    // The snapshot module is scaffolded at the root, beside the config.
-    expect(existsSync(join(root, "penv.snapshot.ts"))).toBe(true);
-    expect(read(root, "penv.snapshot.ts")).toContain("satisfies PenvSnapshot");
+    expect(wrapper).toContain("export const env = load(schema);");
     // The type registration moved to the shape — it belongs with the shape, not
     // the wrapper.
     expect(wrapper).not.toContain('declare module "@penvhq/core"');
@@ -142,8 +140,7 @@ describe("scaffolding", () => {
 
       const result = runInit({ cwd: root, decisions: withInject(root) });
 
-      // env.ts opts in, and stays wired for bundled runtimes.
-      expect(read(root, "src", "env.ts")).toContain("load(schema, { inject: true, snapshot })");
+      expect(read(root, "src", "env.ts")).toContain("load(schema, { inject: true })");
       // Next's own hook is scaffolded, guarded, and reported as a seam step.
       expect(existsSync(join(root, "src", "instrumentation.ts"))).toBe(true);
       const seam = read(root, "src", "instrumentation.ts");
@@ -157,9 +154,7 @@ describe("scaffolding", () => {
 
       runInit({ cwd: root, decisions: { ...planFor(root).decisions, inject: false } });
 
-      expect(read(root, "src", "env.ts")).toContain(
-        "export const env = load(schema, { snapshot });",
-      );
+      expect(read(root, "src", "env.ts")).toContain("export const env = load(schema);");
       expect(existsSync(join(root, "src", "instrumentation.ts"))).toBe(false);
     });
 
@@ -242,17 +237,20 @@ describe("scaffolding", () => {
     });
   });
 
-  /** Invariant 17: a value file that is not ignored is a secret waiting to be committed. */
-  it("ignores value files but keeps env.ts, meta, and structure committable", () => {
+  /** Invariant 20: a value file that is not ignored is a secret waiting to be committed. */
+  it("ignores values and the rollback bundle, keeps meta and the manifest committable", () => {
     const root = makeDir();
 
     runInit({ cwd: root });
-    const ignore = read(root, ".penv", ".gitignore");
+    const ignore = read(root, ".penv", "state", ".gitignore");
 
     expect(ignore).toContain("*\n");
-    expect(ignore).toContain("!env.ts");
     expect(ignore).toContain("!*.json");
+    expect(ignore).toContain("!*.d.ts");
     expect(ignore).toContain("!*/");
+    expect(ignore).toContain("rollback/");
+    // The adoption state names one machine's bundle; `!*.json` would commit it.
+    expect(ignore).toContain("/cutover.json");
   });
 
   it("is safe to re-run", () => {
@@ -265,7 +263,6 @@ describe("scaffolding", () => {
     expect(stepFor(second, "schema").action).toBe("kept");
     expect(stepFor(second, "env").action).toBe("kept");
     expect(stepFor(second, "config").action).toBe("kept");
-    expect(stepFor(second, "snapshot").action).toBe("kept");
     expect(stepFor(second, "tsconfig").action).toBe("kept");
     expect(stepFor(second, "gitignore").action).toBe("kept");
     // One alias, not two: re-running must not append a second entry.
@@ -296,7 +293,7 @@ describe("the two generated modules are both write-once", () => {
   it("does not overwrite an existing .penv/env.ts (the wrapper)", () => {
     const root = makeDir();
     const mine = "export const env = 'mine, hand-written, and quite wrong';\n";
-    mkdirSync(join(root, ".penv"), { recursive: true });
+    mkdirSync(recordsDir(root), { recursive: true });
     writeFileSync(join(root, ".penv", "env.ts"), mine, "utf8");
 
     const result = runInit({ cwd: root });
@@ -317,7 +314,7 @@ describe("the two generated modules are both write-once", () => {
    */
   it("does not add a second penv.schema.ts beside an old self-contained env.ts", () => {
     const root = makeDir();
-    mkdirSync(join(root, ".penv"), { recursive: true });
+    mkdirSync(recordsDir(root), { recursive: true });
     const selfContained =
       'import { z } from "zod";\n' +
       "export const schema = z.object({ databaseUrl: z.url() });\n" +
@@ -349,7 +346,7 @@ describe("the two generated modules are both write-once", () => {
    */
   it("does not add a second penv.schema.ts beside a pre-0.5 env.ts (no PenvSchemaShape)", () => {
     const root = makeDir();
-    mkdirSync(join(root, ".penv"), { recursive: true });
+    mkdirSync(recordsDir(root), { recursive: true });
     const preAugmentation =
       'import { z } from "zod";\n' +
       'import { load } from "@penvhq/penv";\n' +
@@ -381,7 +378,7 @@ describe("the two generated modules are both write-once", () => {
 
   it("says so rather than failing when it keeps the wrapper", () => {
     const root = makeDir();
-    mkdirSync(join(root, ".penv"), { recursive: true });
+    mkdirSync(recordsDir(root), { recursive: true });
     writeFileSync(join(root, ".penv", "env.ts"), "// mine\n", "utf8");
 
     const result = runInit({ cwd: root });
@@ -569,14 +566,19 @@ describe("environments", () => {
     expect(config).not.toContain("staging");
   });
 
-  /** `--yes` trusts penv's reading of the codebase. Infrastructure is not in the codebase. */
-  it("still declares none when the detected defaults are taken unasked", () => {
+  /**
+   * The plan itself invents nothing. `--yes` adds `development` on top of it —
+   * the machine the command was typed on, not a claim about anyone's
+   * infrastructure — and that is the command's decision, not the plan's.
+   */
+  it("proposes no environment of its own", () => {
     const root = makeProject(NEXT, { src: true });
 
     const plan = planFor(root);
 
     expect(plan.decisions.environments).toEqual([]);
     expect(plan.decisions.schemaFile).toBe("src/env.ts");
+    expect(plan.decisions.defaultEnvironment).toBeUndefined();
   });
 
   /** An empty whitelist is a decision penv made for the user, so it is explained on the spot. */
@@ -620,6 +622,44 @@ describe("environments", () => {
   /** Present-but-blank is refused, never normalized into "no answer". */
   it("refuses --env with no name rather than reading it as none", () => {
     expect(() => environmentsFromFlag("")).toThrow(/`--env` was given without a value/);
+  });
+});
+
+/**
+ * PRD §6: `--yes` on a clean project takes `development` and the filesystem
+ * provider, and never invents a deployment. The command is run for real, because
+ * where that default is applied — the command, not the plan — is the point.
+ */
+describe("`penv init --yes` on a project with nothing to adopt", () => {
+  async function initWithYes(root: string): Promise<void> {
+    process.chdir(root);
+    try {
+      await runCittyCommand(initCommand, { rawArgs: ["--yes"] });
+    } finally {
+      process.chdir(originalCwd);
+    }
+  }
+
+  it("declares development, with a provider and a default", async () => {
+    const root = makeDir();
+
+    await initWithYes(root);
+    const config = read(root, "penv.config.ts");
+
+    expect(config).toContain('environments: ["development"],');
+    expect(config).toContain('"development": { type: "@penvhq/provider-filesystem" },');
+    expect(config).toContain('defaultEnvironment: "development",');
+  });
+
+  it("invents no other environment", async () => {
+    const root = makeDir();
+
+    await initWithYes(root);
+    const config = read(root, "penv.config.ts");
+
+    for (const invented of ["production", "staging", "preview"]) {
+      expect(config).not.toContain(`"${invented}"`);
+    }
   });
 });
 
@@ -807,10 +847,8 @@ describe("the schema's home", () => {
     // The wrapper goes to the chosen path; the shape stays at the root, and the
     // wrapper climbs back up to it.
     const wrapper = read(root, "src", "config", "env.ts");
-    expect(wrapper).toContain("export const env = load(schema, { snapshot });");
+    expect(wrapper).toContain("export const env = load(schema);");
     expect(wrapper).toContain('import { schema } from "../../penv.schema.js";');
-    // The snapshot import climbs the same distance as the schema import.
-    expect(wrapper).toContain('import { snapshot } from "../../penv.snapshot.js";');
     expect(existsSync(join(root, "penv.schema.ts"))).toBe(true);
     expect(existsSync(join(root, ".penv", "env.ts"))).toBe(false);
     expect(stepFor(result, "env").text).toContain("Generated src/config/env.ts");
@@ -849,16 +887,17 @@ describe("the schema's home", () => {
   /**
    * The un-ignore names the schema by name, so outside the tree it names nothing:
    * a `!env.ts` matching no file is a line the next reader has to prove is dead
-   * before they can leave it alone.
+   * before they can leave it alone. The scaffolded loader sits beside the tree,
+   * never in it, so no project gets that line.
    */
-  it("drops the schema's un-ignore line when the schema is not in .penv/", () => {
+  it("writes no un-ignore line for a schema outside the tree", () => {
     const root = makeDir();
 
     runInit({ cwd: root, decisions: CUSTOM });
-    const ignore = read(root, ".penv", ".gitignore");
+    const ignore = read(root, ".penv", "state", ".gitignore");
 
     expect(ignore).not.toContain("!env.ts");
-    // Invariant 17 is untouched: values are still ignored, structure still committed.
+    // Invariant 20 is untouched: values are still ignored, structure still committed.
     expect(ignore).toContain("*\n");
     expect(ignore).toContain("!*/");
     expect(ignore).toContain("!*.json");

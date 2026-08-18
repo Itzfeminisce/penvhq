@@ -9,6 +9,8 @@
 
 import { setKeychain } from "@penvhq/core";
 import { runMain as cittyRunMain, defineCommand } from "citty";
+import { artifactCommand } from "./commands/artifact.js";
+import { cleanupCommand } from "./commands/cleanup.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { decryptCommand, encryptCommand } from "./commands/encrypt.js";
 import { fillCommand } from "./commands/fill.js";
@@ -18,13 +20,14 @@ import { importCommand } from "./commands/import.js";
 import { initCommand } from "./commands/init.js";
 import { keyCommand } from "./commands/key.js";
 import { listCommand } from "./commands/list.js";
+import { migrateCommand } from "./commands/migrate.js";
 import { mvCommand } from "./commands/mv.js";
 import { pullCommand } from "./commands/pull.js";
 import { pushCommand } from "./commands/push.js";
 import { removeCommand } from "./commands/remove.js";
 import { rotateCommand } from "./commands/rotate.js";
+import { runCommand } from "./commands/run.js";
 import { setCommand } from "./commands/set.js";
-import { snapshotCommand } from "./commands/snapshot.js";
 import { validateCommand } from "./commands/validate.js";
 import { watchCommand } from "./commands/watch.js";
 import { defaultKeychain } from "./keychain.js";
@@ -45,15 +48,18 @@ export const main = defineCommand({
     pull: pullCommand,
     push: pushCommand,
     rotate: rotateCommand,
+    run: runCommand,
     remove: removeCommand,
     list: listCommand,
+    cleanup: cleanupCommand,
+    migrate: migrateCommand,
     encrypt: encryptCommand,
     decrypt: decryptCommand,
     key: keyCommand,
-    snapshot: snapshotCommand,
     validate: validateCommand,
     doctor: doctorCommand,
     watch: watchCommand,
+    artifact: artifactCommand,
   },
 });
 
@@ -65,6 +71,8 @@ export function runMain(): Promise<void> {
   return cittyRunMain(main);
 }
 
+export type { ArtifactBuildOptions, ArtifactBuildResult } from "./commands/artifact.js";
+export { renderArtifactBuild, runArtifactBuild } from "./commands/artifact.js";
 export type {
   DoctorCheck,
   DoctorFinding,
@@ -82,10 +90,24 @@ export type { GetExplanation } from "./commands/get.js";
 export { runExplain, runGet } from "./commands/get.js";
 export type { ImportReport } from "./commands/import.js";
 export { importDotenv } from "./commands/import.js";
-export type { InitResult, InitStep } from "./commands/init.js";
-export { insertEnvAlias, runInit } from "./commands/init.js";
+export type {
+  AdoptionPlan,
+  CutoverPlan,
+  CutoverResult,
+  InitResult,
+  InitStep,
+} from "./commands/init.js";
+export {
+  applyCutover,
+  insertEnvAlias,
+  planAdoption,
+  planCutover,
+  runInit,
+} from "./commands/init.js";
 export type { ListResult } from "./commands/list.js";
 export { runList } from "./commands/list.js";
+export type { MigrateMove, MigratePlan, MigrateResult, MigrateStatus } from "./commands/migrate.js";
+export { applyMigrate, planMigrate, renderMigrate, runMigrate } from "./commands/migrate.js";
 export type { MoveResult } from "./commands/mv.js";
 export { renderMove, runMove } from "./commands/mv.js";
 export type { PullOptions, PullResult } from "./commands/pull.js";
@@ -96,16 +118,13 @@ export type { RemoveResult } from "./commands/remove.js";
 export { runRemove } from "./commands/remove.js";
 export type { RotateOptions, RotatePhase, RotateResult } from "./commands/rotate.js";
 export { renderRotate, runRotate } from "./commands/rotate.js";
+export type { RunOptions, RunResult, RunSource } from "./commands/run.js";
+export { runRun } from "./commands/run.js";
 export type { SetResult } from "./commands/set.js";
 export { runSet } from "./commands/set.js";
-export type { SnapshotCheckResult, SnapshotResult } from "./commands/snapshot.js";
-export {
-  renderSnapshot,
-  renderSnapshotCheck,
-  runSnapshot,
-  runSnapshotCheck,
-} from "./commands/snapshot.js";
-export type { ValidateIssue, ValidateResult } from "./commands/validate.js";
-export { runValidate } from "./commands/validate.js";
+export type { EnvironmentCheck, ValidateIssue, ValidateResult } from "./commands/validate.js";
+export { checkEnvironment, runValidate } from "./commands/validate.js";
 export type { WatchHandle, WatchOptions } from "./commands/watch.js";
 export { renderWatch, runWatch } from "./commands/watch.js";
+export type { CleanupResult, Cutover, UndoResult } from "./cutover.js";
+export { runCleanup, runUndo } from "./cutover.js";
