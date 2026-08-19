@@ -1,6 +1,6 @@
 {
   "name": "@penvhq/provider-vercel",
-  "version": "0.9.5",
+  "version": "0.10.0",
   "description": "The Vercel project environment-variable provider — a projection-holding destination penv pushes to over the REST API.",
   "license": "MIT",
   "type": "module",
