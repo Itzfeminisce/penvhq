@@ -15,6 +15,7 @@ export default defineConfig({
       "@penvhq/provider-vault": src("providers/vault"),
       "@penvhq/provider-contract": src("providers/contract"),
       "@penvhq/provider-github": src("providers/github"),
+      "@penvhq/provider-vercel": src("providers/vercel"),
       "@penvhq/cli": src("cli"),
       penv: src("launcher"),
     },
