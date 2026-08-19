@@ -1,5 +1,12 @@
 # @penvhq/provider-kubernetes
 
+## 0.9.5
+
+### Patch Changes
+
+- Updated dependencies [5815a93]
+  - @penvhq/core@0.9.5
+
 ## 0.9.4
 
 ### Patch Changes
