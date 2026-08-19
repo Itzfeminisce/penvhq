@@ -604,16 +604,20 @@ export class UpgradeDeclinedError extends PenvError {
  *
  * The dependency moves before the manifest for exactly this reason: an upgrade
  * that cannot finish leaves a project pinning the engine it was already running.
+ * The remedy is never the command that just failed — that is the one instruction
+ * known not to work. The manager printed why; that line is where to look.
  */
 export class UpgradeInstallFailedError extends PenvError {
   override readonly name = "UpgradeInstallFailedError";
 
-  constructor(command: string) {
+  constructor(manager: string, version: string) {
     super(
       "PENV_UPGRADE_INSTALL_FAILED",
-      `${command} did not finish, so ${MANIFEST_PATH} still pins the engine it pinned before`,
-      `Run \`${command}\` yourself, then run \`${UPGRADE_COMMAND}\` again — the pin and the ` +
-        "dependency move together or not at all.",
+      `${manager} did not finish moving this project to ${ENGINE_PACKAGE} ${version}, so ` +
+        `${MANIFEST_PATH} still pins the engine it pinned before`,
+      `Read what ${manager} printed above — it names what it refused. Fix that and run ` +
+        `\`${UPGRADE_COMMAND} ${version}\` again; the pin and the dependency move together or ` +
+        "not at all.",
     );
   }
 }

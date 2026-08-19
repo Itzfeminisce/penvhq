@@ -104,6 +104,8 @@ interface ProjectOptions {
   readonly declared?: string;
   /** The lockfile that names the project's package manager. */
   readonly lockfile?: string;
+  /** Workspace packages under `packages/`, each with what it declares. */
+  readonly workspace?: Readonly<Record<string, string>>;
 }
 
 function projectAt(options: ProjectOptions = {}): string {
@@ -123,6 +125,17 @@ function projectAt(options: ProjectOptions = {}): string {
     )}\n`,
   );
   writeFileSync(join(root, options.lockfile ?? "pnpm-lock.yaml"), "");
+  if (options.workspace !== undefined) {
+    writeFileSync(join(root, "pnpm-workspace.yaml"), 'packages:\n  - "packages/*"\n');
+    for (const [name, declared] of Object.entries(options.workspace)) {
+      const dir = join(root, "packages", name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "package.json"),
+        `${JSON.stringify({ name: `@acme/${name}`, dependencies: { "@penvhq/penv": declared } }, null, 2)}\n`,
+      );
+    }
+  }
   return root;
 }
 
@@ -147,10 +160,12 @@ function harness(overrides: {
   noDownload?: boolean;
   /** Makes the package manager refuse, the way a failed `pnpm add` does. */
   installFails?: boolean;
+  workspace?: Readonly<Record<string, string>>;
 }): Harness {
   const root = projectAt({
     ...(overrides.manifest === undefined ? {} : { manifest: overrides.manifest }),
     ...(overrides.declared === undefined ? {} : { declared: overrides.declared }),
+    ...(overrides.workspace === undefined ? {} : { workspace: overrides.workspace }),
   });
   const home = scratch("penv-upgrade-home-");
   const out: string[] = [];
@@ -255,7 +270,7 @@ describe("moving the pin", () => {
     await upgrade(test.options);
 
     expect(manifestIn(test.root).engine.version).toBe(OLDER);
-    expect(test.installs[0]?.command.join(" ")).toContain(`@penvhq/penv@${OLDER}`);
+    expect(test.installs[0]?.steps[0]?.command.join(" ")).toContain(`@penvhq/penv@${OLDER}`);
   });
 
   it("moves the dependency to the same exact version as the pin", async () => {
@@ -263,7 +278,7 @@ describe("moving the pin", () => {
     await upgrade(test.options);
 
     expect(test.installs).toHaveLength(1);
-    expect(test.installs[0]?.command).toEqual([
+    expect(test.installs[0]?.steps[0]?.command).toEqual([
       "pnpm",
       "add",
       "--save-exact",
@@ -281,7 +296,7 @@ describe("moving the pin", () => {
       version: OLDER,
       integrity: integrityFor(OLDER),
     });
-    expect(test.installs[0]?.command.join(" ")).toContain(`@penvhq/penv@${OLDER}`);
+    expect(test.installs[0]?.steps[0]?.command.join(" ")).toContain(`@penvhq/penv@${OLDER}`);
   });
 
   it("round-trips the manifest through the parser that validates it", async () => {
@@ -353,9 +368,13 @@ describe("the one consent", () => {
     const test = harness({ argv: [LATEST], consent: true, installFails: true });
     const before = manifestTextIn(test.root);
 
-    await expect(upgrade(test.options)).rejects.toThrow(
-      `pnpm add --save-exact @penvhq/penv@${LATEST} did not finish`,
-    );
+    await expect(upgrade(test.options)).rejects.toMatchObject({
+      code: "PENV_UPGRADE_INSTALL_FAILED",
+      summary: `pnpm did not finish moving this project to ${ENGINE} ${LATEST}, so ${MANIFEST_PATH} still pins the engine it pinned before`,
+      // Finding 20: never the command that just failed — that is the one
+      // instruction already known not to work.
+      remedy: expect.not.stringContaining("pnpm add"),
+    });
     expect(manifestTextIn(test.root)).toBe(before);
   });
 
@@ -365,6 +384,70 @@ describe("the one consent", () => {
 
     expect(test.questions).toEqual([]);
     expect(manifestIn(test.root).engine.version).toBe(LATEST);
+  });
+});
+
+/**
+ * Finding 21: `upgrade` moved the root `package.json` and nothing else, so a
+ * workspace package declaring `@penvhq/penv` at `^0.8.0` ran the 0.8 bridge
+ * under a 0.11 pin through three releases without being mentioned once.
+ */
+describe("a workspace whose packages declare the dependency too", () => {
+  function packageTextAt(root: string, name: string): string {
+    return readFileSync(join(root, "packages", name, "package.json"), "utf8");
+  }
+
+  it("moves every one of them, and names each in the one diff", async () => {
+    const test = harness({
+      argv: [LATEST],
+      consent: true,
+      workspace: { db: "^0.8.0", worker: "^0.9.0" },
+    });
+
+    await upgrade(test.options);
+
+    const shown = test.out.join("\n");
+    expect(shown).toContain("packages/db/package.json");
+    expect(shown).toContain('  - "@penvhq/penv": "^0.8.0"');
+    expect(shown).toContain("packages/worker/package.json");
+    expect(shown).toContain('  - "@penvhq/penv": "^0.9.0"');
+    // One question covers all three files, and `-w` is what pnpm needs at the root.
+    expect(test.questions).toEqual([`Move this project to ${LATEST}?`]);
+    expect(test.installs[0]?.steps.map((step) => step.command.join(" "))).toEqual([
+      `pnpm add -w --save-exact @penvhq/penv@${LATEST}`,
+      `pnpm --filter ./packages/db add --save-exact @penvhq/penv@${LATEST}`,
+      `pnpm --filter ./packages/worker add --save-exact @penvhq/penv@${LATEST}`,
+    ]);
+    expect(test.out).toContain(`✓ packages/db/package.json depends on @penvhq/penv ${LATEST}`);
+  });
+
+  it("leaves every file untouched when the one question is declined", async () => {
+    const test = harness({ argv: [LATEST], consent: false, workspace: { db: "^0.8.0" } });
+    const manifestBefore = manifestTextIn(test.root);
+    const rootBefore = packageTextIn(test.root);
+    const dbBefore = packageTextAt(test.root, "db");
+
+    await expect(upgrade(test.options)).rejects.toThrow("was not installed");
+
+    expect(manifestTextIn(test.root)).toBe(manifestBefore);
+    expect(packageTextIn(test.root)).toBe(rootBefore);
+    expect(packageTextAt(test.root, "db")).toBe(dbBefore);
+    expect(test.installs).toHaveLength(0);
+  });
+
+  /** The quiet half: a workspace package that never declared penv is not given it. */
+  it("says nothing about a package that declares no @penvhq/penv", async () => {
+    const test = harness({ argv: [LATEST], consent: true, workspace: { db: "^0.8.0" } });
+    mkdirSync(join(test.root, "packages", "ui"), { recursive: true });
+    writeFileSync(
+      join(test.root, "packages", "ui", "package.json"),
+      `${JSON.stringify({ name: "@acme/ui", dependencies: { react: "19" } })}\n`,
+    );
+
+    await upgrade(test.options);
+
+    expect(test.out.join("\n")).not.toContain("packages/ui");
+    expect(test.installs[0]?.steps).toHaveLength(2);
   });
 });
 

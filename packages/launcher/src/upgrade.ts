@@ -10,11 +10,14 @@
  * whole purpose is that its bytes are verified, and a mistyped character came
  * back as a supply-chain check failing closed.
  *
- * Two committed files move: the manifest's engine pin and the project's
- * `@penvhq/penv` dependency, at the same exact version. They move together or
- * not at all — one consent covers both, and the dependency lands first, so a
- * package manager that refuses leaves a project still pinning the engine it was
- * already running.
+ * The manifest's engine pin and the project's `@penvhq/penv` dependency move
+ * together, at the same exact version. In a workspace that dependency is plural
+ * — a package declaring its own `@penvhq/penv` is a second bridge running under
+ * the pin, and one repository ran the 0.8 one under a 0.11 manifest for three
+ * releases because `upgrade` looked only at the root. Every `package.json` that
+ * declares it is in the one diff, and they move together or not at all: the
+ * dependencies land first, so a package manager that refuses leaves a project
+ * still pinning the engine it was already running.
  *
  * Extensions are not touched. Each carries its own pin and its own trust
  * decision, and re-pinning them because the engine moved would be penv choosing
@@ -189,9 +192,11 @@ export async function upgrade(options: UpgradeOptions): Promise<void> {
     try {
       await (options.install ?? installWithPackageManager)(plan);
     } catch {
-      throw new UpgradeInstallFailedError(plan.command.join(" "));
+      throw new UpgradeInstallFailedError(plan.manager, release.version);
     }
-    io.out(`✓ package.json depends on ${RUNTIME_PACKAGE} ${release.version}`);
+    for (const step of plan.steps.filter((entry) => !entry.satisfied)) {
+      io.out(`✓ ${step.manifest} depends on ${RUNTIME_PACKAGE} ${release.version}`);
+    }
   }
 
   writeFileSync(manifestFile, manifestText);
