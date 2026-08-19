@@ -173,8 +173,8 @@ export class AddFlagError extends PenvError {
     super(
       "PENV_ADD_FLAG",
       `\`penv add\` does not understand \`${flag}\``,
-      `Run \`penv add <package>\` with \`${TRUST_YOUNG_FLAG}\`, \`--registry <url>\`, or ` +
-        `\`${LOCAL_FLAG}\` — those are the three it takes.`,
+      `Run \`penv add <package>\` with \`${TRUST_YOUNG_FLAG}\`, \`--registry <url>\`, ` +
+        `\`${LOCAL_FLAG}\`, or \`${YES_FLAG}\` — those are the four it takes.`,
     );
   }
 }
@@ -404,23 +404,24 @@ export class AddNoDownloadError extends PenvError {
 }
 
 /**
- * `penv add` on a machine with nobody at it.
+ * `penv add` with a question and nobody to answer it.
  *
- * It is refused everywhere, not only for the packages that pay the trust
- * ceremony: what `add` writes is two committed files, and a pipeline that
- * rewrites the manifest it was handed is a pipeline choosing which bytes the
- * project runs. `penv install` is the command CI has, and it installs exactly
- * what a person already decided.
+ * Only the trust ceremony reaches here. It used to refuse every unattended add,
+ * including an `@penvhq/*` one that asks nothing at all — a gate stopping a run
+ * that would have been silent. What no flag can supply is the ceremony's one
+ * field: a sentence about why a stranger's code is trusted, which is why
+ * `--yes` does not answer it either.
  */
-export class AddNotInteractiveError extends PenvError {
-  override readonly name = "AddNotInteractiveError";
+export class AddTrustUnattendedError extends PenvError {
+  override readonly name = "AddTrustUnattendedError";
 
-  constructor(name: string) {
+  constructor(name: string, ceremony: string) {
     super(
-      "PENV_ADD_NOT_INTERACTIVE",
-      `Adding ${name} rewrites ${MANIFEST_PATH}, and this run has nobody to decide that`,
-      `Run \`${addCommand(name)}\` from a terminal and commit what it writes. In CI, run ` +
-        `\`${INSTALL_COMMAND}\` — it installs the versions the committed manifest already pins.`,
+      "PENV_ADD_TRUST_UNATTENDED",
+      `Adding ${name} records ${ceremony}, and this run has nobody to write it`,
+      `Run \`${addCommand(name)}\` from a terminal, without \`${YES_FLAG}\` — the trust block is ` +
+        `a line only a person can write. In CI, run \`${INSTALL_COMMAND}\`: it installs the ` +
+        "versions the committed manifest already pins.",
     );
   }
 }

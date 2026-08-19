@@ -276,24 +276,67 @@ describe("an official extension", () => {
     ]);
   });
 
-  it("asks only about the config edit, never about trust", async () => {
+  /**
+   * Finding 26: this was one question per environment — three for a provider
+   * that belongs to exactly one, with no way to say which up front.
+   */
+  it("asks about the config edit once for every environment, never about trust", async () => {
     const test = harness({
       argv: [VAULT],
       config: CONFIG,
       serve: VAULT_REGISTRY,
       interactive: true,
-      consent: [false, true],
+      answers: ["production"],
     });
 
     await add(test.options);
 
     expect(test.questions).toEqual([
-      `Point \`development\` at ${VAULT} in penv.config.ts?`,
-      `Point \`production\` at ${VAULT} in penv.config.ts?`,
+      `Point which of development, production at ${VAULT} in penv.config.ts? all / none / names`,
     ]);
     const config = readFileSync(join(test.root, "penv.config.ts"), "utf8");
     expect(config).toContain(`development: { type: "@penvhq/provider-filesystem" }`);
     expect(config).toContain(`production: { type: "${VAULT}" }`);
+  });
+
+  it("repoints every environment on `all`, and none on an empty answer", async () => {
+    const all = harness({
+      argv: [VAULT],
+      config: CONFIG,
+      serve: VAULT_REGISTRY,
+      interactive: true,
+      answers: ["all"],
+    });
+    await add(all.options);
+    expect(readFileSync(join(all.root, "penv.config.ts"), "utf8")).toBe(
+      CONFIG.replaceAll("@penvhq/provider-filesystem", VAULT),
+    );
+
+    const none = harness({
+      argv: [VAULT],
+      config: CONFIG,
+      serve: VAULT_REGISTRY,
+      interactive: true,
+      answers: [""],
+    });
+    await add(none.options);
+    expect(readFileSync(join(none.root, "penv.config.ts"), "utf8")).toBe(CONFIG);
+  });
+
+  /** A typo in a list of environments is not an instruction to half-apply. */
+  it("repoints nothing when the answer names an environment the config does not", async () => {
+    const test = harness({
+      argv: [VAULT],
+      config: CONFIG,
+      serve: VAULT_REGISTRY,
+      interactive: true,
+      answers: ["production, staging"],
+    });
+
+    await add(test.options);
+
+    expect(readFileSync(join(test.root, "penv.config.ts"), "utf8")).toBe(CONFIG);
+    expect(test.out).toContain("penv.config.ts declares no staging, so nothing was repointed.");
   });
 
   it("records the pin with no trust block, through the core serializer", async () => {
@@ -502,24 +545,41 @@ describe("a public third-party extension", () => {
   });
 
   /** Refused before the first request, so a run with nobody at it reaches no registry at all. */
-  it("refuses with no terminal to ask at, and reaches no registry", async () => {
+  it("refuses with no terminal to ask at, naming the ceremony and reaching no registry", async () => {
     const test = harness({ argv: [CONSUL], serve: consulRegistry(LONG_AGO) });
 
     await expect(add(test.options)).rejects.toMatchObject({
-      code: "PENV_ADD_NOT_INTERACTIVE",
+      code: "PENV_ADD_TRUST_UNATTENDED",
       message:
-        `Adding ${CONSUL} rewrites ${MANIFEST_PATH}, and this run has nobody to decide that\n` +
-        `  Run \`penv add ${CONSUL}\` from a terminal and commit what it writes. In CI, run ` +
-        "`penv install` — it installs the versions the committed manifest already pins.",
+        `Adding ${CONSUL} records who publishes it and why you trust it, and this run has nobody ` +
+        "to write it\n" +
+        `  Run \`penv add ${CONSUL}\` from a terminal, without \`--yes\` — the trust block is a ` +
+        "line only a person can write. In CI, run `penv install`: it installs the versions the " +
+        "committed manifest already pins.",
+    });
+    expect(test.asked).toEqual([]);
+  });
+
+  /** `--yes` says nobody is here to be asked, which is not an answer to this question. */
+  it("refuses `--yes` at a real terminal too, because the reason has to be typed", async () => {
+    const test = harness({
+      argv: [CONSUL, "--yes"],
+      serve: consulRegistry(LONG_AGO),
+      interactive: true,
+    });
+
+    await expect(add(test.options)).rejects.toMatchObject({
+      code: "PENV_ADD_TRUST_UNATTENDED",
     });
     expect(test.asked).toEqual([]);
   });
 });
 
 /**
- * `add` writes two committed files, so it is a decision and needs a person and a
- * network. Both refusals land before the first request — a run that cannot finish
- * an add has not read the registry, filled the store, or touched the manifest.
+ * Finding 22: `add` refused every unattended run before discovering it had
+ * nothing to ask. An official add takes no trust decision at all, so the gate
+ * was stopping a run that would have been silent — and `penv install`, the CI
+ * answer it named, cannot be how a pin first gets written.
  */
 describe("what add will not do on its own", () => {
   it("refuses `--no-download` before it reaches the registry", async () => {
@@ -536,15 +596,34 @@ describe("what add will not do on its own", () => {
     expect(manifestIn(test.root)).toMatchObject({ extensions: {} });
   });
 
-  /** An official add takes no trust decision, and still will not rewrite a committed file in CI. */
-  it("refuses in CI even for the official scope", async () => {
-    const test = harness({ argv: [VAULT], serve: VAULT_REGISTRY, interactive: true });
+  it("adds an official package in CI with no terminal, asking nothing", async () => {
+    const test = harness({ argv: [VAULT], config: CONFIG, serve: VAULT_REGISTRY });
 
-    await expect(add({ ...test.options, ci: true })).rejects.toMatchObject({
-      code: "PENV_ADD_NOT_INTERACTIVE",
+    await add({ ...test.options, ci: true });
+
+    expect(test.questions).toEqual([]);
+    expect(manifestIn(test.root)).toMatchObject({ extensions: { [VAULT]: { version: "0.9.0" } } });
+    expect(declarationIn(test.root, VAULT)).toContain(VAULT);
+    // The offer it could not make is printed, not skipped in silence.
+    expect(test.out).toContain(`Add \`type: "${VAULT}"\` to an environment in penv.config.ts.`);
+  });
+
+  /** `--yes` is that same run at a real terminal: the offers print instead of asking. */
+  it("asks nothing with `--yes`, and points nothing anywhere", async () => {
+    const test = harness({
+      argv: [CLOUD, "--yes"],
+      config: CONFIG,
+      serve: CLOUD_REGISTRY,
+      interactive: true,
+      consent: true,
     });
-    expect(test.asked).toEqual([]);
-    expect(manifestIn(test.root)).toMatchObject({ extensions: {} });
+
+    expect(await add(test.options)).toEqual({ onboard: undefined });
+
+    expect(test.questions).toEqual([]);
+    expect(readFileSync(join(test.root, "penv.config.ts"), "utf8")).toBe(CONFIG);
+    expect(test.out).toContain(`Add \`type: "${CLOUD}"\` to an environment in penv.config.ts.`);
+    expect(test.out).toContain(`Run \`penv cloud login\` to finish setting ${CLOUD} up.`);
   });
 
   /** The negative case: a terminal, no CI, no flag — the add is ordinary work. */
@@ -1082,15 +1161,15 @@ describe("the load check on a pinned release", () => {
 /* What `add` will not even try. */
 
 describe("what add refuses to parse", () => {
-  it("names the two flags it takes", async () => {
+  it("names the flags it takes", async () => {
     const test = harness({ argv: [VAULT, "--force"], serve: VAULT_REGISTRY });
 
     await expect(add(test.options)).rejects.toMatchObject({
       code: "PENV_ADD_FLAG",
       message:
         "`penv add` does not understand `--force`\n" +
-        "  Run `penv add <package>` with `--trust-young`, `--registry <url>`, or `--local` — " +
-        "those are the three it takes.",
+        "  Run `penv add <package>` with `--trust-young`, `--registry <url>`, `--local`, or " +
+        "`--yes` — those are the four it takes.",
     });
   });
 
