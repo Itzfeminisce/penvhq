@@ -3,6 +3,12 @@
   "version": "0.11.0",
   "description": "The Kubernetes Secrets penv provider — portability with retention declared absent.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Itzfeminisce/penvhq.git",
+    "directory": "packages/providers/kubernetes"
+  },
+  "homepage": "https://github.com/Itzfeminisce/penvhq#readme",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

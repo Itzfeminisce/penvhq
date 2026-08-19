@@ -3,6 +3,12 @@
   "version": "0.11.0",
   "description": "The Vercel project environment-variable provider — a projection-holding destination penv pushes to over the REST API.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Itzfeminisce/penvhq.git",
+    "directory": "packages/providers/vercel"
+  },
+  "homepage": "https://github.com/Itzfeminisce/penvhq#readme",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

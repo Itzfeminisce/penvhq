@@ -3,6 +3,12 @@
   "version": "0.11.0",
   "description": "The provider-agnostic acceptance suite every penv provider must pass, plus an in-memory provider that proves the seam is pluggable. Test-only.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Itzfeminisce/penvhq.git",
+    "directory": "packages/providers/contract"
+  },
+  "homepage": "https://github.com/Itzfeminisce/penvhq#readme",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

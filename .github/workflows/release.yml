@@ -51,7 +51,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_PROVENANCE: "true"
+          # pnpm 11 stopped reading `npm_config_*` and publishes natively rather
+          # than through the npm CLI, so `NPM_CONFIG_PROVENANCE` was read by
+          # nobody: every @penvhq/* release shipped unattested while the trust
+          # model's official tier rested on the attestation. changesets forwards
+          # no provenance flag either, so the env var is the only way to reach it.
+          PNPM_CONFIG_PROVENANCE: "true"
 
       # The registry must hold the same bytes the launcher pinned, or every
       # install of that pin fails its integrity check. Silence here would ship it.

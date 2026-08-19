@@ -13,7 +13,8 @@
  *                    tooling; its bytes are NOT what npm records (packers are
  *                    not reproducible), which is why the release reads back.
  *   verify         — after publishing: ask the registry what it stored and fail
- *                    the release loudly if it is not what the launcher pinned.
+ *                    the release loudly if it is not what the launcher pinned,
+ *                    and warn as loudly when it stored no provenance.
  *
  * These run in CI only. The committed pin stays the placeholder, because the
  * refusal it triggers is a tested behavior of the launcher.
@@ -23,7 +24,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -31,6 +32,39 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const enginePackageDir = join(repoRoot, "packages", "cli");
 const pinsFile = join(repoRoot, "packages", "launcher", "src", "pins.ts");
+
+/**
+ * The source repository, spelled the way npm's provenance check compares it.
+ *
+ * The registry rejects a provenance bundle whose subject `repository.url` does
+ * not match the workflow's repository, and the match is case-sensitive on the
+ * owner — so this is the one place the URL is written, and every published
+ * package is checked against it before a release goes out.
+ */
+export const REPOSITORY_URL = "git+https://github.com/Itzfeminisce/penvhq.git";
+
+/**
+ * The flag that makes a publish attach one.
+ *
+ * pnpm 11 publishes natively and no longer reads `npm_config_*`, so the release
+ * workflow's `NPM_CONFIG_PROVENANCE` reached nobody and every `@penvhq/*` release
+ * shipped unattested — while the trust model's official tier, the one `penv add`
+ * skips every question for, rests on exactly that attestation. The workflow now
+ * sets `PNPM_CONFIG_PROVENANCE` for the changesets path, which forwards no flags
+ * of its own; this publish states it outright.
+ */
+export const PROVENANCE_FLAG = "--provenance";
+
+/** The launcher's own publish, which changesets never sees. */
+export const LAUNCHER_PUBLISH_ARGS: readonly string[] = [
+  "--filter",
+  "@penvhq/launcher",
+  "publish",
+  "--access",
+  "public",
+  PROVENANCE_FLAG,
+  "--no-git-checks",
+];
 
 /** The engine's identity, as its own manifest states it. */
 export interface EnginePin {
@@ -134,10 +168,70 @@ export function embedPin(source: string, pin: EnginePin): string {
 interface PackageManifest {
   readonly name: string;
   readonly version: string;
+  readonly private?: boolean;
+  readonly repository?: { readonly url?: string; readonly directory?: string } | string;
 }
 
 function manifestOf(dir: string): PackageManifest {
   return JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as PackageManifest;
+}
+
+/** Every package this repository publishes, as directories relative to its root. */
+export function publishedPackageDirs(root: string = repoRoot): string[] {
+  const found: string[] = [];
+  const scan = (parent: string): void => {
+    for (const entry of readdirSync(join(root, parent), { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const dir = `${parent}/${entry.name}`;
+      if (entry.name === "providers") {
+        scan(dir);
+        continue;
+      }
+      try {
+        if (manifestOf(join(root, dir)).private !== true) {
+          found.push(dir);
+        }
+      } catch {
+        // Not a package. A directory under `packages/` without a manifest is
+        // nothing npm will ever see.
+      }
+    }
+  };
+  scan("packages");
+  return found.sort();
+}
+
+/**
+ * What is wrong with one package's `repository`, or nothing.
+ *
+ * npm attaches no provenance to a package whose `repository.url` does not match
+ * the repository the workflow ran in — the registry rejects the bundle outright
+ * — and every `@penvhq/*` manifest shipped without the field at all.
+ */
+export function repositoryProblem(
+  manifest: PackageManifest,
+  directory: string,
+): string | undefined {
+  const declared = manifest.repository;
+  if (declared === undefined || typeof declared === "string") {
+    return `${manifest.name} declares no \`repository\` object, so npm will not attest it`;
+  }
+  if (declared.url !== REPOSITORY_URL) {
+    return `${manifest.name} declares repository.url \`${String(declared.url)}\`, not \`${REPOSITORY_URL}\``;
+  }
+  if (declared.directory !== directory) {
+    return `${manifest.name} declares repository.directory \`${String(declared.directory)}\`, not \`${directory}\``;
+  }
+  return undefined;
+}
+
+/** The same check over the whole repository, in the order a reader would read it. */
+export function repositoryProblems(root: string = repoRoot): string[] {
+  return publishedPackageDirs(root)
+    .map((dir) => repositoryProblem(manifestOf(join(root, dir)), dir))
+    .filter((problem): problem is string => problem !== undefined);
 }
 
 function run(command: string, args: string[], cwd: string): string {
@@ -185,17 +279,23 @@ const REGISTRY = "https://registry.npmjs.org";
 const ATTEMPTS = 12;
 const PAUSE_MS = 5_000;
 
-async function publishedIntegrity(
+/** What npm recorded for one published version: the bytes, and whether it signed them. */
+export interface PublishedDist {
+  readonly integrity?: string;
+  readonly attestations?: { readonly url?: string };
+}
+
+async function publishedDist(
   name: string,
   version: string,
   attempts = ATTEMPTS,
-): Promise<string | undefined> {
+): Promise<PublishedDist | undefined> {
   const url = `${REGISTRY}/${name.replace("/", "%2F")}/${version}`;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const response = await fetch(url);
     if (response.ok) {
-      const manifest = (await response.json()) as { dist?: { integrity?: string } };
-      return manifest.dist?.integrity;
+      const manifest = (await response.json()) as { dist?: PublishedDist };
+      return manifest.dist ?? {};
     }
     if (response.status !== 404) {
       throw new Error(`${url} answered ${response.status}`);
@@ -205,6 +305,35 @@ async function publishedIntegrity(
     }
   }
   return undefined;
+}
+
+async function publishedIntegrity(
+  name: string,
+  version: string,
+  attempts = ATTEMPTS,
+): Promise<string | undefined> {
+  return (await publishedDist(name, version, attempts))?.integrity;
+}
+
+/**
+ * The release that went out unattested, said out loud.
+ *
+ * A warning rather than a failure: the bytes are published and correct, and
+ * failing the job after the fact fixes nothing. `dist.attestations` is the same
+ * signal `penv add` reads and writes into every committed declaration, so this is
+ * penv checking its own packages by the standard it holds every other one to.
+ */
+export function attestationWarning(name: string, version: string, dist: PublishedDist): string[] {
+  if (dist.attestations?.url !== undefined) {
+    return [];
+  }
+  return [
+    `⚠ npm records no provenance attestation for ${name} ${version}`,
+    "  → `penv add` calls `@penvhq/*` official and asks nothing, and an attestation is the only " +
+      "evidence a scope name cannot fake. Check that the publish carried " +
+      `\`${PROVENANCE_FLAG}\` — pnpm reads \`PNPM_CONFIG_PROVENANCE\`, never \`NPM_CONFIG_*\` — and ` +
+      "that every package.json's `repository.url` matches this repository.",
+  ];
 }
 
 /**
@@ -224,6 +353,21 @@ async function publishPinned(): Promise<void> {
   if ((await publishedIntegrity(launcher.name, launcher.version, 1)) !== undefined) {
     console.log(`✓ ${launcher.name} ${launcher.version} is already on npm`);
     return;
+  }
+
+  // Before anything is published: the registry rejects a provenance bundle whose
+  // repository does not match, and a release that quietly drops its attestation
+  // is the one failure nothing downstream can tell apart from a fine one.
+  const problems = repositoryProblems();
+  if (problems.length > 0) {
+    for (const problem of problems) {
+      console.error(`✗ ${problem}`);
+    }
+    refuse(
+      "these packages cannot be published with provenance",
+      `Give every published package.json a \`repository\` naming ${REPOSITORY_URL} and its own ` +
+        "directory, then run the release again.",
+    );
   }
 
   run("pnpm", ["build"], repoRoot);
@@ -249,11 +393,7 @@ async function publishPinned(): Promise<void> {
   const source = readFileSync(pinsFile, "utf8");
   writeFileSync(pinsFile, embedPin(source, { version: engine.version, integrity }), "utf8");
   run("pnpm", ["--filter", "@penvhq/launcher", "build"], repoRoot);
-  run(
-    "pnpm",
-    ["--filter", "@penvhq/launcher", "publish", "--access", "public", "--no-git-checks"],
-    repoRoot,
-  );
+  run("pnpm", [...LAUNCHER_PUBLISH_ARGS], repoRoot);
   const tag = `${launcher.name}@${launcher.version}`;
   run("git", ["tag", tag], repoRoot);
   run("git", ["push", "origin", tag], repoRoot);
@@ -280,21 +420,24 @@ async function verify(): Promise<void> {
     );
   }
 
-  const published = await publishedIntegrity(engine.name, pin.version);
-  if (published === undefined) {
+  const dist = await publishedDist(engine.name, pin.version);
+  if (dist?.integrity === undefined) {
     refuse(
       `${engine.name} ${pin.version} is not on ${REGISTRY}`,
       "The launcher pins bytes nobody can install. Publish the engine, then re-run this check.",
     );
   }
-  if (published !== pin.integrity) {
+  if (dist.integrity !== pin.integrity) {
     refuse(
       `${engine.name} ${pin.version} on npm is not the tarball the launcher pinned`,
-      `The registry holds ${published}; the launcher pins ${pin.integrity}. Every install of that ` +
-        "pin will fail its integrity check — publish a patch with a pin taken from the registry.",
+      `The registry holds ${dist.integrity}; the launcher pins ${pin.integrity}. Every install of ` +
+        "that pin will fail its integrity check — publish a patch with a pin taken from the registry.",
     );
   }
   console.log(`✓ ${engine.name} ${pin.version} on npm matches the launcher's pin`);
+  for (const line of attestationWarning(engine.name, pin.version, dist)) {
+    console.error(line);
+  }
 }
 
 const VERBS: Record<string, () => void | Promise<void>> = {

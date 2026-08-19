@@ -1,6 +1,17 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { developmentPin, embedPin, integrityOf, readPin } from "../../../scripts/engine-pin.js";
+import {
+  attestationWarning,
+  developmentPin,
+  embedPin,
+  integrityOf,
+  LAUNCHER_PUBLISH_ARGS,
+  publishedPackageDirs,
+  REPOSITORY_URL,
+  readPin,
+  repositoryProblem,
+  repositoryProblems,
+} from "../../../scripts/engine-pin.js";
 import { DEV_PIN_INTEGRITY, DEV_PIN_VERSION } from "./pins.js";
 
 /**
@@ -62,5 +73,73 @@ describe("the ssri", () => {
   it("is the sha512 of the bytes, in npm's spelling", () => {
     const integrity = integrityOf(new TextEncoder().encode("penv"));
     expect(integrity).toMatch(/^sha512-[A-Za-z0-9+/]{86}==$/);
+  });
+});
+
+/**
+ * Finding 27: penv's own packages carried no provenance attestation, and the
+ * official trust tier — the one `penv add` skips every question for — rests on
+ * one. Two causes, both silent: pnpm 11 reads no `npm_config_*`, so the
+ * workflow's `NPM_CONFIG_PROVENANCE` reached nobody, and npm's registry rejects
+ * a provenance bundle for a package with no matching `repository`.
+ */
+describe("what a release needs before npm will attest it", () => {
+  it("is declared by every package this repository publishes", () => {
+    expect(publishedPackageDirs()).toContain("packages/cli");
+    expect(publishedPackageDirs()).toContain("packages/providers/vercel");
+    expect(repositoryProblems()).toEqual([]);
+  });
+
+  it("fires on a package that declares no repository at all", () => {
+    expect(repositoryProblem({ name: "@penvhq/x", version: "1.0.0" }, "packages/x")).toBe(
+      "@penvhq/x declares no `repository` object, so npm will not attest it",
+    );
+  });
+
+  /** The case that costs a release: npm's match is case-sensitive on the owner. */
+  it("fires on a url that is not this repository, and on the wrong directory", () => {
+    const wrongUrl = repositoryProblem(
+      {
+        name: "@penvhq/x",
+        version: "1.0.0",
+        repository: { url: REPOSITORY_URL.toLowerCase(), directory: "packages/x" },
+      },
+      "packages/x",
+    );
+    expect(wrongUrl).toContain(`not \`${REPOSITORY_URL}\``);
+
+    const wrongDirectory = repositoryProblem(
+      { name: "@penvhq/x", version: "1.0.0", repository: { url: REPOSITORY_URL, directory: "x" } },
+      "packages/x",
+    );
+    expect(wrongDirectory).toContain("not `packages/x`");
+  });
+
+  it("is stated outright by the one publish changesets never sees", () => {
+    expect(LAUNCHER_PUBLISH_ARGS).toContain("--provenance");
+    expect(LAUNCHER_PUBLISH_ARGS.join(" ")).toBe(
+      "--filter @penvhq/launcher publish --access public --provenance --no-git-checks",
+    );
+  });
+});
+
+describe("the attestation the release reads back", () => {
+  it("warns loudly when npm recorded none", () => {
+    const warning = attestationWarning("@penvhq/cli", "0.11.0", { integrity: "sha512-x" });
+
+    expect(warning[0]).toBe("⚠ npm records no provenance attestation for @penvhq/cli 0.11.0");
+    expect(warning.join("\n")).toContain("PNPM_CONFIG_PROVENANCE");
+  });
+
+  /** The quiet half — an attested release says nothing, the way a passing check should. */
+  it("stays silent when it did", () => {
+    expect(
+      attestationWarning("@penvhq/cli", "0.11.0", {
+        integrity: "sha512-x",
+        attestations: {
+          url: "https://registry.npmjs.org/-/npm/v1/attestations/@penvhq%2fcli@0.11.0",
+        },
+      }),
+    ).toEqual([]);
   });
 });
