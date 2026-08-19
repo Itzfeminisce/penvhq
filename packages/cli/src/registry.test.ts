@@ -484,6 +484,9 @@ describe("an extension the manifest pins", () => {
    * second place to look for it — even when the manifest happens to pin the name.
    */
   it("never answers a local extension out of the store", () => {
+    // openProject reads the real CI variable, and a hosted runner sets it —
+    // this test is about resolution, not the pipeline refusal.
+    vi.stubEnv("CI", "false");
     const root = makeProject(CONFIG);
     pin(root, "0.9.5");
     installInStore(store(), "0.9.5", pluginWithType("fromstore"));
@@ -494,6 +497,8 @@ describe("an extension the manifest pins", () => {
       openProject(root);
     } catch (error) {
       thrown = error;
+    } finally {
+      vi.unstubAllEnvs();
     }
     const error = thrown as PenvError;
     expect(error.code).toBe("LOCAL_EXTENSION_UNRESOLVED");
