@@ -9,7 +9,7 @@
 
 import { spawn } from "node:child_process";
 import { constants } from "node:os";
-import type { Environment } from "./home.js";
+import type { Environment } from "@penvhq/core";
 
 export interface Delegation {
   /** The executable to run — node, for a JS engine entry. */

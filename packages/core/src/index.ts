@@ -164,6 +164,14 @@ export {
   validatePublicPrefixes,
   validateSchemaFile,
 } from "./schema-file.js";
+export type { Environment, PackageEntry, PackageKind } from "./store.js";
+export {
+  isImportableEntry,
+  PENV_HOME_VAR,
+  packageDir,
+  packageEntry,
+  penvHome,
+} from "./store.js";
 export type {
   AnyProvider,
   DecryptFailure,

@@ -13,13 +13,20 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ManifestEngine } from "@penvhq/core";
-import { MANIFEST_PATH, parseManifest, STATE_PATH, serializeManifest } from "@penvhq/core";
+import {
+  MANIFEST_PATH,
+  PENV_HOME_VAR,
+  packageDir,
+  parseManifest,
+  STATE_PATH,
+  serializeManifest,
+} from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Delegation } from "./delegate.js";
 import { nodeSpawner } from "./delegate.js";
 import type { Engine } from "./engine.js";
 import type { Fetcher } from "./fetcher.js";
-import { INTEGRITY_FILE, PENV_HOME_VAR, packageDir } from "./home.js";
+import { INTEGRITY_FILE } from "./home.js";
 import { integrityOf } from "./integrity.js";
 import type { LauncherIo } from "./io.js";
 import { type LauncherOptions, runLauncher } from "./launcher.js";
@@ -861,6 +868,67 @@ describe("penv add", () => {
     expect(await runLauncher(test.options)).toBe(0);
     expect(test.spawned).toHaveLength(1);
     expect(test.spawned[0]?.args).toEqual([join(dir, "bin.js"), "cloud", "login"]);
+  });
+});
+
+/**
+ * Finding 19: the engine's help lists the engine's commands, so `install` and
+ * `add` appeared in none of them — including the `penv install` the engine's own
+ * refusals name — and `penv add --help` was refused outright under a root help
+ * promising `penv <command> --help`.
+ */
+describe("help for the launcher's own commands", () => {
+  it("names install and add under the engine's own help", async () => {
+    const home = scratch("penv-home-");
+    await install(home, ENGINE_PIN, ENGINE_TARBALL);
+    const test = harness({ argv: ["--help"], cwd: projectAt(), home });
+
+    expect(await runLauncher(test.options)).toBe(0);
+    expect(test.spawned).toHaveLength(1);
+    expect(test.spawned[0]?.args.slice(1)).toEqual(["--help"]);
+    expect(test.out.join("\n")).toContain("LAUNCHER COMMANDS");
+    expect(test.out.some((line) => line.startsWith("  install"))).toBe(true);
+    expect(test.out.some((line) => line.startsWith("  add <package>"))).toBe(true);
+    expect(test.out.some((line) => line.includes("--local <package>"))).toBe(true);
+  });
+
+  it("prints usage for `penv add --help` and `penv install --help`, reaching no engine", async () => {
+    const home = scratch("penv-home-");
+    const cwd = projectAt();
+
+    const added = harness({ argv: ["add", "--help"], cwd, home });
+    expect(await runLauncher(added.options)).toBe(0);
+    expect(added.spawned).toEqual([]);
+    expect(added.out[0]).toBe("penv add <package>[@<version>]");
+    expect(added.out.some((line) => line.includes("--registry <url>"))).toBe(true);
+
+    const installed = harness({ argv: ["install", "--help"], cwd, home });
+    expect(await runLauncher(installed.options)).toBe(0);
+    expect(installed.asked).toEqual([]);
+    expect(installed.out[0]).toBe("penv install");
+  });
+
+  /** Help is the launcher's before it is a project's — there may be no project yet. */
+  it("answers outside a project, where nothing is adopted", async () => {
+    const test = harness({
+      argv: ["add", "--help"],
+      cwd: scratch("penv-nowhere-"),
+      home: scratch("penv-home-"),
+    });
+
+    expect(await runLauncher(test.options)).toBe(0);
+    expect(test.err).toEqual([]);
+  });
+
+  /** The quiet half: a command's own help is the engine's, and is left alone. */
+  it("adds nothing to an engine command's help", async () => {
+    const home = scratch("penv-home-");
+    await install(home, ENGINE_PIN, ENGINE_TARBALL);
+    const test = harness({ argv: ["get", "--help"], cwd: projectAt(), home });
+
+    expect(await runLauncher(test.options)).toBe(0);
+    expect(test.spawned[0]?.args.slice(1)).toEqual(["get", "--help"]);
+    expect(test.out).toEqual([]);
   });
 });
 

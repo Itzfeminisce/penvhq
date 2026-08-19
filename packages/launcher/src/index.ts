@@ -39,6 +39,8 @@ export {
   EngineEntryError,
   EnginePinMismatchError,
   EnginePinUnreleasedError,
+  ExtensionNotImportableError,
+  ExtensionUnloadableError,
   INSTALL_COMMAND,
   InstallDeclinedError,
   LOCAL_FLAG,
@@ -60,15 +62,11 @@ export {
 } from "./errors.js";
 export type { Fetcher } from "./fetcher.js";
 export { httpFetcher } from "./fetcher.js";
-export type { Environment, PackageKind } from "./home.js";
 export {
   HOME_META_FILE,
   INTEGRITY_FILE,
   launcherUpdateCommand,
   NPM_UPDATE_COMMAND,
-  PENV_HOME_VAR,
-  packageDir,
-  penvHome,
 } from "./home.js";
 export { integrityOf } from "./integrity.js";
 export type { LauncherIo } from "./io.js";

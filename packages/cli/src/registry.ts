@@ -10,32 +10,39 @@
  * be the ability to dial a network provider at boot, which the design forbids.
  *
  * A `type` is the provider package's fully-qualified name, and the name is the
- * import specifier: `@penvhq/provider-vault` is resolved from the *project's*
- * `node_modules` and imported, exactly as the project's own code would import it.
- * The registry pre-installs just two providers — the filesystem tree every
- * command edits and the mock used to rehearse rotation — so "built-in" means
- * only "already installed", not a different kind of provider. Nothing else in
- * the CLI names an implementation.
+ * import specifier. The registry pre-installs just two providers — the
+ * filesystem tree every command edits and the mock used to rehearse rotation —
+ * so "built-in" means only "already installed", not a different kind of
+ * provider. Nothing else in the CLI names an implementation.
  *
- * A repository that *writes* a provider says so with `penv add --local`, which
- * records the name in `.penv/state/local-extensions.json` and nothing else. That
- * record is what makes the arrangement visible rather than accidental: `doctor`
- * reports it, and CI refuses it, because a package this checkout builds has no
- * pin behind it.
+ * Everything else is an extension, and {@link resolveExtension} owns the one
+ * order every command finds one in: the local-extension list, then the project's
+ * own `node_modules`, then `$PENV_HOME` at the version the manifest pins.
  */
 
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { AnyProvider, PenvConfig, Provider, ProviderFactoryContext } from "@penvhq/core";
+import type {
+  AnyProvider,
+  Manifest,
+  PenvConfig,
+  Provider,
+  ProviderFactoryContext,
+} from "@penvhq/core";
 import {
   holdsProjection,
   LOCAL_EXTENSIONS_PATH,
   localExtensionsFile,
+  MANIFEST_PATH,
   PENV_DIR,
   PenvError,
+  packageDir,
+  packageEntry,
   parseLocalExtensions,
+  parseManifest,
+  penvHome,
   recordsDir,
 } from "@penvhq/core";
 import { createFilesystemProvider } from "@penvhq/provider-filesystem";
@@ -139,21 +146,13 @@ export async function createSourceProvider(
 }
 
 async function loadPluginProvider(type: string, context: ProviderContext): Promise<AnyProvider> {
-  // Resolution starts at the project, which is where the user installed the package.
-  const resolved = resolvePlugin(type, context.root);
-  if (resolved === undefined) {
-    throw unknownProvider(type, context.environment);
-  }
+  const path = resolveExtension(type, context.root, context.environment);
 
   let mod: Record<string, unknown>;
   try {
-    mod = await importPlugin(resolved);
-  } catch {
-    throw new PenvError(
-      "PROVIDER_PLUGIN_LOAD",
-      `The provider package \`${type}\` failed to load`,
-      "It resolved but threw while importing. Check it builds and its dependencies are installed.",
-    );
+    mod = await importPlugin(path);
+  } catch (cause) {
+    throw providerLoadFailed(type, path, cause);
   }
 
   const factory = mod[PLUGIN_FACTORY_EXPORT];
@@ -176,11 +175,11 @@ async function loadPluginProvider(type: string, context: ProviderContext): Promi
  * unknown providers hears about both, and never as a crash from the later command
  * that would have been the first to reach one.
  *
- * A pre-installed type passes on the map; any other passes only if its package
- * resolves from the project — a *synchronous* existence check that runs no
- * provider code, so the open-time guarantee holds without `openProject` turning
- * async. The package's module is imported and its contract checked later, when
- * the environment's source is actually built.
+ * A pre-installed type passes on the map; any other passes only if
+ * {@link resolveExtension} finds it — a *synchronous* existence check that runs
+ * no provider code, so the open-time guarantee holds without `openProject`
+ * turning async. The package's module is imported and its contract checked
+ * later, when the environment's source is actually built.
  */
 export function assertProvidersRegistered(
   config: PenvConfig,
@@ -196,10 +195,81 @@ export function assertProvidersRegistered(
     if (ci && local.includes(provider.type)) {
       throw localExtensionInCi(provider.type, environment);
     }
-    if (resolvePlugin(provider.type, projectRoot) === undefined) {
-      throw unknownProvider(provider.type, environment);
-    }
+    resolveExtension(provider.type, projectRoot, environment, local);
   }
+}
+
+/**
+ * The one place an extension is located, and the one order it is looked for in.
+ * Every command resolves through here, so what `doctor` reports, what
+ * `openProject` refuses, and what a provider operation imports are one answer.
+ *
+ * 1. **The local-extension list.** A package this checkout builds is read out of
+ *    the project and never out of the store: nothing pins it, so there are no
+ *    bytes in the store that could be it.
+ * 2. **The project's own `node_modules`.** A package the project depends on wins
+ *    over anything the manifest pins — a repository editing a provider runs the
+ *    copy it is editing, not a release installed beside it.
+ * 3. **`$PENV_HOME/extensions/<name>/<version>`, at the version the manifest
+ *    pins.** What `penv add` installed, `penv install` restores, and the
+ *    launcher verified before it passed `$PENV_HOME` to this process. This is
+ *    the path an extension added from a registry takes: `penv add` leaves
+ *    nothing in the project but a type declaration, so nothing about it resolves
+ *    from `node_modules`.
+ *
+ * Locating is not loading. This runs no provider code; the module is imported
+ * only when a command actually performs a provider operation.
+ */
+function resolveExtension(
+  type: string,
+  projectRoot: string,
+  environment?: string,
+  local: readonly string[] = localExtensions(projectRoot),
+): string {
+  const fromProject = resolvePlugin(type, projectRoot);
+  if (local.includes(type)) {
+    if (fromProject === undefined) {
+      throw localExtensionUnresolved(type, projectRoot, environment);
+    }
+    return fromProject;
+  }
+  if (fromProject !== undefined) {
+    return fromProject;
+  }
+
+  const version = pinnedVersion(type, projectRoot);
+  if (version === undefined) {
+    throw unknownProvider(type, environment);
+  }
+  const stored = storedExtension(type, version);
+  if (stored === undefined) {
+    throw extensionNotInstalled(type, version, environment);
+  }
+  return stored;
+}
+
+/**
+ * The version the manifest pins for `type`, or `undefined` when it pins none.
+ *
+ * A manifest penv cannot read is not this function's refusal: the launcher reads
+ * it first on every run and owns every message about it, so a broken one here
+ * means the type is simply not pinned — and the caller's own refusal, which
+ * names the package rather than the file, is the better one to arrive.
+ */
+function pinnedVersion(type: string, projectRoot: string): string | undefined {
+  let manifest: Manifest;
+  try {
+    manifest = parseManifest(readFileSync(join(projectRoot, ...MANIFEST_PATH.split("/")), "utf8"));
+  } catch {
+    return undefined;
+  }
+  return manifest.extensions[type]?.version;
+}
+
+/** The module of one pinned extension in `$PENV_HOME`, or `undefined` if it is not there. */
+function storedExtension(type: string, version: string): string | undefined {
+  const entry = packageEntry(packageDir(penvHome(process.env), "extensions", type, version));
+  return entry?.file;
 }
 
 /** The extensions this project develops, as `penv add --local` recorded them. */
@@ -283,15 +353,69 @@ function assertSatisfiesContract(provider: AnyProvider, specifier: string): void
   }
 }
 
+function where(environment: string | undefined): string {
+  return environment === undefined ? "" : ` for environment ${environment}`;
+}
+
 function unknownProvider(type: string, environment?: string): PenvError {
   const preinstalled = [...REGISTRY.keys()].map((name) => `\`${name}\``).join(", ");
-  const where = environment === undefined ? "" : ` for environment ${environment}`;
   return new PenvError(
     "UNKNOWN_PROVIDER",
-    `The provider \`${type}\`${where} in penv.config.ts is not installed in this project`,
-    `A provider's \`type\` is the package penv imports, so it has to resolve from this project: ` +
-      `install it with \`npm i ${type}\`, or — if this repository is the one that builds it — ` +
-      `run \`penv add --local ${type}\` once it is a dependency of the root. The CLI ships ` +
-      `${preinstalled} pre-installed.`,
+    `The provider \`${type}\`${where(environment)} in penv.config.ts is nowhere penv looks for it`,
+    `Run \`penv add ${type}\` to pin a release, or \`penv add --local ${type}\` if this ` +
+      `repository is the one that builds it. penv looks in ${LOCAL_EXTENSIONS_PATH}, this ` +
+      `project's node_modules, and then $PENV_HOME at the version ${MANIFEST_PATH} pins. The ` +
+      `CLI ships ${preinstalled} pre-installed.`,
+  );
+}
+
+/**
+ * The manifest pins this extension and `$PENV_HOME` does not hold it — the one
+ * unresolvable provider with a command behind it, so it names that command
+ * rather than reporting the package as unknown.
+ */
+function extensionNotInstalled(type: string, version: string, environment?: string): PenvError {
+  return new PenvError(
+    "EXTENSION_NOT_INSTALLED",
+    `${MANIFEST_PATH} pins \`${type}\` ${version}${where(environment)}, and it is not installed ` +
+      `in ${penvHome(process.env)}`,
+    "Run `penv install` — it downloads and verifies every version the manifest pins, extensions " +
+      "included.",
+  );
+}
+
+/**
+ * A local extension that stopped resolving. It is the copy this checkout builds,
+ * so the store is not a second place to look — the project either has it or the
+ * record is stale.
+ */
+function localExtensionUnresolved(
+  type: string,
+  projectRoot: string,
+  environment?: string,
+): PenvError {
+  return new PenvError(
+    "LOCAL_EXTENSION_UNRESOLVED",
+    `${LOCAL_EXTENSIONS_PATH} records \`${type}\`${where(environment)} as a package this project ` +
+      `develops, and it does not resolve from ${projectRoot}`,
+    `Add it as a dependency of the root (a workspace link is one) and run \`pnpm install\`, or ` +
+      `drop the name from ${LOCAL_EXTENSIONS_PATH} if this project no longer builds it.`,
+  );
+}
+
+/**
+ * A provider that resolved and would not import.
+ *
+ * The cause and the file are the message: `ERR_UNKNOWN_FILE_EXTENSION` on a
+ * `src/index.ts` is the whole diagnosis, and a refusal that keeps neither sends
+ * the reader to reproduce the import by hand outside penv.
+ */
+function providerLoadFailed(type: string, path: string, cause: unknown): PenvError {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  return new PenvError(
+    "PROVIDER_PLUGIN_LOAD",
+    `The provider package \`${type}\` failed to load from ${path}: ${detail}`,
+    "penv imports that file exactly as it stands, with no transform, so it has to be built " +
+      "JavaScript with its dependencies installed.",
   );
 }

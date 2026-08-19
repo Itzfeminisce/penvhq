@@ -15,12 +15,12 @@ import {
   LOCAL_EXTENSIONS_PATH,
   MANIFEST_PATH,
   type Manifest,
+  packageDir,
   serializeManifest,
 } from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { type AddOptions, add } from "./add.js";
 import type { Fetcher } from "./fetcher.js";
-import { packageDir } from "./home.js";
 import { integrityOf } from "./integrity.js";
 import type { LauncherIo } from "./io.js";
 import { packTar, type TarSource } from "./tarball.fixtures.js";
@@ -916,7 +916,9 @@ describe("add --local", () => {
     expect(declarationIn(root, OWN)).toContain(
       "resolved from this project, not from a published release",
     );
-    expect(test.out).toContain(`✓ ${OWN} resolves from this project — nothing is pinned`);
+    expect(test.out).toContain(
+      `✓ ${OWN} resolves from this project and imports — nothing is pinned`,
+    );
     // No release was read, so no registry was.
     expect(test.asked).toEqual([]);
   });
@@ -972,6 +974,47 @@ describe("add --local", () => {
     });
   });
 
+  /**
+   * Finding 17: `add` certified resolution and stopped there, so this exact
+   * package — `exports` pointing at TypeScript source — collected three green
+   * checks and failed days later from an unrelated command.
+   */
+  it("refuses a package whose entry is TypeScript source, writing nothing", async () => {
+    const root = projectAt();
+    const dir = join(root, "node_modules", ...OWN.split("/"));
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(
+      join(dir, "package.json"),
+      `${JSON.stringify({ name: OWN, version: "0.0.0", exports: { ".": "./src/index.ts" } })}\n`,
+    );
+    writeFileSync(join(dir, "src", "index.ts"), "export const penvProviderFactory = () => ({});\n");
+    const test = harness({ argv: ["--local", OWN], root });
+
+    await expect(add(test.options)).rejects.toMatchObject({
+      code: "PENV_EXTENSION_NOT_IMPORTABLE",
+      remedy: expect.stringContaining("built JavaScript"),
+    });
+    expect(existsSync(join(root, ...LOCAL_EXTENSIONS_PATH.split("/")))).toBe(false);
+    expect(existsSync(join(root, ...EXTENSIONS_PATH.split("/")))).toBe(false);
+    expect(test.out).toEqual([]);
+  });
+
+  it("refuses one that throws while importing, carrying what it threw", async () => {
+    const root = projectAt();
+    installLocally(root, OWN);
+    writeFileSync(
+      join(root, "node_modules", ...OWN.split("/"), "index.js"),
+      "throw new Error(\"Cannot find module 'consul'\");\n",
+    );
+    const test = harness({ argv: ["--local", OWN], root });
+
+    await expect(add(test.options)).rejects.toMatchObject({
+      code: "PENV_EXTENSION_UNLOADABLE",
+      summary: expect.stringContaining("Cannot find module 'consul'"),
+    });
+    expect(existsSync(join(root, ...LOCAL_EXTENSIONS_PATH.split("/")))).toBe(false);
+  });
+
   /** The registry path is untouched: an ordinary add still pins and still asks nothing extra. */
   it("leaves the pinned path alone", async () => {
     const test = harness({ argv: [VAULT], serve: VAULT_REGISTRY, interactive: true });
@@ -979,6 +1022,59 @@ describe("add --local", () => {
     await add(test.options);
 
     expect(existsSync(join(test.root, ...LOCAL_EXTENSIONS_PATH.split("/")))).toBe(false);
+    expect(manifestIn(test.root)).toMatchObject({ extensions: { [VAULT]: { version: "0.9.0" } } });
+  });
+});
+
+/* The same check on the path with a release behind it. */
+
+describe("the load check on a pinned release", () => {
+  const SRC_ONLY = "@penvhq/provider-src-only";
+  const SRC_ONLY_TAR = packTar([
+    { path: "package/", typeflag: "5" },
+    {
+      path: "package/package.json",
+      content: `${JSON.stringify({
+        name: SRC_ONLY,
+        version: "1.0.0",
+        exports: { ".": "./src/index.ts" },
+      })}\n`,
+    },
+    { path: "package/src/index.ts", content: "export const penvProviderFactory = () => ({});\n" },
+  ]);
+  const SRC_ONLY_REGISTRY: Readonly<Record<string, Uint8Array>> = {
+    [`https://registry.npmjs.org/${SRC_ONLY}`]: packument({
+      name: SRC_ONLY,
+      version: "1.0.0",
+      integrity: integrityOf(SRC_ONLY_TAR),
+      publishedAt: LONG_AGO,
+      publisher: "penvhq",
+    }),
+    [`https://registry.npmjs.org/${SRC_ONLY}/-/provider-src-only-1.0.0.tgz`]: SRC_ONLY_TAR,
+  };
+
+  /**
+   * The store copy is what the engine imports for a pinned extension, so it is
+   * the copy that has to load — and the manifest that pins it is not written
+   * until it has.
+   */
+  it("refuses a release penv cannot import, leaving the manifest alone", async () => {
+    const test = harness({ argv: [SRC_ONLY], serve: SRC_ONLY_REGISTRY, interactive: true });
+    const before = manifestTextIn(test.root);
+
+    await expect(add(test.options)).rejects.toMatchObject({
+      code: "PENV_EXTENSION_NOT_IMPORTABLE",
+    });
+    expect(manifestTextIn(test.root)).toBe(before);
+    expect(existsSync(join(test.root, ...EXTENSIONS_PATH.split("/")))).toBe(false);
+  });
+
+  /** The quiet half: a release that imports is pinned exactly as before. */
+  it("pins a release that imports", async () => {
+    const test = harness({ argv: [VAULT], serve: VAULT_REGISTRY, interactive: true });
+
+    await add(test.options);
+
     expect(manifestIn(test.root)).toMatchObject({ extensions: { [VAULT]: { version: "0.9.0" } } });
   });
 });
