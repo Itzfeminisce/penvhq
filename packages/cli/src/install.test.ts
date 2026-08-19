@@ -11,6 +11,11 @@
  * It is a peer of `@penvhq/penv`, so pnpm does not hoist it to the project root,
  * and an install that named only `@penvhq/penv` left a freshly scaffolded
  * project unable to load the schema init had just written.
+ *
+ * `@penvhq/core` is in every plan for the same reason at the type level: the
+ * declaration `penv add` commits augments that module by name, and pnpm does not
+ * hoist a transitive one either — which fails silently, since an augmentation
+ * whose module cannot be found is an ambient declaration, not an error.
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -103,13 +108,47 @@ describe("the install plan", () => {
     expect(plan.steps[0]?.packages).toContainEqual({ name: "zod", version: ZOD, satisfied: false });
   });
 
+  /**
+   * Finding 28: `penv add` commits a `declare module "@penvhq/core"` block, and
+   * under pnpm's strict layout a transitive `@penvhq/core` is not at the project
+   * root — so the specifier resolves to nothing, the augmentation degrades to an
+   * ambient declaration without a diagnostic, and a misspelled provider field
+   * compiles clean. Declaring it is what makes it bind.
+   */
+  it("names @penvhq/core, because the declaration penv commits augments it", () => {
+    const root = makeProject({ ...manifest({ name: "app" }), "pnpm-lock.yaml": "" });
+
+    const plan = planInstall(root, "1.2.3");
+    const step = plan.steps[1] as NonNullable<(typeof plan.steps)[1]>;
+
+    expect(step.manifest).toBe("package.json");
+    expect(step.packages).toEqual([{ name: "@penvhq/core", version: "1.2.3", satisfied: false }]);
+    // Its own command, in `devDependencies`: it is the declare-module target and
+    // nothing else, and one command names one block.
+    expect(step.command).toEqual(["pnpm", "add", "--save-exact", "-D", "@penvhq/core@1.2.3"]);
+    expect(step.dev).toBe(true);
+  });
+
+  /** The quiet half: a project that already declares it is left exactly as it is. */
+  it("leaves an already-declared @penvhq/core where the project put it", () => {
+    const root = makeProject(manifest({ dependencies: { "@penvhq/core": "^0.11.0" } }));
+
+    const plan = planInstall(root, "1.2.3");
+
+    expect(plan.steps[1]?.satisfied).toBe(true);
+    expect(renderInstallPlan(plan).join("\n")).not.toContain("@penvhq/core");
+  });
+
   it("names no lockfile the project does not have", () => {
     expect(planInstall(makeProject(manifest({ name: "app" })), "1.2.3").lockfile).toBeUndefined();
   });
 
-  it("has nothing to do when package.json already has both", () => {
+  it("has nothing to do when package.json already has all three", () => {
     const root = makeProject(
-      manifest({ dependencies: { "@penvhq/penv": "1.2.3", zod: "^4.4.3" } }),
+      manifest({
+        dependencies: { "@penvhq/penv": "1.2.3", zod: "^4.4.3" },
+        devDependencies: { "@penvhq/core": "1.2.3" },
+      }),
     );
 
     const plan = planInstall(root, "1.2.3");
@@ -248,9 +287,9 @@ describe("a workspace package that declares the dependency itself", () => {
       "1.2.3",
     );
 
-    expect(plan.steps).toHaveLength(2);
-    expect(plan.steps[1]?.manifest).toBe("packages/db/package.json");
-    expect(plan.steps[1]?.command).toEqual([
+    expect(plan.steps).toHaveLength(3);
+    expect(plan.steps[2]?.manifest).toBe("packages/db/package.json");
+    expect(plan.steps[2]?.command).toEqual([
       "pnpm",
       "--filter",
       "./packages/db",
@@ -280,7 +319,7 @@ describe("a workspace package that declares the dependency itself", () => {
       "1.2.3",
     );
 
-    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps).toHaveLength(2);
     expect(renderInstallPlan(plan).join("\n")).not.toContain("packages/ui");
   });
 
@@ -291,7 +330,7 @@ describe("a workspace package that declares the dependency itself", () => {
       "1.2.3",
     );
 
-    expect(plan.steps.map((step) => step.satisfied)).toEqual([false, true]);
+    expect(plan.steps.map((step) => step.satisfied)).toEqual([false, false, true]);
     expect(renderInstallPlan(plan).join("\n")).not.toContain("packages/db");
   });
 });
@@ -307,6 +346,9 @@ describe("the change penv shows before installing", () => {
     expect(shown).toContain(`"zod": "${ZOD}"`);
     expect(shown).toContain("pnpm-lock.yaml");
     expect(shown).toContain(`Run with: pnpm add --save-exact @penvhq/penv@1.2.3 zod@${ZOD}`);
+    // The second block is its own line, because it is its own command.
+    expect(shown).toContain('  + "devDependencies": {');
+    expect(shown).toContain("     then pnpm add --save-exact -D @penvhq/core@1.2.3");
   });
 
   it("shows the replacement when a version is already declared", () => {
@@ -347,10 +389,15 @@ describe("the change penv shows before installing", () => {
   });
 
   it("says there is nothing to install rather than showing an empty diff", () => {
-    const root = makeProject(manifest({ dependencies: { "@penvhq/penv": "1.2.3", zod: "4.4.3" } }));
+    const root = makeProject(
+      manifest({
+        dependencies: { "@penvhq/penv": "1.2.3", zod: "4.4.3" },
+        devDependencies: { "@penvhq/core": "1.2.3" },
+      }),
+    );
 
     expect(renderInstallPlan(planInstall(root, "1.2.3")).join("\n")).toContain(
-      "already has @penvhq/penv 1.2.3",
+      "already has @penvhq/penv 1.2.3, zod 4.4.3 and @penvhq/core 1.2.3",
     );
   });
 });

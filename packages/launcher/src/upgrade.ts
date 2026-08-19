@@ -194,7 +194,12 @@ export async function upgrade(options: UpgradeOptions): Promise<void> {
     } catch {
       throw new UpgradeInstallFailedError(plan.manager, release.version);
     }
-    for (const step of plan.steps.filter((entry) => !entry.satisfied)) {
+    // One line per file, not per command: the root writes two blocks now, and a
+    // file is what the reader recognises.
+    const moved = plan.steps.filter(
+      (entry) => !entry.satisfied && entry.packages.some((one) => one.name === RUNTIME_PACKAGE),
+    );
+    for (const step of moved) {
       io.out(`✓ ${step.manifest} depends on ${RUNTIME_PACKAGE} ${release.version}`);
     }
   }

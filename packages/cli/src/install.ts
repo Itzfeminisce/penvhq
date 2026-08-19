@@ -45,6 +45,26 @@ export const RUNTIME_PACKAGE = "@penvhq/penv";
 /** The peer `penv.schema.ts` imports, which the project supplies because a peer is not hoisted. */
 export const SCHEMA_PACKAGE = "zod";
 
+/**
+ * The module every committed provider declaration augments, which the project
+ * declares for the same reason it declares zod: nothing hoists it.
+ *
+ * `penv add` commits a `declare module "@penvhq/core"` block, and TypeScript
+ * resolves that specifier from the project's own files. Under pnpm's strict
+ * layout a transitive dependency is not at the project root, so the specifier
+ * resolves to nothing — and an augmentation whose module cannot be found is not
+ * an error, it silently degrades to an *ambient* declaration. The map
+ * `defineConfig` reads stays empty, a misspelled provider field compiles clean,
+ * and no diagnostic anywhere says so. A hoisting package manager hides this; the
+ * project declaring it is what makes the declaration bind under all of them.
+ *
+ * `devDependencies`, because that is the whole of what it is: a type-only
+ * augmentation target. No application code imports it, and `@penvhq/penv`
+ * carries its own copy of the runtime — so the PRD's one runtime dependency is
+ * still one.
+ */
+export const TYPES_PACKAGE = "@penvhq/core";
+
 export type PackageManager = "pnpm" | "npm" | "yarn" | "bun";
 
 /** The lockfile that names each manager, checked in this order. */
@@ -104,6 +124,8 @@ export interface InstallStep {
   readonly packages: readonly InstallPackage[];
   /** The command, argv-shaped — run from the project root, whichever file it writes. */
   readonly command: readonly string[];
+  /** The block this step writes into, which is what the diff shows. */
+  readonly dev: boolean;
   /** True when this file already declares every one of them. */
   readonly satisfied: boolean;
 }
@@ -111,7 +133,10 @@ export interface InstallStep {
 export interface InstallPlan {
   readonly root: string;
   readonly manager: PackageManager;
-  /** The root's `package.json` first, then every workspace package that declares the runtime one. */
+  /**
+   * The root's `package.json` — one step per block it writes, since one command
+   * names one — then every workspace package that declares the runtime one.
+   */
   readonly steps: readonly InstallStep[];
   /** The lockfile the manager will rewrite, when the project has one. */
   readonly lockfile?: string;
@@ -398,6 +423,7 @@ function stepFor(
     manifest,
     packages,
     command: addCommand(manager, options, specs),
+    dev: options.dev,
     satisfied: pending.length === 0,
   };
 }
@@ -411,6 +437,7 @@ export function planInstall(root: string, version: string = engineVersion()): In
 
   const runtime = declaredIn(root, RUNTIME_PACKAGE);
   const zod = declaredIn(root, SCHEMA_PACKAGE);
+  const types = declaredIn(root, TYPES_PACKAGE);
   const packages: InstallPackage[] = [
     {
       name: RUNTIME_PACKAGE,
@@ -427,9 +454,19 @@ export function planInstall(root: string, version: string = engineVersion()): In
       satisfied: zod !== undefined,
     },
   ];
+  const typesPackage: InstallPackage = {
+    name: TYPES_PACKAGE,
+    version,
+    ...(types === undefined ? {} : { declared: types.version }),
+    // Any declared version counts, for zod's reason: the augmentation binds on
+    // the module resolving, not on which release of it a project pinned.
+    satisfied: types !== undefined,
+  };
 
   // The block a package chose is the block penv writes back to — but only when
   // every package this step installs lives there, since one command names one.
+  // Which is also why the types package is its own step: it belongs in
+  // `devDependencies` whatever the other two chose.
   const pending = packages.filter((entry) => !entry.satisfied);
   const steps: InstallStep[] = [
     stepFor(manager, "package.json", packages, {
@@ -439,6 +476,7 @@ export function planInstall(root: string, version: string = engineVersion()): In
         pending.every((entry) => entry.name === RUNTIME_PACKAGE) &&
         pending.length > 0,
     }),
+    stepFor(manager, "package.json", [typesPackage], { workspaceRoot, dev: true }),
   ];
   for (const dir of workspaceMembers(root, RUNTIME_PACKAGE)) {
     const declared = declaredIn(dir, RUNTIME_PACKAGE) as Declaration;
@@ -482,17 +520,31 @@ export function installedPackages(plan: InstallPlan): readonly InstallPackage[] 
   return [...new Map(pending.map((entry) => [entry.name, entry])).values()];
 }
 
+/** Every package the plan names, once each — the root's blocks are two steps now. */
+function plannedPackages(plan: InstallPlan): readonly InstallPackage[] {
+  const all = plan.steps.flatMap((step) => step.packages);
+  return [...new Map(all.map((entry) => [entry.name, entry])).values()];
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+function series(values: readonly string[]): string {
+  return values.length < 2
+    ? (values[0] ?? "")
+    : `${values.slice(0, -1).join(", ")} and ${values.at(-1) as string}`;
+}
+
 /** The lines one `package.json` contributes to the diff. */
 function renderStep(step: InstallStep): string[] {
   const pending = step.packages.filter((entry) => !entry.satisfied);
   const added = pending.filter((entry) => entry.declared === undefined);
   const replaced = pending.filter((entry) => entry.declared !== undefined);
+  const block = step.dev ? "devDependencies" : "dependencies";
   return [
     step.manifest,
     ...(added.length === 0
       ? []
       : [
-          '  + "dependencies": {',
+          `  + "${block}": {`,
           ...added.map((entry) => `  +   "${entry.name}": "${entry.version}"`),
           "  + }",
         ]),
@@ -513,9 +565,8 @@ function renderStep(step: InstallStep): string[] {
  */
 export function renderInstallPlan(plan: InstallPlan): string[] {
   if (plan.satisfied) {
-    const packages = plan.steps[0]?.packages ?? [];
     return [
-      `package.json already has ${packages.map(describe).join(" and ")} — nothing to install.`,
+      `package.json already has ${series(plannedPackages(plan).map(describe))} — nothing to install.`,
     ];
   }
   const pending = plan.steps.filter((step) => !step.satisfied);
