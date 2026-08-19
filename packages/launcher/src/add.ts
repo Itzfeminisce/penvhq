@@ -358,6 +358,35 @@ function chooseEnvironments(
   return { chosen, unknown };
 }
 
+/** `` `development`, `staging` `` — the environments a line names. */
+function quoted(environments: readonly string[]): string {
+  return environments.map((environment) => `\`${environment}\``).join(", ");
+}
+
+/**
+ * The advice line, addressed to what the config already says.
+ *
+ * Finding 29: it prescribed wiring up a provider an environment had declared for
+ * three releases. What the interactive offer knows — which environments are
+ * already pointed — the printed line knows too, so it acknowledges those and
+ * advises only about the rest.
+ */
+function configAdvice(
+  name: string,
+  pointing: readonly string[],
+  unpointed: readonly string[],
+): string {
+  const add = `Add \`type: ${JSON.stringify(name)}\``;
+  if (pointing.length === 0) {
+    return `${add} to an environment in penv.config.ts.`;
+  }
+  return (
+    `${quoted(pointing)} already ${pointing.length === 1 ? "points" : "point"} at ${name}. ` +
+    `${add} to ${quoted(unpointed)} in penv.config.ts if ` +
+    `${unpointed.length === 1 ? "it" : "they"} should too.`
+  );
+}
+
 /**
  * The `penv.config.ts` edit, offered once for the whole file.
  *
@@ -370,9 +399,9 @@ function chooseEnvironments(
 async function offerConfigEdit(options: AddOptions, name: string, ask: boolean): Promise<void> {
   const { io, root } = options;
   const configFile = findConfigFile(root);
-  const line = `Add \`type: ${JSON.stringify(name)}\` to an environment in penv.config.ts.`;
+  const blind = `Add \`type: ${JSON.stringify(name)}\` to an environment in penv.config.ts.`;
   if (configFile === undefined) {
-    io.out(line);
+    io.out(blind);
     return;
   }
 
@@ -380,15 +409,17 @@ async function offerConfigEdit(options: AddOptions, name: string, ask: boolean):
   let current = readFileSync(configFile, "utf8");
   const entries = readProviderEntries(current);
   if (entries === undefined || entries.length === 0) {
-    io.out(line);
+    io.out(blind);
     return;
   }
+  const pointing = entries.filter((entry) => entry.type === name).map((entry) => entry.environment);
   const offered = entries.filter((entry) => entry.type !== name).map((entry) => entry.environment);
   if (offered.length === 0) {
     return;
   }
+  const advice = configAdvice(name, pointing, offered);
   if (!ask) {
-    io.out(line);
+    io.out(advice);
     return;
   }
 
@@ -398,7 +429,7 @@ async function offerConfigEdit(options: AddOptions, name: string, ask: boolean):
   );
   if (unknown.length > 0) {
     io.out(`${shown} declares no ${unknown.join(", ")}, so nothing was repointed.`);
-    io.out(line);
+    io.out(advice);
     return;
   }
   for (const environment of chosen) {
