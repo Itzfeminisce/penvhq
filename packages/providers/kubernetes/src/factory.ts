@@ -9,18 +9,8 @@
 import type { Provider, ProviderFactoryContext } from "@penvhq/core";
 import { createKubernetesProvider } from "./kubernetes.js";
 
-declare module "@penvhq/core" {
-  interface ProviderConfigMap {
-    "@penvhq/provider-kubernetes": {
-      /**
-       * The Secret penv maps the tree onto: `<namespace>/<secretName>`, or just
-       * `<secretName>` to use the current `kubectl` context's namespace.
-       * Defaults to a Secret named `penv`.
-       */
-      readonly location?: string;
-    };
-  }
-}
+// The config shape this factory reads is declared once, in `penv.d.ts` — the
+// file `penv.types` ships and `penv add` commits into the project.
 
 /**
  * Splits `location` into the provider's own options. `team-ns/penv-secrets`

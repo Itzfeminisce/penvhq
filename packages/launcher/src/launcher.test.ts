@@ -32,7 +32,13 @@ import type { LauncherIo } from "./io.js";
 import { type LauncherOptions, runLauncher } from "./launcher.js";
 import { BUNDLED_ENGINE_PIN } from "./pins.js";
 import { installPin, type Pin } from "./store.js";
-import { enginePackage, packTar } from "./tarball.fixtures.js";
+import {
+  EXTENSION_LOAD_FAILURE,
+  enginePackage,
+  extensionPackage,
+  packTar,
+  unloadableExtensionPackage,
+} from "./tarball.fixtures.js";
 
 const created: string[] = [];
 
@@ -49,7 +55,7 @@ afterEach(() => {
 });
 
 const ENGINE_TARBALL = packTar(enginePackage("@penvhq/cli", "0.9.0"));
-const EXTENSION_TARBALL = packTar(enginePackage("@penvhq/provider-vault", "0.9.0"));
+const EXTENSION_TARBALL = packTar(extensionPackage("@penvhq/provider-vault", "0.9.0"));
 
 const ENGINE_PIN: Pin = {
   name: "@penvhq/cli",
@@ -222,9 +228,12 @@ function harness(overrides: {
   };
 }
 
+const EXTENSION_TARBALL_URL =
+  "https://registry.npmjs.org/@penvhq/provider-vault/-/provider-vault-0.9.0.tgz";
+
 const REGISTRY: Readonly<Record<string, Uint8Array>> = {
   "https://registry.npmjs.org/@penvhq/cli/-/cli-0.9.0.tgz": ENGINE_TARBALL,
-  "https://registry.npmjs.org/@penvhq/provider-vault/-/provider-vault-0.9.0.tgz": EXTENSION_TARBALL,
+  [EXTENSION_TARBALL_URL]: EXTENSION_TARBALL,
 };
 
 /** What the registry serves the engine a released launcher ships. */
@@ -780,6 +789,31 @@ describe("penv install", () => {
       "✗ .penv/state/manifest.json holds an extension entry penv cannot read: @penvhq/provider-vault",
       "  → Run `penv add @penvhq/provider-vault` to rewrite that entry — it resolves the package again and records what the registry states.",
     ]);
+  });
+
+  /**
+   * Finding 23: every published provider shipped unbundled against a store that
+   * installs no dependencies, and `install` unpacked one without ever importing
+   * it — so a clean checkout got a green install and met the failure later, from
+   * a command that had nothing to do with installing.
+   */
+  it("refuses an extension that unpacks and will not import, naming the file and the cause", async () => {
+    const tarball = packTar(unloadableExtensionPackage(EXTENSION_PIN.name, EXTENSION_PIN.version));
+    const manifest = manifestText({ extension: true }).replace(
+      EXTENSION_PIN.integrity,
+      integrityOf(tarball),
+    );
+    const test = harness({
+      argv: ["install"],
+      cwd: projectAt(manifest),
+      home: scratch("penv-home-"),
+      serve: { ...REGISTRY, [EXTENSION_TARBALL_URL]: tarball },
+    });
+
+    expect(await runLauncher(test.options)).toBe(1);
+    expect(test.out).toEqual(["✓ @penvhq/cli 0.9.0 installed"]);
+    expect(test.err[0]).toContain("@penvhq/provider-vault threw while penv imported");
+    expect(test.err[0]).toContain(EXTENSION_LOAD_FAILURE);
   });
 
   /** The engine pin is not an entry, and nothing about the repair path relaxes it. */

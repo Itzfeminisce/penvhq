@@ -10,6 +10,8 @@
  * prints, and the frames below it are the caller's, not penv's.
  */
 
+import type { PenvErrorLike } from "./types.js";
+
 /** The remedy marker, one shape everywhere penv answers a question with a command. */
 const REMEDY_ARROW = "→";
 
@@ -73,6 +75,34 @@ export class PenvError extends Error {
     const head = `${this.name}: ${this.summary}`;
     return this.remedy === undefined ? head : `${head}\n  ${REMEDY_ARROW} ${this.remedy}`;
   }
+}
+
+/**
+ * Whether a caught value is a penv refusal — by shape, never by class.
+ *
+ * A provider extension is published self-contained, so it carries its own copy
+ * of the classes in this file: everything it throws is a refusal with the fields
+ * below and a different constructor, and `instanceof PenvError` is false for all
+ * of it. Every place penv renders or branches on an error it caught from a
+ * provider asks this instead, so a refusal reads the same whether it crossed a
+ * bundle boundary or not.
+ *
+ * `summary` is what keeps the test honest: `name`, `code` and `message` alone
+ * would accept a Node system error, and it is the one field only these classes
+ * write.
+ */
+export function isPenvErrorLike(
+  value: unknown,
+): value is PenvErrorLike & { readonly summary: string } {
+  if (!(value instanceof Error)) {
+    return false;
+  }
+  const candidate = value as Partial<Record<"code" | "summary" | "remedy", unknown>>;
+  return (
+    typeof candidate.code === "string" &&
+    typeof candidate.summary === "string" &&
+    (candidate.remedy === undefined || typeof candidate.remedy === "string")
+  );
 }
 
 /** A filename does not fit the grammar. */

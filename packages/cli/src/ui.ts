@@ -14,7 +14,7 @@
  * pipes, CI logs, and tests never see an escape code.
  */
 
-import { PenvError } from "@penvhq/core";
+import { isPenvErrorLike } from "@penvhq/core";
 import { err, out, padVisible, visibleWidth } from "./style.js";
 
 export const CHECK = "✓";
@@ -160,12 +160,17 @@ export function writeError(lines: readonly string[]): void {
 }
 
 /**
- * A `PenvError` already names the parameter, the environment, and the remedy, so
- * it is printed as written — the remedy re-shaped into the same arrowed tip the
- * reports use. Anything else is a bug in penv and keeps its stack.
+ * A penv refusal already names the parameter, the environment, and the remedy,
+ * so it is printed as written — the remedy re-shaped into the same arrowed tip
+ * the reports use. Anything else is a bug in penv and keeps its stack.
+ *
+ * Recognised by shape, not by class: an extension is published self-contained
+ * and throws refusals built from its own copy of core's error classes, so
+ * `instanceof` would send every provider refusal down the bug path and print ten
+ * frames of the provider's `dist` under an otherwise identical block.
  */
 export function reportError(error: unknown): void {
-  if (error instanceof PenvError) {
+  if (isPenvErrorLike(error)) {
     // `summary` is the message without the remedy the constructor folds into it,
     // so the remedy can wear the tip shape instead of a bare indent.
     process.stderr.write(`${err.red(CROSS)} ${error.summary}\n`);

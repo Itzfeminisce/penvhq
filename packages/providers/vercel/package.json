@@ -15,9 +15,11 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "penv.d.ts"
   ],
   "penv": {
+    "types": "penv.d.ts",
     "credentials": [
       "VERCEL_TOKEN"
     ]
@@ -25,7 +27,7 @@
   "scripts": {
     "build": "tsup"
   },
-  "dependencies": {
+  "devDependencies": {
     "@penvhq/core": "workspace:*"
   }
 }

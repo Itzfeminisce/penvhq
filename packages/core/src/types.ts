@@ -551,7 +551,9 @@ export interface ProjectionProvider {
 /**
  * The error shape {@link ProjectionProvider.checkNames} returns — structurally
  * `PenvError`, stated as an interface so the contract does not force provider
- * packages to subclass core's error class.
+ * packages to subclass core's error class. It is also what a refusal thrown by a
+ * self-contained extension arrives as: `isPenvErrorLike` is the test penv runs
+ * on one, since the class it was built from is the extension's own copy.
  */
 export interface PenvErrorLike extends Error {
   readonly code: string;

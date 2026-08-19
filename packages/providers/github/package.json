@@ -15,12 +15,16 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "penv.d.ts"
   ],
+  "penv": {
+    "types": "penv.d.ts"
+  },
   "scripts": {
     "build": "tsup"
   },
-  "dependencies": {
+  "devDependencies": {
     "@penvhq/core": "workspace:*"
   }
 }

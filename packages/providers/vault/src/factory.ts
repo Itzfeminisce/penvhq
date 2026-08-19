@@ -8,19 +8,8 @@
 import type { Provider, ProviderFactoryContext } from "@penvhq/core";
 import { createVaultProvider } from "./vault.js";
 
-declare module "@penvhq/core" {
-  interface ProviderConfigMap {
-    "@penvhq/provider-vault": {
-      /**
-       * The KV v2 base path penv maps records onto, mount-relative —
-       * `penv/staging`. Defaults to `penv`. The mount itself comes from
-       * `VAULT_MOUNT` (default `secret`), because which mount to talk to is a
-       * property of the Vault deployment, not of one project's config.
-       */
-      readonly location?: string;
-    };
-  }
-}
+// The config shape this factory reads is declared once, in `penv.d.ts` — the
+// file `penv.types` ships and `penv add` commits into the project.
 
 /** Builds the Vault provider for one environment's declared source of truth. */
 export function penvProviderFactory(context: ProviderFactoryContext): Provider {

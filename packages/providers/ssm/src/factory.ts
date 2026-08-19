@@ -8,18 +8,8 @@
 import type { Provider, ProviderFactoryContext } from "@penvhq/core";
 import { createSsmProvider } from "./ssm.js";
 
-declare module "@penvhq/core" {
-  interface ProviderConfigMap {
-    "@penvhq/provider-ssm": {
-      /**
-       * The Parameter Store base path penv maps records under — `/penv/prod`.
-       * Defaults to `penv` (stored as `/penv`). Every parameter name becomes
-       * `<location>/<value-filename>`.
-       */
-      readonly location?: string;
-    };
-  }
-}
+// The config shape this factory reads is declared once, in `penv.d.ts` — the
+// file `penv.types` ships and `penv add` commits into the project.
 
 /** Builds the SSM provider for one environment's declared source of truth. */
 export function penvProviderFactory(context: ProviderFactoryContext): Provider {
