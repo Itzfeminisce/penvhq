@@ -21,12 +21,13 @@ import {
   MANIFEST_PATH,
   PENV_HOME_VAR,
   PenvError,
+  packageEntry,
   parseManifest,
   penvHome,
   serializeManifest,
   UnsupportedManifestFormatError,
 } from "@penvhq/core";
-import { add } from "./add.js";
+import { add, assertLoadable } from "./add.js";
 import type { Spawner } from "./delegate.js";
 import { type Engine, engineAt } from "./engine.js";
 import {
@@ -403,6 +404,12 @@ async function ensure(
  * engine and the readable extensions land, and each broken entry is reported with
  * the `penv add` that rewrites it. The exit code is still a failure, because what
  * the manifest names is not all on the machine.
+ *
+ * Every extension is imported once before this command claims it is installed —
+ * the same check `penv add` runs, on the same store copy. Unpacking a tarball is
+ * not installing a package that works, and without this a clean checkout gets a
+ * green install and meets the failure at its first provider operation, from a
+ * command that has nothing to do with the install.
  */
 async function install(
   options: LauncherOptions,
@@ -415,12 +422,14 @@ async function install(
     if (state === "corrupt") {
       throw new PackageCorruptError(pin.name, pin.version, dir);
     }
-    if (state === "installed") {
-      options.io.out(`✓ ${pin.name} ${pin.version} already installed`);
-      continue;
+    if (state === "absent") {
+      await installPin({ home, kind, pin, fetcher: options.fetcher });
     }
-    await installPin({ home, kind, pin, fetcher: options.fetcher });
-    options.io.out(`✓ ${pin.name} ${pin.version} installed`);
+    if (kind === "extensions") {
+      await assertLoadable(pin.name, packageEntry(dir), false);
+    }
+    const verb = state === "absent" ? "installed" : "already installed";
+    options.io.out(`✓ ${pin.name} ${pin.version} ${verb}`);
   }
   if (broken.length > 0) {
     report(new ManifestEntriesUnreadableError(broken), options.io);

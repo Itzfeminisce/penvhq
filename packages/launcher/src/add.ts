@@ -429,8 +429,12 @@ function resolveProjectEntry(name: string, root: string): PackageEntry | undefin
  * `exports` pointed at TypeScript source collected three green checks and then
  * failed from an unrelated command days later. Resolution is not loadability,
  * and this is the one moment the operator is looking at the provider.
+ *
+ * `penv install` runs the same check on every extension it puts in the store, so
+ * the answer is the same one on the machine that pinned the provider and on the
+ * clean checkout that only installs it.
  */
-async function assertLoadable(
+export async function assertLoadable(
   name: string,
   entry: PackageEntry | undefined,
   local: boolean,

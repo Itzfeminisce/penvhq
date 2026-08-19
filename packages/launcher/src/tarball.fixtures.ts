@@ -84,3 +84,43 @@ export function enginePackage(name: string, version: string): TarSource[] {
     { path: "package/bin.js", content: `console.log(${JSON.stringify(ENGINE_MARKER)});\n` },
   ];
 }
+
+/**
+ * An extension as a published one arrives: a package.json naming a built entry,
+ * and an entry that imports nothing it did not bring. `install` and `add` both
+ * import it, so a fixture that only extracts would prove nothing.
+ */
+export function extensionPackage(name: string, version: string): TarSource[] {
+  return [
+    { path: "package/", typeflag: "5" },
+    {
+      path: "package/package.json",
+      content: `${JSON.stringify({ name, version, type: "module", main: "./index.js" }, null, 2)}\n`,
+    },
+    { path: "package/index.js", content: "export function penvProviderFactory() {}\n" },
+  ];
+}
+
+/** What an extension that will not load says on its way out. */
+export const EXTENSION_LOAD_FAILURE = "the adapter needs what the store never installed";
+
+/**
+ * An extension that extracts fine and dies on its first line — the shape every
+ * provider published unbundled had. It throws rather than importing a package
+ * that is not there because this suite runs under vitest, whose resolver would
+ * satisfy the bare specifier; the real missing-dependency case is asserted from
+ * a child process in `provider-vercel`'s artifact smoke test.
+ */
+export function unloadableExtensionPackage(name: string, version: string): TarSource[] {
+  return [
+    { path: "package/", typeflag: "5" },
+    {
+      path: "package/package.json",
+      content: `${JSON.stringify({ name, version, type: "module", main: "./index.js" }, null, 2)}\n`,
+    },
+    {
+      path: "package/index.js",
+      content: `throw new Error(${JSON.stringify(EXTENSION_LOAD_FAILURE)});\n`,
+    },
+  ];
+}
