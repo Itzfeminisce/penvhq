@@ -30,13 +30,16 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import type { Manifest, ManifestExtension, ManifestTrust } from "@penvhq/core";
+import { pathToFileURL } from "node:url";
+import type { Manifest, ManifestExtension, ManifestTrust, PackageEntry } from "@penvhq/core";
 import {
   findConfigFile,
+  isImportableEntry,
   LOCAL_EXTENSIONS_PATH,
   localExtensionsFile,
   MANIFEST_PATH,
   OFFICIAL_SCOPE,
+  packageEntry,
   parseLocalExtensions,
   serializeLocalExtensions,
   serializeManifest,
@@ -52,6 +55,8 @@ import {
   AddPackageNameError,
   AddRegistryError,
   AddSubjectError,
+  ExtensionNotImportableError,
+  ExtensionUnloadableError,
   LOCAL_FLAG,
   LocalExtensionUnresolvedError,
   ManifestEntriesUnreadableError,
@@ -402,6 +407,45 @@ function resolvePackageDir(name: string, root: string): string | undefined {
   }
 }
 
+/**
+ * The module the *project* would import for `name` — the engine's own answer for
+ * a package it reads out of `node_modules`, so what `add` checks is the file the
+ * next command will be handed.
+ */
+function resolveProjectEntry(name: string, root: string): PackageEntry | undefined {
+  let file: string;
+  try {
+    file = createRequire(resolve(root, "noop.js")).resolve(name);
+  } catch {
+    return undefined;
+  }
+  return { file, importable: isImportableEntry(file) };
+}
+
+/**
+ * The load check: penv imports the provider once, here.
+ *
+ * `add` used to certify that a package *resolved* and stop there, so one whose
+ * `exports` pointed at TypeScript source collected three green checks and then
+ * failed from an unrelated command days later. Resolution is not loadability,
+ * and this is the one moment the operator is looking at the provider.
+ */
+async function assertLoadable(
+  name: string,
+  entry: PackageEntry | undefined,
+  local: boolean,
+): Promise<void> {
+  if (entry === undefined || !entry.importable) {
+    throw new ExtensionNotImportableError(name, entry?.file, local);
+  }
+  try {
+    await import(pathToFileURL(entry.file).href);
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    throw new ExtensionUnloadableError(name, entry.file, detail, local);
+  }
+}
+
 /** Adds `name` to the committed list, leaving the manifest untouched. */
 function recordLocalExtension(root: string, name: string): void {
   const file = localExtensionsFile(root);
@@ -437,6 +481,8 @@ async function addLocal(options: AddOptions, request: Request): Promise<AddResul
   if (dir === undefined) {
     throw new LocalExtensionUnresolvedError(request.name, root);
   }
+  // Before anything is written: a package penv cannot import is not one it records.
+  await assertLoadable(request.name, resolveProjectEntry(request.name, root), true);
 
   const installed = readExtensionPackage(dir);
   const declaration = writeDeclaration({
@@ -450,7 +496,7 @@ async function addLocal(options: AddOptions, request: Request): Promise<AddResul
   });
   recordLocalExtension(root, request.name);
 
-  io.out(`✓ ${request.name} resolves from this project — nothing is pinned`);
+  io.out(`✓ ${request.name} resolves from this project and imports — nothing is pinned`);
   io.out(`✓ ${LOCAL_EXTENSIONS_PATH} records it`);
   io.out(`✓ ${declaration} declares its config type`);
 
@@ -505,6 +551,10 @@ export async function add(options: AddOptions): Promise<AddResult> {
     },
     fetcher,
   });
+
+  // The store copy is what the engine imports for a pinned extension, so it is
+  // the copy the load check loads — before the manifest that pins it is written.
+  await assertLoadable(release.name, packageEntry(dir), false);
 
   const installed = readExtensionPackage(dir);
   const declaration = writeDeclaration({

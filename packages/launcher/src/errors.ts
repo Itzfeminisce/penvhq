@@ -33,6 +33,11 @@ function addCommand(name: string, version?: string, extra?: string): string {
   return `penv add ${spec}${extra === undefined ? "" : ` ${extra}`}`;
 }
 
+/** The same command for either kind of add, each in the spelling the docs use. */
+function addCommandFor(name: string, local: boolean): string {
+  return local ? `penv add ${LOCAL_FLAG} ${name}` : addCommand(name);
+}
+
 /** The command was typed outside any penv project. */
 export class NoProjectError extends PenvError {
   override readonly name = "NoProjectError";
@@ -181,6 +186,44 @@ export class AddLocalFlagError extends PenvError {
       `\`penv add ${LOCAL_FLAG}\` cannot take ${subject}`,
       `${LOCAL_FLAG} adds the package this project already builds, so there is no release to ` +
         "name and nothing to pin. Publish it and run `penv add <package>` to pin one.",
+    );
+  }
+}
+
+/**
+ * The extension resolved and is not something penv can import.
+ *
+ * `add` used to certify resolution and stop there, so a package whose `exports`
+ * pointed at TypeScript source got three green checks and failed much later,
+ * from an unrelated command. The load check runs here, at the one moment the
+ * operator is looking at the provider.
+ */
+export class ExtensionNotImportableError extends PenvError {
+  override readonly name = "ExtensionNotImportableError";
+
+  constructor(name: string, entry: string | undefined, local: boolean) {
+    super(
+      "PENV_EXTENSION_NOT_IMPORTABLE",
+      entry === undefined
+        ? `${name} declares no entry point penv can import`
+        : `${name} resolves to ${entry}, which penv cannot import`,
+      "penv imports a provider with no transform, so its entry has to be built JavaScript. Point " +
+        `the package's \`exports\` at its build output — \`dist/index.js\` — then run ` +
+        `\`${addCommandFor(name, local)}\` again.`,
+    );
+  }
+}
+
+/** The extension imported and threw. Its own failure is the diagnosis. */
+export class ExtensionUnloadableError extends PenvError {
+  override readonly name = "ExtensionUnloadableError";
+
+  constructor(name: string, entry: string, detail: string, local: boolean) {
+    super(
+      "PENV_EXTENSION_UNLOADABLE",
+      `${name} threw while penv imported ${entry}: ${detail}`,
+      "Build the package and install its dependencies, then run " +
+        `\`${addCommandFor(name, local)}\` again. penv adds a provider it has loaded once, or none.`,
     );
   }
 }

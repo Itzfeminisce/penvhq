@@ -39,6 +39,8 @@ export {
   EngineEntryError,
   EnginePinMismatchError,
   EnginePinUnreleasedError,
+  ExtensionNotImportableError,
+  ExtensionUnloadableError,
   INSTALL_COMMAND,
   InstallDeclinedError,
   LOCAL_FLAG,
