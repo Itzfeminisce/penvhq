@@ -21,6 +21,12 @@ import {
 /** The command that materializes everything the manifest pins. */
 export const INSTALL_COMMAND = "penv install";
 
+/** The command that moves the engine pin, with no version: whatever `latest` points at. */
+export const UPGRADE_COMMAND = "penv upgrade";
+
+/** The flag that answers `upgrade`'s one question ahead of time. */
+export const YES_FLAG = "--yes";
+
 /** How long a package outside the official scope must have existed. */
 export const MIN_PACKAGE_AGE_DAYS = 7;
 
@@ -284,15 +290,21 @@ export class OfficialRegistryError extends PenvError {
   }
 }
 
-/** The registry could not be read at all. */
+/**
+ * The registry could not be read at all.
+ *
+ * `retry` is the command that would repeat this resolution. Two commands read a
+ * release — `add` and `upgrade` — and a refusal that named the wrong one would
+ * send the reader to a command that answers a different question.
+ */
 export class RegistryUnreadableError extends PenvError {
   override readonly name = "RegistryUnreadableError";
 
-  constructor(name: string, url: string, detail: string) {
+  constructor(name: string, url: string, detail: string, retry: string = addCommand(name)) {
     super(
       "PENV_REGISTRY_UNREADABLE",
       `Reading ${name} from ${url} failed: ${detail}`,
-      `Run \`${addCommand(name)}\` again when the registry is reachable.`,
+      `Run \`${retry}\` again when the registry is reachable.`,
     );
   }
 }
@@ -314,11 +326,11 @@ export class PackageUnknownError extends PenvError {
 export class VersionUnknownError extends PenvError {
   override readonly name = "VersionUnknownError";
 
-  constructor(name: string, version: string, url: string) {
+  constructor(name: string, version: string, url: string, retry: string = addCommand(name)) {
     super(
       "PENV_VERSION_UNKNOWN",
       `${url} publishes no ${version} of ${name}`,
-      `Run \`${addCommand(name)}\` to take the version \`latest\` points at.`,
+      `Run \`${retry}\` to take the version \`latest\` points at.`,
     );
   }
 }
@@ -507,6 +519,101 @@ export class EnginePinMismatchError extends PenvError {
       `This penv carries the integrity of ${ENGINE_PACKAGE} ${pinned} and just ran ${ran}, so it ` +
         "cannot record which bytes scaffolded this project",
       "Reinstall the launcher with `npm install -g @penvhq/launcher` — its pin and its engine ship together.",
+    );
+  }
+}
+
+/** `penv upgrade` with something other than one optional version. */
+export class UpgradeSubjectError extends PenvError {
+  override readonly name = "UpgradeSubjectError";
+
+  constructor() {
+    super(
+      "PENV_UPGRADE_SUBJECT",
+      "`penv upgrade` takes one version, or none",
+      `Run \`${UPGRADE_COMMAND}\` to move to whatever \`latest\` points at, or ` +
+        `\`${UPGRADE_COMMAND} 0.9.6\` to move to an exact release.`,
+    );
+  }
+}
+
+/** A flag `penv upgrade` does not have. */
+export class UpgradeFlagError extends PenvError {
+  override readonly name = "UpgradeFlagError";
+
+  constructor(flag: string) {
+    super(
+      "PENV_UPGRADE_FLAG",
+      `\`${UPGRADE_COMMAND}\` does not understand \`${flag}\``,
+      `Run \`${UPGRADE_COMMAND} [version]\` with \`${YES_FLAG}\` — that is the one flag it takes.`,
+    );
+  }
+}
+
+/** `penv upgrade` needs the registry, and `--no-download` says this run has no network. */
+export class UpgradeNoDownloadError extends PenvError {
+  override readonly name = "UpgradeNoDownloadError";
+
+  constructor() {
+    super(
+      "PENV_UPGRADE_NO_DOWNLOAD",
+      `Upgrading means reading the registry for the version and integrity to pin, and ` +
+        "`--no-download` says this run does not",
+      `Run \`${UPGRADE_COMMAND}\` without \`--no-download\`. Nothing was fetched or written.`,
+    );
+  }
+}
+
+/**
+ * `penv upgrade` on a machine with nobody at it.
+ *
+ * Unattended, penv will move the pin only to a version somebody named and only
+ * with the flag that says they meant it: what upgrade rewrites is two committed
+ * files, and a pipeline that picks the engine is a pipeline choosing which bytes
+ * the project runs.
+ */
+export class UpgradeUnattendedError extends PenvError {
+  override readonly name = "UpgradeUnattendedError";
+
+  constructor() {
+    super(
+      "PENV_UPGRADE_UNATTENDED",
+      `Upgrading rewrites ${MANIFEST_PATH} and package.json, and this run has nobody to decide that`,
+      `Run \`${UPGRADE_COMMAND} <version> ${YES_FLAG}\` — unattended, penv moves the pin only to a ` +
+        `version you named. In CI, run \`${INSTALL_COMMAND}\`: it installs what the committed ` +
+        "manifest already pins.",
+    );
+  }
+}
+
+/** The upgrade was shown and declined. Neither committed file was touched. */
+export class UpgradeDeclinedError extends PenvError {
+  override readonly name = "UpgradeDeclinedError";
+
+  constructor(version: string) {
+    super(
+      "PENV_UPGRADE_DECLINED",
+      `${ENGINE_PACKAGE} ${version} was not installed, so ${MANIFEST_PATH} and package.json are unchanged`,
+      `Run \`${UPGRADE_COMMAND} ${version}\` again when you want both of them to move.`,
+    );
+  }
+}
+
+/**
+ * The package manager refused, so the pin stayed where it was.
+ *
+ * The dependency moves before the manifest for exactly this reason: an upgrade
+ * that cannot finish leaves a project pinning the engine it was already running.
+ */
+export class UpgradeInstallFailedError extends PenvError {
+  override readonly name = "UpgradeInstallFailedError";
+
+  constructor(command: string) {
+    super(
+      "PENV_UPGRADE_INSTALL_FAILED",
+      `${command} did not finish, so ${MANIFEST_PATH} still pins the engine it pinned before`,
+      `Run \`${command}\` yourself, then run \`${UPGRADE_COMMAND}\` again — the pin and the ` +
+        "dependency move together or not at all.",
     );
   }
 }
