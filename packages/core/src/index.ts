@@ -54,6 +54,7 @@ export {
   DirectStartError,
   FilenameGrammarError,
   IllegalEnvironmentNameError,
+  isPenvErrorLike,
   MissingMaterializationError,
   MissingParameterError,
   NameCollisionError,
