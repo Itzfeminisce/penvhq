@@ -11,5 +11,5 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   target: "node20",
-  external: ["zod", "@penvhq/core", "@penvhq/cli"],
+  external: ["zod", "@penvhq/core", /^@penvhq\/cli(?:\/|$)/],
 });

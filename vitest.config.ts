@@ -4,6 +4,8 @@ import { defineConfig } from "vitest/config";
 const src = (pkg: string) =>
   fileURLToPath(new URL(`./packages/${pkg}/src/index.ts`, import.meta.url));
 
+const module = (path: string) => fileURLToPath(new URL(`./packages/${path}`, import.meta.url));
+
 export default defineConfig({
   resolve: {
     // Tests run against source, not dist, so `pnpm test` needs no prior build.
@@ -16,6 +18,9 @@ export default defineConfig({
       "@penvhq/provider-contract": src("providers/contract"),
       "@penvhq/provider-github": src("providers/github"),
       "@penvhq/provider-vercel": src("providers/vercel"),
+      // Subpaths lead: an alias key also matches everything under it, so
+      // `@penvhq/cli` would swallow `@penvhq/cli/install` from above it.
+      "@penvhq/cli/install": module("cli/src/install.ts"),
       "@penvhq/cli": src("cli"),
       penv: src("launcher"),
     },

@@ -7,6 +7,11 @@ import { defineConfig } from "tsup";
  * `index` is the library: workspace packages and a launcher that installed the
  * engine from npm import it, and its dependencies are theirs to resolve.
  *
+ * `install` is its own entry so the launcher can reach the dependency plan
+ * without loading the command surface. `penv init` and `penv upgrade` write the
+ * same `@penvhq/penv` line, and one of them is the launcher's — a second copy of
+ * "which package manager, which diff, which spawn" is the drift penv opposes.
+ *
  * `bin` is what the launcher spawns. The launcher extracts an npm tarball into
  * `$PENV_HOME/engines/<name>/<version>/` and runs it there — with no
  * `node_modules` of any kind — so every JavaScript dependency is bundled in.
@@ -38,7 +43,7 @@ const JITI_CJS = createRequire(import.meta.url).resolve("jiti");
 export default defineConfig([
   {
     ...shared,
-    entry: { index: "src/index.ts" },
+    entry: { index: "src/index.ts", install: "src/install.ts" },
     format: ["esm", "cjs"],
     dts: true,
     clean: true,

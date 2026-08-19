@@ -18,6 +18,12 @@
  * tests must never do — and a fake here is not a weaker test, because what init
  * has to get right is the plan, the consent, and the refusal when the install
  * does not happen.
+ *
+ * Two commands write that dependency line: `penv init`, which is the engine's,
+ * and `penv upgrade`, which is the launcher's. This module is published at
+ * `@penvhq/cli/install` so the launcher reaches it without loading the command
+ * surface — one answer to "which package manager, which diff, which spawn",
+ * rather than a second copy on the other side of the launcher/engine split.
  */
 
 import { existsSync, readFileSync } from "node:fs";
