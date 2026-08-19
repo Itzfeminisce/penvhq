@@ -1,5 +1,47 @@
 # @penvhq/cli
 
+## 0.12.0
+
+### Patch Changes
+
+- ca2fa13: Published provider extensions install and load.
+
+  Every official provider now publishes self-contained: `@penvhq/core` and the zod
+  it reaches for are bundled into the tarball rather than declared as dependencies.
+  Nothing on the install path resolves a dependency — `penv add` unpacks one
+  tarball into `$PENV_HOME` and stops — so a provider that shipped a bare
+  `import "@penvhq/core"` died on its first line, and no published extension could
+  be loaded at all.
+
+  `penv install` now imports every extension it installs, the same check `penv add`
+  runs, so a store that will not load fails at install time with the file and the
+  cause instead of at the first provider operation days later.
+
+  A refusal thrown by an extension is built from that extension's own copy of the
+  error classes, so `instanceof PenvError` is false for all of it. Core gains
+  `isPenvErrorLike`, and the CLI's renderer asks it: a provider's refusal now
+  prints as the same two-line block as the engine's, without the stack frames it
+  used to dump underneath.
+
+  `@penvhq/provider-vercel`, `-github`, `-vault`, `-ssm` and `-kubernetes` each ship
+  a `penv.types` declaration, so the file `penv add` commits carries the provider's
+  real config shape — a misspelled Vercel target, or a key the provider never
+  reads, is now a compile error in `penv.config.ts` instead of a push-time failure.
+
+- 5acbbe8: `upgrade` finishes in a workspace, `add` runs unattended when it has nothing to ask, and penv's own releases carry provenance
+
+  `penv upgrade` shelled `pnpm add` without `-w`, which a pnpm workspace root refuses, and then printed that same command as the remedy. The install plan now detects the workspace root, and no failure remediation repeats the command that just failed. It also moved only the root `package.json`: every workspace package declaring `@penvhq/penv` is now in the one consent diff, named line by line, because a package holding its own older copy is an older bridge running under the pin.
+
+  `penv add` refused every unattended run before discovering it had nothing to ask — an `@penvhq/*` add takes no trust decision, so the gate stopped a run that would have been silent. It now refuses only for the trust ceremony, whose one field is a sentence no flag can write, and takes `--yes` to say nobody is here to be asked. Its `penv.config.ts` offer is one question naming every environment it would repoint, not one question per environment.
+
+  penv's own packages shipped with no npm provenance attestation while the official trust tier rests on one: pnpm 11 publishes natively and reads no `npm_config_*`, so the release workflow's `NPM_CONFIG_PROVENANCE` reached nobody, and no published `package.json` carried the `repository` npm's provenance check requires. Both are fixed, the launcher's own publish states `--provenance` outright, and the release verifier warns loudly when the registry records no attestation.
+
+- Updated dependencies [ca2fa13]
+  - @penvhq/core@0.12.0
+  - @penvhq/provider-filesystem@0.12.0
+  - @penvhq/provider-mock@0.12.0
+  - @penvhq/runtime@0.12.0
+
 ## 0.11.0
 
 ### Minor Changes
