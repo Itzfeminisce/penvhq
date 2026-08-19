@@ -38,7 +38,7 @@ import {
   PackageMissingError,
 } from "./errors.js";
 import type { Fetcher } from "./fetcher.js";
-import { printAddHelp, printInstallHelp, printLauncherCommands } from "./help.js";
+import { printAddHelp, printInstallHelp, printLauncherCommands, printUpgradeHelp } from "./help.js";
 import { launcherUpdateCommand } from "./home.js";
 import type { LauncherIo } from "./io.js";
 import { releaseEnginePin } from "./pins.js";
@@ -46,6 +46,7 @@ import type { Project } from "./project.js";
 import { findAdoptedRoot, findProject } from "./project.js";
 import { type RepairableManifest, readManifestForRepair } from "./repair.js";
 import { inspectInstall, installPin, type Pin } from "./store.js";
+import { upgrade } from "./upgrade.js";
 
 export interface LauncherOptions {
   /** The command line, minus the executable — `process.argv.slice(2)`. */
@@ -64,6 +65,7 @@ export interface LauncherOptions {
 /** The launcher's own commands. Everything else belongs to the engine. */
 const INSTALL = "install";
 const ADD = "add";
+const UPGRADE = "upgrade";
 const VERSION_FLAGS = new Set(["--version", "-v"]);
 const HELP_FLAGS = new Set(["--help", "-h"]);
 const NO_DOWNLOAD = "--no-download";
@@ -207,7 +209,7 @@ async function launch(options: LauncherOptions): Promise<number> {
   const first = forwarded[0];
   const home = penvHome(env);
 
-  // The engine has never heard of `install` or `add`, so their help is the
+  // The engine has never heard of the launcher's commands, so their help is the
   // launcher's — and it answers outside a project too, where a reader asking
   // what `penv install` is has not adopted one yet.
   if (first !== undefined && forwarded.slice(1).some((token) => HELP_FLAGS.has(token))) {
@@ -217,6 +219,10 @@ async function launch(options: LauncherOptions): Promise<number> {
     }
     if (first === ADD) {
       printAddHelp(io);
+      return 0;
+    }
+    if (first === UPGRADE) {
+      printUpgradeHelp(io);
       return 0;
     }
   }
@@ -251,6 +257,23 @@ async function launch(options: LauncherOptions): Promise<number> {
   const manifest = readManifest(project.manifestFile, home, argv);
   if (first !== undefined && VERSION_FLAGS.has(first)) {
     io.out(`penv ${manifest.engine.version}`);
+    return 0;
+  }
+
+  // The engine never sees `upgrade`: what it moves is the pin naming which
+  // engine to run, and no engine can be the authority on which one that is.
+  if (first === UPGRADE) {
+    await upgrade({
+      argv: forwarded.slice(1),
+      root: project.root,
+      manifestFile: project.manifestFile,
+      manifest,
+      home,
+      io,
+      fetcher: options.fetcher,
+      noDownload,
+      ci: isCi(env),
+    });
     return 0;
   }
 
