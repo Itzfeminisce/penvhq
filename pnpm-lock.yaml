@@ -173,6 +173,12 @@ importers:
         specifier: workspace:*
         version: link:../contract
 
+  packages/providers/vercel:
+    dependencies:
+      '@penvhq/core':
+        specifier: workspace:*
+        version: link:../../core
+
   packages/runtime:
     dependencies:
       '@penvhq/core':
