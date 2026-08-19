@@ -252,6 +252,15 @@ const VAULT_REGISTRY: Readonly<Record<string, Uint8Array>> = {
   [`https://registry.npmjs.org/${VAULT}/-/provider-vault-0.9.0.tgz`]: VAULT_TAR,
 };
 
+/** A config that already points one environment at the package being added. */
+const CONFIG_POINTED = CONFIG.replace(
+  `production: { type: "@penvhq/provider-filesystem" }`,
+  `production: { type: "${VAULT}" }`,
+);
+
+/** And one that points every environment at it, so there is nothing to advise. */
+const CONFIG_ALL_POINTED = CONFIG.replaceAll("@penvhq/provider-filesystem", VAULT);
+
 describe("an official extension", () => {
   it("asks nothing at all when there is no config to offer an edit on", async () => {
     const root = scratch("penv-add-bare-");
@@ -606,6 +615,32 @@ describe("what add will not do on its own", () => {
     expect(declarationIn(test.root, VAULT)).toContain(VAULT);
     // The offer it could not make is printed, not skipped in silence.
     expect(test.out).toContain(`Add \`type: "${VAULT}"\` to an environment in penv.config.ts.`);
+  });
+
+  /**
+   * Finding 29: the unattended line prescribed wiring up a provider the config
+   * had pointed `production` at for three releases. It reads the config well
+   * enough to offer per-environment prompts, so it reads it here too.
+   */
+  it("names the environments already pointed, and advises only about the rest", async () => {
+    const test = harness({ argv: [VAULT], config: CONFIG_POINTED, serve: VAULT_REGISTRY });
+
+    await add({ ...test.options, ci: true });
+
+    expect(test.out).toContain(
+      `\`production\` already points at ${VAULT}. ` +
+        `Add \`type: "${VAULT}"\` to \`development\` in penv.config.ts if it should too.`,
+    );
+    expect(test.out).not.toContain(`Add \`type: "${VAULT}"\` to an environment in penv.config.ts.`);
+  });
+
+  /** The quiet half: nothing left to advise, so nothing is said about the config. */
+  it("says nothing about the config when every environment already points at it", async () => {
+    const test = harness({ argv: [VAULT], config: CONFIG_ALL_POINTED, serve: VAULT_REGISTRY });
+
+    await add({ ...test.options, ci: true });
+
+    expect(test.out.filter((line) => line.includes("penv.config.ts"))).toEqual([]);
   });
 
   /** `--yes` is that same run at a real terminal: the offers print instead of asking. */

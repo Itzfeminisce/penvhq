@@ -102,6 +102,8 @@ interface ProjectOptions {
   readonly manifest?: Manifest;
   /** What `package.json` declares for `@penvhq/penv` today. */
   readonly declared?: string;
+  /** What it declares for `@penvhq/core` — `null` for a project adopted before it. */
+  readonly types?: string | null;
   /** The lockfile that names the project's package manager. */
   readonly lockfile?: string;
   /** Workspace packages under `packages/`, each with what it declares. */
@@ -119,6 +121,9 @@ function projectAt(options: ProjectOptions = {}): string {
       {
         name: "acme-api",
         dependencies: { "@penvhq/penv": options.declared ?? PINNED, zod: "4.4.3" },
+        ...(options.types === null
+          ? {}
+          : { devDependencies: { "@penvhq/core": options.types ?? PINNED } }),
       },
       null,
       2,
@@ -153,6 +158,7 @@ function harness(overrides: {
   argv: readonly string[];
   manifest?: Manifest;
   declared?: string;
+  types?: string | null;
   serve?: Readonly<Record<string, Uint8Array>>;
   interactive?: boolean;
   consent?: boolean;
@@ -165,6 +171,7 @@ function harness(overrides: {
   const root = projectAt({
     ...(overrides.manifest === undefined ? {} : { manifest: overrides.manifest }),
     ...(overrides.declared === undefined ? {} : { declared: overrides.declared }),
+    ...(overrides.types === undefined ? {} : { types: overrides.types }),
     ...(overrides.workspace === undefined ? {} : { workspace: overrides.workspace }),
   });
   const home = scratch("penv-upgrade-home-");
@@ -348,6 +355,31 @@ describe("the one consent", () => {
     expect(test.questions).toEqual([`Move this project to ${LATEST}?`]);
   });
 
+  /**
+   * Finding 28's migration: a project adopted before `@penvhq/core` was declared
+   * has the committed provider declarations and no module for them to bind to.
+   * The upgrade carries it in under the same one consent.
+   */
+  it("adds @penvhq/core to a project adopted before it, under the one question", async () => {
+    const test = harness({ argv: [LATEST], types: null, consent: true });
+
+    await upgrade(test.options);
+
+    const shown = test.out.join("\n");
+    expect(shown).toContain('  + "devDependencies": {');
+    expect(shown).toContain(`     then pnpm add --save-exact -D @penvhq/core@${LATEST}`);
+    expect(test.questions).toEqual([`Move this project to ${LATEST}?`]);
+  });
+
+  /** The quiet half: a project that already declares it is not told about it again. */
+  it("says nothing about @penvhq/core when the project already declares it", async () => {
+    const test = harness({ argv: [LATEST], consent: true });
+
+    await upgrade(test.options);
+
+    expect(test.out.join("\n")).not.toContain("@penvhq/core");
+  });
+
   it("leaves both files untouched when it is declined", async () => {
     const test = harness({ argv: [LATEST], consent: false });
     const manifestBefore = manifestTextIn(test.root);
@@ -413,7 +445,11 @@ describe("a workspace whose packages declare the dependency too", () => {
     expect(shown).toContain('  - "@penvhq/penv": "^0.9.0"');
     // One question covers all three files, and `-w` is what pnpm needs at the root.
     expect(test.questions).toEqual([`Move this project to ${LATEST}?`]);
-    expect(test.installs[0]?.steps.map((step) => step.command.join(" "))).toEqual([
+    expect(
+      test.installs[0]?.steps
+        .filter((step) => !step.satisfied)
+        .map((step) => step.command.join(" ")),
+    ).toEqual([
       `pnpm add -w --save-exact @penvhq/penv@${LATEST}`,
       `pnpm --filter ./packages/db add --save-exact @penvhq/penv@${LATEST}`,
       `pnpm --filter ./packages/worker add --save-exact @penvhq/penv@${LATEST}`,
@@ -447,7 +483,7 @@ describe("a workspace whose packages declare the dependency too", () => {
     await upgrade(test.options);
 
     expect(test.out.join("\n")).not.toContain("packages/ui");
-    expect(test.installs[0]?.steps).toHaveLength(2);
+    expect(test.installs[0]?.steps.filter((step) => !step.satisfied)).toHaveLength(2);
   });
 });
 

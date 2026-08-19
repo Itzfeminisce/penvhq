@@ -119,6 +119,9 @@ function installRuntime(root: string, version: string): void {
   // zod comes with it, as it does from the real install: the scaffolded
   // penv.schema.ts imports zod, and a peer is the project's to supply.
   manifest.dependencies = { "@penvhq/penv": version, zod: schemaPackageVersion() };
+  // And `@penvhq/core`, which the committed provider declarations augment —
+  // dev, because it is the declare-module target and nothing imports it.
+  manifest.devDependencies = { "@penvhq/core": version };
   writeFileSync(manifestFile, JSON.stringify(manifest, null, 2), "utf8");
 }
 

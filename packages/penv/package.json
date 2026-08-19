@@ -36,12 +36,12 @@
   },
   "devDependencies": {
     "@penvhq/cli": "workspace:*",
-    "@penvhq/core": "workspace:*",
     "@penvhq/provider-filesystem": "workspace:*",
     "@penvhq/runtime": "workspace:*",
     "zod": "4.4.3"
   },
   "dependencies": {
+    "@penvhq/core": "workspace:*",
     "jiti": "2.7.0"
   }
 }
