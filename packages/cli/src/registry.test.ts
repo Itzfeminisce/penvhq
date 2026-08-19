@@ -14,11 +14,22 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type PenvConfig, PenvError, recordsDir } from "@penvhq/core";
+import {
+  localExtensionsFile,
+  type PenvConfig,
+  PenvError,
+  recordsDir,
+  serializeLocalExtensions,
+} from "@penvhq/core";
 import { FilesystemProvider } from "@penvhq/provider-filesystem";
 import { afterEach, describe, expect, it } from "vitest";
 import { localTree, openProject, sourceProviderFor } from "./project.js";
-import { assertProvidersRegistered, createProvider, isProviderRegistered } from "./registry.js";
+import {
+  assertProvidersRegistered,
+  createProvider,
+  isProviderRegistered,
+  localExtensions,
+} from "./registry.js";
 
 /** A minimal valid provider plugin: exports the factory penv's seam calls. */
 const VALID_PLUGIN = `export const penvProviderFactory = () => ({
@@ -143,6 +154,57 @@ describe("the provider registry", () => {
     expect(error.code).toBe("UNKNOWN_PROVIDER");
     expect(error.message).toContain("production");
     expect(error.message).toContain("consul");
+  });
+});
+
+/**
+ * A local extension is the package this checkout builds. Development needs it;
+ * a pipeline may not have it, because nothing pins the bytes it would run.
+ */
+describe("a locally added extension", () => {
+  const CONFIG: PenvConfig = {
+    environments: ["production"],
+    providers: { production: { type: "@acme/provider-consul" } },
+  };
+
+  function projectWithLocal(): string {
+    const root = makeProject({ environments: [], providers: {} });
+    installFakeProvider(root, "@acme/provider-consul", VALID_PLUGIN);
+    writeFileSync(
+      localExtensionsFile(root),
+      serializeLocalExtensions(["@acme/provider-consul"]),
+      "utf8",
+    );
+    return root;
+  }
+
+  it("refuses in CI, naming the registry path", () => {
+    const root = projectWithLocal();
+    let thrown: unknown;
+    try {
+      assertProvidersRegistered(CONFIG, root, { ci: true });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect((thrown as PenvError).code).toBe("LOCAL_EXTENSION_IN_CI");
+    expect((thrown as PenvError).remedy).toContain("penv add @acme/provider-consul");
+  });
+
+  it("opens normally where a developer is working", () => {
+    const root = projectWithLocal();
+
+    expect(() => assertProvidersRegistered(CONFIG, root, { ci: false })).not.toThrow();
+    expect(localExtensions(root)).toEqual(["@acme/provider-consul"]);
+  });
+
+  /** The quiet half: a project that records none is unaffected, in CI like anywhere. */
+  it("leaves a project with no local list alone", () => {
+    const root = makeProject({ environments: [], providers: {} });
+    installFakeProvider(root, "@acme/provider-consul", VALID_PLUGIN);
+
+    expect(() => assertProvidersRegistered(CONFIG, root, { ci: true })).not.toThrow();
+    expect(localExtensions(root)).toEqual([]);
   });
 });
 

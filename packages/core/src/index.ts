@@ -50,6 +50,7 @@ export { formatEnvelope, NONCE_BYTES, parseEnvelope, TAG_BYTES } from "./envelop
 export type { ValidationWording } from "./errors.js";
 export {
   ConfigError,
+  DeliveryContractMissingError,
   DirectStartError,
   FilenameGrammarError,
   IllegalEnvironmentNameError,
@@ -93,6 +94,8 @@ export {
   assertMigrated,
   CUTOVER_PATH,
   EXTENSIONS_PATH,
+  LOCAL_EXTENSIONS_PATH,
+  localExtensionsFile,
   MANIFEST_PATH,
   oldLayoutEntries,
   PENV_DIR,
@@ -107,6 +110,7 @@ export {
   STATE_PATH,
   stateDir,
 } from "./layout.js";
+export { parseLocalExtensions, serializeLocalExtensions } from "./local-extensions.js";
 export type {
   LauncherUpdate,
   Manifest,

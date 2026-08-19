@@ -74,7 +74,7 @@ Run `pnpm typecheck && pnpm test && pnpm lint` before proposing a change as done
 
 19. **penv does not reimplement provider ACLs.** Access control is proxied to Vault policies / IAM.
 
-20. **Value files are gitignored; only structure/`env.ts`/meta/config are committed.** The manifest and generated extension declarations under `.penv/state/` join that committed set — they are decisions to review, and they hold no values. The adoption rollback bundle never does. Never weaken this. A change that could commit a plaintext secret is a security regression regardless of tests.
+20. **Value files are gitignored; only structure/`env.ts`/meta/config are committed.** The manifest, the generated extension declarations, and the local-extension list under `.penv/state/` join that committed set — they are decisions to review, and they hold no values. The adoption rollback bundle never does. Never weaken this. A change that could commit a plaintext secret is a security regression regardless of tests.
 
 21. **`init` may default what it can observe; it must ask for what it cannot.** A fact about the codebase (the framework in `package.json`, whether `src/` exists) may be detected and proposed. A fact about the deployment — `environments` above all — may not: no file says whether a staging tier exists, and an invented environment accepts writes for infrastructure that does not. Unanswered means empty, and `CONFIG_ENVIRONMENTS_EMPTY` is written to be reached.
 

@@ -38,6 +38,13 @@ export const MANIFEST_PATH = `${STATE_PATH}/manifest.json`;
 /** Committed, type-only provider declarations — `extensions/<name>.d.ts`. */
 export const EXTENSIONS_PATH = `${STATE_PATH}/extensions`;
 
+/**
+ * The committed names of extensions this project develops rather than pins.
+ * Beside the manifest and deliberately not inside it: the manifest pins bytes,
+ * and a package being written in this checkout has none to pin.
+ */
+export const LOCAL_EXTENSIONS_PATH = `${STATE_PATH}/local-extensions.json`;
+
 const CUTOVER_FILE = "cutover.json";
 const ROLLBACK_DIR = "rollback";
 
@@ -58,6 +65,11 @@ export function penvDir(projectRoot: string): string {
 /** The `.penv/state/` directory of `projectRoot`, absolute. */
 export function stateDir(projectRoot: string): string {
   return resolve(projectRoot, ...STATE_PATH.split("/"));
+}
+
+/** The local-extension list of `projectRoot`, absolute. */
+export function localExtensionsFile(projectRoot: string): string {
+  return resolve(projectRoot, ...LOCAL_EXTENSIONS_PATH.split("/"));
 }
 
 /**

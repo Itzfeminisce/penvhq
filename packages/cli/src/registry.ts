@@ -16,13 +16,28 @@
  * command edits and the mock used to rehearse rotation — so "built-in" means
  * only "already installed", not a different kind of provider. Nothing else in
  * the CLI names an implementation.
+ *
+ * A repository that *writes* a provider says so with `penv add --local`, which
+ * records the name in `.penv/state/local-extensions.json` and nothing else. That
+ * record is what makes the arrangement visible rather than accidental: `doctor`
+ * reports it, and CI refuses it, because a package this checkout builds has no
+ * pin behind it.
  */
 
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AnyProvider, PenvConfig, Provider, ProviderFactoryContext } from "@penvhq/core";
-import { holdsProjection, PENV_DIR, PenvError, recordsDir } from "@penvhq/core";
+import {
+  holdsProjection,
+  LOCAL_EXTENSIONS_PATH,
+  localExtensionsFile,
+  PENV_DIR,
+  PenvError,
+  parseLocalExtensions,
+  recordsDir,
+} from "@penvhq/core";
 import { createFilesystemProvider } from "@penvhq/provider-filesystem";
 import { createMockProvider } from "@penvhq/provider-mock";
 
@@ -167,15 +182,53 @@ async function loadPluginProvider(type: string, context: ProviderContext): Promi
  * async. The package's module is imported and its contract checked later, when
  * the environment's source is actually built.
  */
-export function assertProvidersRegistered(config: PenvConfig, projectRoot: string): void {
+export function assertProvidersRegistered(
+  config: PenvConfig,
+  projectRoot: string,
+  options?: { readonly ci?: boolean },
+): void {
+  const local = localExtensions(projectRoot);
+  const ci = options?.ci ?? isCi(process.env.CI);
   for (const [environment, provider] of Object.entries(config.providers)) {
     if (isProviderRegistered(provider.type)) {
       continue;
+    }
+    if (ci && local.includes(provider.type)) {
+      throw localExtensionInCi(provider.type, environment);
     }
     if (resolvePlugin(provider.type, projectRoot) === undefined) {
       throw unknownProvider(provider.type, environment);
     }
   }
+}
+
+/** The extensions this project develops, as `penv add --local` recorded them. */
+export function localExtensions(projectRoot: string): string[] {
+  let text: string;
+  try {
+    text = readFileSync(localExtensionsFile(projectRoot), "utf8");
+  } catch {
+    return [];
+  }
+  return parseLocalExtensions(text);
+}
+
+function isCi(value: string | undefined): boolean {
+  return value !== undefined && value !== "" && value !== "0" && value.toLowerCase() !== "false";
+}
+
+/**
+ * A local extension is the copy in this checkout, and nothing pins its bytes —
+ * which is exactly what a pipeline may not run on. The remedy is the registry
+ * path, because that is the one that produces something CI can verify.
+ */
+function localExtensionInCi(type: string, environment: string): PenvError {
+  return new PenvError(
+    "LOCAL_EXTENSION_IN_CI",
+    `The provider \`${type}\` for environment ${environment} is a local extension, and this is CI`,
+    `${LOCAL_EXTENSIONS_PATH} records it as a package this project develops, so nothing pins ` +
+      `the bytes CI would run. Publish it and run \`penv add ${type}\` to pin a release.`,
+  );
 }
 
 /**
@@ -236,7 +289,9 @@ function unknownProvider(type: string, environment?: string): PenvError {
   return new PenvError(
     "UNKNOWN_PROVIDER",
     `The provider \`${type}\`${where} in penv.config.ts is not installed in this project`,
-    `Install it with \`npm i ${type}\` — a provider's \`type\` is the package penv imports. ` +
-      `The CLI ships ${preinstalled} pre-installed.`,
+    `A provider's \`type\` is the package penv imports, so it has to resolve from this project: ` +
+      `install it with \`npm i ${type}\`, or — if this repository is the one that builds it — ` +
+      `run \`penv add --local ${type}\` once it is a dependency of the root. The CLI ships ` +
+      `${preinstalled} pre-installed.`,
   );
 }

@@ -115,7 +115,9 @@ That is the whole daily form. `--source` defaults to the local project tree, and
 
 **Wrap outside the script, not inside it.** `penv run -- pnpm dev` runs your package manager under penv, so `predev` and `postdev` see penv's environment too. Writing the wrapper *inside* a `package.json` script is supported and entirely yours to author, with one difference to know: a script's `pre*` and `post*` hooks run outside the script body, so they start before penv's environment exists. An outer wrapper meeting an in-script one is refused, naming both invocations, rather than nesting two owned environments.
 
-**The child environment is penv's, deliberately.** Every schema-declared parameter is written to the child under its generated name — or *deleted* from the child when it is optional and absent, so a stale variable in your shell cannot stand in for a value penv resolved to nothing. Unrelated variables like `PATH` are left alone. penv's own key variables, provider credentials, and internal control variables are stripped before your command starts.
+**The child environment is penv's, deliberately.** Every schema-declared parameter is written to the child under its generated name — or *deleted* from the child when it is optional and absent, so a stale variable in your shell cannot stand in for a value penv resolved to nothing. Unrelated variables like `PATH` are left alone. penv's own key variables, provider credentials, launcher state, and the internal control variables addressed to penv itself are stripped before your command starts.
+
+**Three variables stay, and each has a reader.** `PENV_ENV` is the environment penv resolved — what your bridge validates against and what every refusal names. `PENV_DELIVERY` is the parameter→variable map your bridge reads names from, because `override` makes that unguessable from the schema alone. `PENV_RUN` is the marker that lets a `penv run` inside your command see the one outside it and refuse, rather than nesting two owned environments. Your bridge takes the last two back out of `process.env` on its first `load`, so your own code never sees penv talking to penv.
 
 **`penv run` never contacts a provider.** It reads what is already materialised locally — the project tree, or a sealed artifact — and a missing materialisation is a named failure with the `penv pull` line to run, not an invitation to fetch. A remote provider being down is not a reason your application cannot start. The one exception is opt-in and never production: `penv run --watch -- pnpm dev` refreshes from the configured provider, preserves your `.local` overrides, validates the complete next state, and only then restarts the child — a failed pull or a failed validation leaves your running child exactly where it was.
 
@@ -249,7 +251,7 @@ project-root/
 
 Each value file holds exactly one value. Each parameter has at most one meta file.
 
-`state/` means current state penv manages, never secret history — provider history stays provider-owned. Its `.gitignore` is one committed file that draws the whole boundary: structure, meta, the manifest, and the generated extension declarations are committed, because each is a decision worth reviewing in a pull request; every plaintext value, and the temporary rollback bundle `penv init` writes, never are. During an adoption `state/` also holds `cutover.json` and `rollback/dotenv/`, which `penv init undo` reads and `penv cleanup` removes.
+`state/` means current state penv manages, never secret history — provider history stays provider-owned. Its `.gitignore` is one committed file that draws the whole boundary: structure, meta, the manifest, the generated extension declarations, and the local-extension list are committed, because each is a decision worth reviewing in a pull request; every plaintext value, and the temporary rollback bundle `penv init` writes, never are. During an adoption `state/` also holds `cutover.json` and `rollback/dotenv/`, which `penv init undo` reads and `penv cleanup` removes.
 
 ### Filename grammar
 
@@ -491,6 +493,16 @@ penv push --env production          # to the platform's environment store, via i
 
 The platform then supplies `process.env` exactly as it always has, and your typed bridge validates that environment on the way in. This is delivery, not a fallback: an artifact placed in a build output does not make a platform read it, so penv does not pretend one is the serverless answer.
 
+**Set the two control variables the platform cannot know.** `penv run` writes them for its child; here the platform starts the process, so they belong in its environment store beside the values. `PENV_ENV=production` pins the environment your bridge resolves against, so a preview deployment cannot claim to be production. `PENV_DELIVERY` is the naming contract — parameter id to variable name — and any project with an `override` **requires** it: without the map the bridge looks under the default generated name, and reports a required parameter missing while its value sits in `process.env` under the overridden one.
+
+Capture the contract penv itself produces rather than writing one by hand:
+
+```bash
+penv run --env production -- node -e "console.log(process.env.PENV_DELIVERY)"
+```
+
+Set that one line as `PENV_DELIVERY`, and capture it again whenever a parameter is added, renamed, or an `override` changes — it is the names, so it moves when the names do.
+
 ## Configuration reference
 
 `penv.config.ts` lives at the project root, next to `package.json`.
@@ -606,7 +618,9 @@ penv add @penvhq/provider-vault
 | Public third-party | A seven-day minimum package age. Adding a younger one takes an explicit override, which commits a trust block naming the publisher, the exact integrity, the timestamp, and your reason in your own words. |
 | Private or custom | An explicit trust acknowledgement, recorded the same way. The registry URL is committed; credentials never are — your `.npmrc` owns those. |
 
-`add` takes two flags and no others: `--registry <https-url>` names a private registry, which is what puts a package in the private tier, and `--trust-young` is the override for the seven-day age gate. Pin a version with `penv add <package>@<version>`; without one, `add` takes what `latest` points at and records the exact version it resolved.
+`add` takes three flags and no others: `--registry <https-url>` names a private registry, which is what puts a package in the private tier, `--trust-young` is the override for the seven-day age gate, and `--local` is the development path below. Pin a version with `penv add <package>@<version>`; without one, `add` takes what `latest` points at and records the exact version it resolved.
+
+**A repository that writes a provider uses `penv add --local`.** There is no release to pin — the package is the one this checkout builds — so nothing goes in the manifest, whose whole promise is that every machine gets the reviewed bytes. What `--local` does is resolve the package from the project's own `node_modules`, write the same type-only declaration, and record the name in `.penv/state/local-extensions.json`: a committed list of names, nothing else. That record is the point. `penv doctor` reports every local extension with the `?` verdict, because penv cannot say the adapter here is the adapter anyone else gets, and CI refuses one outright, naming `penv add <package>` — a pipeline runs bytes that were pinned or it runs none. `--local` takes no version, no `--registry`, and no `--trust-young`: all three describe a release, and there isn't one.
 
 **What a provider declares about itself.** Two optional fields in the extension's own `package.json`, under a `penv` key. `penv.types` names a self-contained declaration file inside the package — `add` commits its text as the type declaration, so your config entry is checked against the provider's own definition; a provider that ships none gets the open base shape under its package name. `penv.onboard` names the engine command that finishes setup — `"cloud login"` becomes the `penv cloud login` that `add` offers to run. A declaration reaching for any module other than `@penvhq/core` is refused rather than committed: it would resolve to nothing in a repository where the adapter is not installed.
 
@@ -758,6 +772,7 @@ $ penv doctor
 ⚠ Undecryptable value       redis/password.production.enc PENV_KEY_PROD is not set
 ⚠ Secret exposed to browser NEXT_PUBLIC_STRIPE_KEY meta declares this a secret, and the prefix makes it public
 ⚠ Edited outside penv       DATABASE_URL        github's copy is newer than penv's last push
+? Secrecy policy            3 of 25 declare neither way for production
 ? Value drift               github              not checked — secrets cannot be read back
 ✓ Provider                  vault
 ✓ Destination               @penvhq/provider-github · acme/api
@@ -765,7 +780,7 @@ $ penv doctor
   penv set app/api-key --env production
 ```
 
-**Four verdicts, not three.** `✓` is a check that looked and found nothing wrong. `⚠` is a check that looked and found something. `?` is a check that **could not look** — and it is deliberately not a `✓`. penv cannot read a GitHub Actions secret back, so it can never tell you your CI values match your tree; saying so in words, in its own glyph, is the only honest report available. A check that did not run must never be indistinguishable from a check that passed. The same verdict covers a browser check with no `publicPrefixes` declared, and any check a failed schema load made impossible.
+**Four verdicts, not three.** `✓` is a check that looked and found nothing wrong. `⚠` is a check that looked and found something. `?` is a check that **could not look** — and it is deliberately not a `✓`. penv cannot read a GitHub Actions secret back, so it can never tell you your CI values match your tree; saying so in words, in its own glyph, is the only honest report available. A check that did not run must never be indistinguishable from a check that passed. The same verdict covers a browser check with no `publicPrefixes` declared, a project whose meta declares no secrecy at all — encryption is policy, so with no policy there is nothing to check the tree against — and any check a failed schema load made impossible.
 
 **The browser check is the one nothing else can make.** To your framework, `NEXT_PUBLIC_` *is* the intent — it inlines the value into every page and cannot know you consider it a secret. Your app's own env module cannot know either. penv holds the policy and the name at once, which is the only vantage point from which the contradiction is visible. It needs `publicPrefixes` declared; without it penv says it could not check, rather than reporting a clean run it never made.
 
@@ -788,7 +803,7 @@ Reporting is all it does. penv will not materialise a value file from a declarat
 | `penv cleanup` | Close a finished migration — removes the rollback bundle and its cutover state, and nothing else. |
 | `penv run -- <command>` | Resolve, validate, and start `<command>` in a penv-owned child environment. `--source` defaults to `project`; `--env` falls back to `defaultEnvironment`; `--watch` opts into provider-backed restarts. |
 | `penv migrate` | Convert a project written under an earlier layout to `.penv/state/`. Previews first, moves records on approval, leaves your schema, config, and loader byte-identical. |
-| `penv add <package>[@<version>]` | Add a provider extension: record it in the manifest with its integrity, install it into the launcher's cache, generate its type declaration, offer the config edit and any onboarding step. `--registry <url>` for a private registry; `--trust-young` overrides the seven-day age gate. |
+| `penv add <package>[@<version>]` | Add a provider extension: record it in the manifest with its integrity, install it into the launcher's cache, generate its type declaration, offer the config edit and any onboarding step. `--registry <url>` for a private registry; `--trust-young` overrides the seven-day age gate; `--local` records a provider this repository builds, pinning nothing. |
 | `penv upgrade [version]` | Move the pinned engine and the project's `@penvhq/penv` dependency together. |
 | `penv install` | Install the exact engine and extensions the manifest pins. The preinstall step for CI and production, which never download during a run. |
 | `penv import <file>` | Import an existing dotenv file; it becomes the source of truth. The filename names the scope the values are written at (`.env.production` → `<name>.production`); `--env` names it for a file that doesn't, and contradicting the filename is an error. |

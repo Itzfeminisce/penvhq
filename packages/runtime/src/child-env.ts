@@ -12,8 +12,8 @@
  *
  * Everything unrelated — `PATH`, `HOME`, the user's own variables — is left
  * exactly as it arrived. What is removed is penv's own: key material, the
- * credentials the CLI's provider tooling authenticates with, and the control
- * variables penv talks to itself through.
+ * credentials the CLI's provider tooling authenticates with, the launcher state
+ * the engine was handed, and the control variables penv talks to itself through.
  *
  * The order is the design, not an accident of writing it down. Stripping runs
  * first and the run marker is stamped last, so an inherited marker from an outer
@@ -41,6 +41,7 @@ import { declaredRefs, inject } from "./inject.js";
 export {
   DELIVERY_VARIABLE,
   ENVIRONMENT_VARIABLE,
+  LAUNCHER_HOME,
   RUN_MARKER,
   SNAPSHOT_VARIABLE,
 } from "./control.js";

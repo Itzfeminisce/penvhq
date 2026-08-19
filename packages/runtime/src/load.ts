@@ -31,16 +31,18 @@ import { basename, isAbsolute, relative } from "node:path";
 import type { ParameterRef, PenvConfig } from "@penvhq/core";
 import {
   accessPath,
+  DeliveryContractMissingError,
   DirectStartError,
   type OverrideKeysOf,
   own,
+  PenvError,
   parameterId,
   schemaHarvestActive,
   ValidationError,
   variableName,
 } from "@penvhq/core";
 import type { z } from "zod";
-import type { Environment } from "./child-env.js";
+import type { Delivery, Environment } from "./child-env.js";
 import { consumeDelivery, ENVIRONMENT_VARIABLE } from "./child-env.js";
 import { debug, debugEnabled } from "./diagnostics.js";
 import { declaredRefs, inject } from "./inject.js";
@@ -174,10 +176,14 @@ function environmentOf(options: ResolvedLoadOptions | undefined, env: Environmen
  * sets the flag, so ordinary loads stay eager and fail-fast.
  */
 export function load<T extends z.ZodType>(schema: T, options?: LoadOptionsFor<T>): z.infer<T> {
-  if (schemaHarvestActive()) {
-    return deferLoad(schema, options);
+  try {
+    return schemaHarvestActive() ? deferLoad(schema, options) : loadEagerly(schema, options);
+  } catch (error) {
+    // Nobody catches this one. An adopted app started the old way prints it
+    // through Node's default handler, so the frames it shows should be the
+    // application's — the line that called `load` — not penv's way down to here.
+    throw error instanceof PenvError ? error.hideFramesAbove(load) : error;
   }
-  return loadEagerly(schema, options);
 }
 
 function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptions): z.infer<T> {
@@ -191,11 +197,16 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptio
 
   const values: { readonly ref: ParameterRef; readonly value: string }[] = [];
   const object = node();
+  // Which variable each parameter was read from, so a refusal can say so — the
+  // one fact about the delivery an outside reader cannot see.
+  const readFrom = new Map<string, string>();
   for (const ref of declaredRefs(schema)) {
+    const variable = variableName(ref, config);
+    readFrom.set(accessPath(ref).join("."), variable);
     // `own`, never a plain index: the contract is a variable penv reads back, so
     // a parameter delivered as `constructor` must find nothing rather than the
     // prototype's function.
-    const value = own(source, variableName(ref, config));
+    const value = own(source, variable);
     if (value !== undefined) {
       values.push({ ref, value });
       place(object, accessPath(ref), value);
@@ -205,15 +216,17 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptio
 
   const result = schema.safeParse(object);
   if (!result.success) {
-    throw failure(
+    throw failure({
       environment,
-      result.error.issues.map((issue) => ({
+      issues: result.error.issues.map((issue) => ({
         parameter: issue.path.join("."),
         message: issue.message,
       })),
       values,
-      delivery.invocation,
-    );
+      delivery,
+      readFrom,
+      pinned: own(source, ENVIRONMENT_VARIABLE) !== undefined,
+    });
   }
 
   // Validate-first: the injection runs only after the schema has accepted every
@@ -242,34 +255,52 @@ function loadEagerly<T extends z.ZodType>(schema: T, options?: ResolvedLoadOptio
   return result.data;
 }
 
+interface Failure {
+  readonly environment: string;
+  readonly issues: readonly { readonly parameter: string; readonly message: string }[];
+  readonly values: readonly { readonly ref: ParameterRef; readonly value: string }[];
+  readonly delivery: Delivery;
+  /** Parameter → the variable it was read from, for the refusal that names one. */
+  readonly readFrom: ReadonlyMap<string, string>;
+  /** Whether something pinned `PENV_ENV` for this process. */
+  readonly pinned: boolean;
+}
+
 /**
  * Which refusal a failed validation is, which depends entirely on who is reading
  * it.
  *
- * Two readers, two answers. A required parameter did not arrive in a process
+ * Three readers, three answers. A required parameter did not arrive in a process
  * penv did not start: an adopted application launched the old way, whose remedy
- * is the command rather than the value. Anything else — a value the schema
- * rejects, or a failure inside `penv run`, where the environment was already
- * prepared and checked once — is the plain validation error it has always been.
+ * is the command rather than the value. The same absence in a process that
+ * carries `PENV_ENV` and no contract is an environment a platform delivered
+ * under names penv was never told — the remedy is the map, not the command.
+ * Anything else — a value the schema rejects, or a failure inside `penv run`,
+ * where the environment was already prepared and checked once — is the plain
+ * validation error it has always been.
  *
- * The third reader the tree-reading bridge used to serve, a teammate who has
+ * The fourth reader the tree-reading bridge used to serve, a teammate who has
  * cloned and not yet pulled, is `penv run`'s now: it is the half that knows
  * whether the environment has somewhere to pull *from*, and it refuses before
  * the application starts at all.
  */
-function failure(
-  environment: string,
-  issues: readonly { readonly parameter: string; readonly message: string }[],
-  values: readonly { readonly ref: ParameterRef; readonly value: string }[],
-  invocation: string | undefined,
-): ValidationError {
-  if (invocation !== undefined) {
+function failure(failed: Failure): ValidationError {
+  const { environment, issues, delivery } = failed;
+  if (delivery.invocation !== undefined) {
     return new ValidationError(environment, issues);
   }
-  const delivered = new Set(values.map(({ ref }) => accessPath(ref).join(".")));
+  const delivered = new Set(failed.values.map(({ ref }) => accessPath(ref).join(".")));
   const missing = issues.find((issue) => !delivered.has(issue.parameter));
   if (missing === undefined) {
     return new ValidationError(environment, issues);
+  }
+  if (failed.pinned && Object.keys(delivery.names).length === 0) {
+    return new DeliveryContractMissingError(
+      environment,
+      issues,
+      missing.parameter,
+      failed.readFrom.get(missing.parameter) ?? missing.parameter,
+    );
   }
   return new DirectStartError(environment, issues, missing.parameter, thisCommand());
 }

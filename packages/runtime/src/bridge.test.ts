@@ -14,7 +14,7 @@
  * application starts at all.
  */
 
-import { DirectStartError, ValidationError } from "@penvhq/core";
+import { DeliveryContractMissingError, DirectStartError, ValidationError } from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { DELIVERY_VARIABLE, ENVIRONMENT_VARIABLE, RUN_MARKER, resetDelivery } from "./child-env.js";
@@ -125,6 +125,88 @@ describe("a direct start, outside penv run", () => {
       load(schema, { env: { DATABASE_URL: "postgres://local/app", REDIS_HOST: "127.0.0.1" } }).redis
         .host,
     ).toBe("127.0.0.1");
+  });
+});
+
+/**
+ * The platform case: values in `process.env`, `PENV_ENV` set by hand, and no
+ * contract — so penv reads the default generated name and an `override` has bent
+ * it somewhere else. The two variables are written one line apart by `penv run`,
+ * so one without the other is the finding.
+ */
+describe("an environment a platform delivered, with no contract", () => {
+  const PLATFORM = { ...AMBIENT, [ENVIRONMENT_VARIABLE]: "development" };
+
+  it("names the variable penv read and points at PENV_DELIVERY", () => {
+    const error = loadFails({ ...PLATFORM });
+
+    expect(error).toBeInstanceOf(DeliveryContractMissingError);
+    const refusal = error as DeliveryContractMissingError;
+    expect(refusal.parameter).toBe("redis.host");
+    expect(refusal.variable).toBe("REDIS_HOST");
+    expect(refusal.summary).toBe(
+      "Missing required parameter redis.host for environment development: penv read REDIS_HOST, " +
+        "and this process carries PENV_ENV without the PENV_DELIVERY map that goes with it",
+    );
+    expect(refusal.remedy).toContain("Set PENV_DELIVERY beside the values");
+    expect(refusal.remedy).toContain(
+      'penv run --env development -- node -e "console.log(process.env.PENV_DELIVERY)"',
+    );
+  });
+
+  /**
+   * The quiet half. Under `penv run` the contract is always there, so this copy
+   * must never reach the reader who did start penv properly — they would be told
+   * to set a variable penv had just set for them.
+   */
+  it("is not what a process penv started hears", () => {
+    const error = loadFails(started(AMBIENT));
+
+    expect(error).not.toBeInstanceOf(DeliveryContractMissingError);
+    expect(error).toBeInstanceOf(ValidationError);
+  });
+
+  /** Nor a plain direct start: nothing pinned an environment, so nothing delivered one. */
+  it("is not what a direct start hears", () => {
+    const error = loadFails({ ...AMBIENT });
+
+    expect(error).not.toBeInstanceOf(DeliveryContractMissingError);
+    expect(error).toBeInstanceOf(DirectStartError);
+  });
+});
+
+/**
+ * penv cannot own the application's exception handler, so it owns the error. A
+ * default uncaught-exception print shows `stack`, and what that must open with
+ * is the refusal itself.
+ */
+describe("what an uncaught bridge refusal prints", () => {
+  it("opens with the message and the arrowed remedy", () => {
+    process.argv = ["/usr/bin/node", "index.js"];
+    const refusal = loadFails({ ...AMBIENT }) as DirectStartError;
+
+    expect(refusal.stack?.startsWith(`DirectStartError: ${refusal.summary}`)).toBe(true);
+    expect(refusal.stack).toContain(`\n  → ${refusal.remedy}`);
+    expect(String(refusal)).toBe(`DirectStartError: ${refusal.summary}\n  → ${refusal.remedy}`);
+  });
+
+  it("keeps the caller's frames and drops penv's own", () => {
+    const refusal = loadFails({ ...AMBIENT }) as DirectStartError;
+    const frames = (refusal.stack ?? "")
+      .split("\n")
+      .filter((line) => line.trim().startsWith("at "));
+
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.some((frame) => /load\.ts/.test(frame))).toBe(false);
+    expect(frames[0]).toContain("bridge.test.ts");
+  });
+
+  /** A schema failure inside `penv run` is the same error object, formatted the same way. */
+  it("formats the plain validation refusal identically", () => {
+    const refusal = loadFails(started(AMBIENT)) as ValidationError;
+
+    expect(refusal.stack?.startsWith(`ValidationError: ${refusal.summary}`)).toBe(true);
+    expect(refusal.stack).toContain(`\n  → ${refusal.remedy}`);
   });
 });
 

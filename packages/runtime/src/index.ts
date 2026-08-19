@@ -8,6 +8,7 @@
 
 export {
   ConfigError,
+  DeliveryContractMissingError,
   DirectStartError,
   defineConfig,
   FilenameGrammarError,
@@ -34,6 +35,7 @@ export {
   DELIVERY_VARIABLE,
   deliveredEnvironment,
   ENVIRONMENT_VARIABLE,
+  LAUNCHER_HOME,
   RUN_MARKER,
   SNAPSHOT_VARIABLE,
   strippedVariables,

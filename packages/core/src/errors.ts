@@ -1,7 +1,40 @@
 /**
  * Named errors. Every message names the parameter and environment, says what is
  * wrong, and says how to fix it. Never `Something went wrong`.
+ *
+ * A penv error also renders itself the way the CLI renders one. The CLI can
+ * format what it catches, but the refusals thrown by the application's bridge
+ * are caught by nobody — an app started without `penv run` prints them through
+ * Node's default uncaught-exception handler, which prints `stack`. So `stack`
+ * carries the refusal first and the remedy behind the same arrow every command
+ * prints, and the frames below it are the caller's, not penv's.
  */
+
+/** The remedy marker, one shape everywhere penv answers a question with a command. */
+const REMEDY_ARROW = "→";
+
+/** V8's frame-trimming hook. Absent on a runtime that has no such thing. */
+type CaptureStackTrace = (target: object, below?: (...args: never[]) => unknown) => void;
+
+/** Only the frames — the header V8 wrote is replaced by the refusal. */
+function framesOf(stack: string | undefined): string[] {
+  return (stack ?? "").split("\n").filter((line) => /^\s+at\s/.test(line));
+}
+
+/**
+ * Puts the refusal at the top of `stack`, lazily so a subclass's own `name` and
+ * fields are set by the time anything reads it.
+ */
+function renderRefusal(error: PenvError): void {
+  const captured = error.stack;
+  Object.defineProperty(error, "stack", {
+    configurable: true,
+    get: () => [error.toString(), ...framesOf(captured)].join("\n"),
+    set(value: string) {
+      Object.defineProperty(error, "stack", { value, writable: true, configurable: true });
+    },
+  });
+}
 
 export class PenvError extends Error {
   override readonly name: string = "PenvError";
@@ -9,11 +42,36 @@ export class PenvError extends Error {
   readonly code: string;
   /** What the user should do about it. */
   readonly remedy: string | undefined;
+  /** The message alone, without the remedy the constructor folds into it. */
+  readonly summary: string;
 
   constructor(code: string, message: string, remedy?: string) {
     super(remedy ? `${message}\n  ${remedy}` : message);
     this.code = code;
     this.remedy = remedy;
+    this.summary = message;
+    renderRefusal(this);
+  }
+
+  /**
+   * Drops every frame from `below` upward, so the stack shows where the
+   * application called in rather than the path penv took inside itself. The
+   * caller names its own entry point; nothing here guesses which files are
+   * penv's.
+   */
+  hideFramesAbove(below: (...args: never[]) => unknown): this {
+    const capture = (Error as { captureStackTrace?: CaptureStackTrace }).captureStackTrace;
+    if (capture !== undefined) {
+      capture(this, below);
+      renderRefusal(this);
+    }
+    return this;
+  }
+
+  /** The refusal as every penv command prints it: the message, then the remedy. */
+  override toString(): string {
+    const head = `${this.name}: ${this.summary}`;
+    return this.remedy === undefined ? head : `${head}\n  ${REMEDY_ARROW} ${this.remedy}`;
   }
 }
 
@@ -140,6 +198,48 @@ export class DirectStartError extends ValidationError {
     });
     this.parameter = parameter;
     this.command = command;
+  }
+}
+
+/**
+ * An environment a platform delivered, missing the map that says which variable
+ * each parameter arrived in.
+ *
+ * `penv run` writes `PENV_ENV` and `PENV_DELIVERY` together, one line apart. A
+ * process carrying the first without the second was assembled by hand — a
+ * managed platform's environment store, typically — and penv is reading the
+ * default generated name because it has nothing else to read. Where an
+ * `override` bent that name, the value is sitting in the environment under the
+ * other one, and "missing" points nowhere near the cause.
+ *
+ * So this refusal names the variable penv actually read, which is the fact the
+ * reader cannot see from the outside.
+ */
+export class DeliveryContractMissingError extends ValidationError {
+  override readonly name = "DeliveryContractMissingError";
+  readonly parameter: string;
+  /** The variable penv read, which is the default name when there is no contract. */
+  readonly variable: string;
+
+  constructor(
+    environment: string,
+    issues: readonly { readonly parameter: string; readonly message: string }[],
+    parameter: string,
+    variable: string,
+  ) {
+    super(environment, issues, {
+      message:
+        `Missing required parameter ${parameter} for environment ${environment}: penv read ` +
+        `${variable}, and this process carries PENV_ENV without the PENV_DELIVERY map that ` +
+        "goes with it",
+      remedy:
+        "Set PENV_DELIVERY beside the values — it is the parameter-to-variable map `penv run` " +
+        `writes, and an \`override\` in penv.config.ts is what makes ${variable} unguessable ` +
+        `without it. Capture it with \`penv run --env ${environment} -- node -e ` +
+        '"console.log(process.env.PENV_DELIVERY)"`.',
+    });
+    this.parameter = parameter;
+    this.variable = variable;
   }
 }
 

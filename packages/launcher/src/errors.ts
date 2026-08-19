@@ -12,6 +12,7 @@
 import {
   ENGINE_PACKAGE,
   EXTENSIONS_PATH,
+  LOCAL_EXTENSIONS_PATH,
   MANIFEST_PATH,
   OFFICIAL_SCOPE,
   PenvError,
@@ -161,8 +162,53 @@ export class AddFlagError extends PenvError {
     super(
       "PENV_ADD_FLAG",
       `\`penv add\` does not understand \`${flag}\``,
-      `Run \`penv add <package>\` with \`${TRUST_YOUNG_FLAG}\` or \`--registry <url>\` — those ` +
-        "are the two it takes.",
+      `Run \`penv add <package>\` with \`${TRUST_YOUNG_FLAG}\`, \`--registry <url>\`, or ` +
+        `\`${LOCAL_FLAG}\` — those are the three it takes.`,
+    );
+  }
+}
+
+/** The flag that adds an extension this project builds instead of one a registry publishes. */
+export const LOCAL_FLAG = "--local";
+
+/** `--local` asked for something only a published release has. */
+export class AddLocalFlagError extends PenvError {
+  override readonly name = "AddLocalFlagError";
+
+  constructor(subject: string) {
+    super(
+      "PENV_ADD_LOCAL_FLAG",
+      `\`penv add ${LOCAL_FLAG}\` cannot take ${subject}`,
+      `${LOCAL_FLAG} adds the package this project already builds, so there is no release to ` +
+        "name and nothing to pin. Publish it and run `penv add <package>` to pin one.",
+    );
+  }
+}
+
+/** `--local` on a package the project does not have. */
+export class LocalExtensionUnresolvedError extends PenvError {
+  override readonly name = "LocalExtensionUnresolvedError";
+
+  constructor(name: string, root: string) {
+    super(
+      "PENV_LOCAL_EXTENSION_UNRESOLVED",
+      `${name} does not resolve from ${root}`,
+      `${LOCAL_FLAG} records that penv should read this package out of the project, so the ` +
+        "project has to have it — add it as a dependency of the root (a workspace link is one), " +
+        "then run this again.",
+    );
+  }
+}
+
+/** `penv add --local` on a machine with nobody at it. */
+export class AddLocalInCiError extends PenvError {
+  override readonly name = "AddLocalInCiError";
+
+  constructor(name: string) {
+    super(
+      "PENV_ADD_LOCAL_IN_CI",
+      `Adding ${name} writes ${LOCAL_EXTENSIONS_PATH}, and CI does not decide what a project develops`,
+      `Run \`penv add ${LOCAL_FLAG} ${name}\` from a terminal and commit what it writes.`,
     );
   }
 }

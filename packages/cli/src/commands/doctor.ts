@@ -67,6 +67,7 @@ import {
   isSecret,
   isStuck,
   openValue,
+  RECORDS_PATH,
   resolveAll,
   rotationOf,
   tryParseDuration,
@@ -83,7 +84,7 @@ import {
   sourceProviderFor,
   targetEnvironment,
 } from "../project.js";
-import { LOCAL_TREE_TYPE } from "../registry.js";
+import { LOCAL_TREE_TYPE, localExtensions } from "../registry.js";
 import type { DriftReport } from "../schema.js";
 import { computeDrift, lookup, minLengthOf } from "../schema.js";
 import { out } from "../style.js";
@@ -118,6 +119,7 @@ export type DoctorCheck =
   | "weak"
   | "unused"
   | "unscoped-fallback"
+  | "secrecy-undeclared"
   | "plaintext-secret"
   | "public-secret"
   | "encryption"
@@ -130,6 +132,7 @@ export type DoctorCheck =
   | "projection-manual-edit"
   | "projection-value-drift"
   | "environment-flag-shadow"
+  | "local-extension"
   | "artifact-in-tree";
 
 export interface DoctorFinding {
@@ -271,6 +274,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     findings.push(...unusedFindings(drift));
   }
   findings.push(...fallbackFindings(subjects, environment));
+  findings.push(...secrecyFindings(subjects, environment));
   findings.push(...plaintextSecretFindings(subjects, environment));
   findings.push(...publicSecretFindings(subjects, environment, project.config));
   findings.push(...encryptionFindings(subjects, environment));
@@ -289,6 +293,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   }
   findings.push(...(await providerDriftFindings(project, environment, options.source)));
   findings.push(...(await projectionFindings(project, environment, options.projection)));
+  findings.push(...localExtensionFindings(project));
   findings.push(...artifactFindings(project));
 
   findings.push({
@@ -474,6 +479,49 @@ function fallbackFindings(subjects: readonly Subject[], environment: string): Do
       severity: "pass",
       label: "Scoped resolution",
       subject: `no parameter falls back to the unscoped default for ${environment}`,
+    },
+  ];
+}
+
+/**
+ * The question the encryption checks are answers to, asked of the meta itself.
+ *
+ * Encryption is policy-driven (invariant 14): meta declares what must be sealed
+ * and the filename is never the authority. So a parameter whose meta says
+ * nothing about secrecy is not "not a secret" — it is one penv has never been
+ * told about, and `plaintext-secret` reporting a clean run over it is a promise
+ * made from an empty file. That is what the fourth verdict is for.
+ *
+ * Summarized once. Twenty-five parameters with no meta is one fact about the
+ * project, and twenty-five identical rows would bury every other check.
+ */
+function secrecyFindings(subjects: readonly Subject[], environment: string): DoctorFinding[] {
+  const undeclared = subjects.filter(
+    ({ meta }) => effectiveMeta(meta, environment).secret === undefined,
+  );
+
+  if (undeclared.length === 0) {
+    return [
+      {
+        check: "secrecy-undeclared",
+        severity: "pass",
+        label: "Secrecy policy",
+        subject:
+          subjects.length === 0
+            ? `no parameter resolves for ${environment}`
+            : `every parameter declares whether it is secret for ${environment}`,
+      },
+    ];
+  }
+
+  return [
+    {
+      check: "secrecy-undeclared",
+      severity: "unknown",
+      label: "Secrecy policy",
+      subject: `${undeclared.length} of ${subjects.length} declare neither way for ${environment}`,
+      detail: "penv was never told which of these values must be encrypted",
+      remedy: `declare \`"secret": true\` or \`"secret": false\` in a parameter's meta file, ${RECORDS_PATH}/<name>.json`,
     },
   ];
 }
@@ -958,6 +1006,39 @@ function scannableFiles(directory: string, out: string[]): void {
  * The scan is bounded by what the writer produces: canonical JSON, so `.json`
  * files only, under a megabyte, outside `.git` and `node_modules`.
  */
+/**
+ * The extensions this project develops rather than pins.
+ *
+ * Nothing is wrong with the arrangement — a repository that writes a provider
+ * has to be able to use it — but nothing pins the bytes either, so penv cannot
+ * say the adapter here is the adapter anyone else gets. That is the `?` verdict:
+ * reported so the state is visible in the same place every other decision is,
+ * rather than living only in whoever's `node_modules` happens to hold it.
+ */
+function localExtensionFindings(project: Project): DoctorFinding[] {
+  const names = localExtensions(project.root);
+  if (names.length === 0) {
+    return [
+      {
+        check: "local-extension",
+        severity: "pass",
+        label: "Extensions",
+        subject: "every extension this project names is pinned",
+      },
+    ];
+  }
+  return [
+    {
+      check: "local-extension",
+      severity: "unknown",
+      label: "Extensions",
+      subject: names.join(", "),
+      detail: "resolved from this project's node_modules — no release, no pinned bytes",
+      remedy: `publish it and run \`penv add ${names[0]}\` when this stops being a development path`,
+    },
+  ];
+}
+
 function artifactFindings(project: Project): DoctorFinding[] {
   const files: string[] = [];
   scannableFiles(project.root, files);
