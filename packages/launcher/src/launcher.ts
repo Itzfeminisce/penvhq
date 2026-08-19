@@ -38,6 +38,7 @@ import {
   PackageMissingError,
 } from "./errors.js";
 import type { Fetcher } from "./fetcher.js";
+import { printAddHelp, printInstallHelp, printLauncherCommands } from "./help.js";
 import { launcherUpdateCommand } from "./home.js";
 import type { LauncherIo } from "./io.js";
 import { releaseEnginePin } from "./pins.js";
@@ -205,6 +206,20 @@ async function launch(options: LauncherOptions): Promise<number> {
   const { noDownload, forwarded } = splitLauncherFlags(argv);
   const first = forwarded[0];
   const home = penvHome(env);
+
+  // The engine has never heard of `install` or `add`, so their help is the
+  // launcher's — and it answers outside a project too, where a reader asking
+  // what `penv install` is has not adopted one yet.
+  if (first !== undefined && forwarded.slice(1).some((token) => HELP_FLAGS.has(token))) {
+    if (first === INSTALL) {
+      printInstallHelp(io);
+      return 0;
+    }
+    if (first === ADD) {
+      printAddHelp(io);
+      return 0;
+    }
+  }
 
   const project = findProject(cwd);
 
@@ -424,22 +439,36 @@ async function addExtension(
   return delegate(options, engine, onboard, home, options.cwd);
 }
 
+/** The root help — no command at all, or a help flag before one. */
+function isRootHelp(forwarded: readonly string[]): boolean {
+  const first = forwarded[0];
+  return first === undefined || HELP_FLAGS.has(first);
+}
+
 /**
  * The child gets the resolved store, because the engine loads the extensions the
  * launcher just verified out of it and the two must not disagree about where it
  * is. Everything else about the environment is the user's.
+ *
+ * The root help comes back with the launcher's own commands appended. Neither
+ * half describes the other: the engine lists what it can run, and the two
+ * commands that never reach it are printed by the program that does run them.
  */
-function delegate(
+async function delegate(
   options: LauncherOptions,
   engine: Engine,
   forwarded: readonly string[],
   home: string,
   cwd: string,
 ): Promise<number> {
-  return options.spawn({
+  const code = await options.spawn({
     command: process.execPath,
     args: [engine.entry, ...forwarded],
     cwd,
     env: { ...options.env, [PENV_HOME_VAR]: home },
   });
+  if (code === 0 && isRootHelp(forwarded)) {
+    printLauncherCommands(options.io);
+  }
+  return code;
 }
