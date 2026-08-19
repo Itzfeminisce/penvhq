@@ -196,8 +196,19 @@ describe("the published artifact", () => {
    * is still empty": a bound entry rejects a field the provider never declared,
    * an empty map accepts anything through the base index signature. The second
    * is the finding's exact typo.
+   *
+   * The scratch project *declares* `@penvhq/core`, which is the layout `penv
+   * init` and `penv upgrade` now write — and the only one that holds under every
+   * package manager, since pnpm's strict layout puts a transitive dependency
+   * nowhere the project can resolve. What proves the plan writes that line is
+   * `install.test.ts`; this proves the declaration binds once it is there.
    */
-  it("binds a committed provider declaration to the map defineConfig reads", () => {
+  it("binds a committed provider declaration, with @penvhq/core declared as init writes it", () => {
+    const consumer: unknown = JSON.parse(readFileSync(join(project, "package.json"), "utf8"));
+    expect(
+      (consumer as { dependencies?: Record<string, string> }).dependencies?.["@penvhq/core"],
+    ).toBeDefined();
+
     writeFileSync(
       join(project, "provider.d.ts"),
       `export {};

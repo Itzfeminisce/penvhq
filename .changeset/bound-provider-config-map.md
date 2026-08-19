@@ -1,18 +1,30 @@
 ---
 "@penvhq/penv": minor
 "@penvhq/launcher": minor
+"@penvhq/cli": minor
 ---
 
 Committed provider declarations now bind.
 
-**`@penvhq/penv` takes `@penvhq/core` as a real dependency.** A project still
-declares one penv package; the graph below it is the resolver's business. This is
-the whole of the fix, and it is a type-identity fix: `@penvhq/penv` bundled the
-declaration types, so its `dist/index.d.ts` carried its own inlined copy of
-`interface ProviderConfigMap` and imported nothing from `@penvhq/core`. Every
-provider declaration `penv add` commits augments the map in module
-`"@penvhq/core"` — so two interfaces shared a name, and the augmentation landed
-on the one `defineConfig` never consulted.
+**`penv init` and `penv upgrade` declare `@penvhq/core` as a devDependency.**
+This is the half without which nothing else works. `penv add` commits a
+`declare module "@penvhq/core"` block, and TypeScript resolves that specifier
+from the project's own files — so under pnpm's strict layout, where a transitive
+dependency is not at the project root, the specifier resolves to nothing. An
+augmentation whose module cannot be found is not an error: it silently degrades
+to an *ambient* declaration, and no diagnostic anywhere says so. It is `dev`
+because that is the whole of what it is — a type-only augmentation target that no
+application code imports, so the one runtime dependency is still one. It joins
+the plan under the same one consent, and a project that already declares it at
+any version is left alone. An upgrade carries it into a project adopted before
+it, which is the migration for every repository holding declarations today.
+
+**`@penvhq/penv` takes `@penvhq/core` as a real dependency**, so the map it
+holds config against is the one every provider is told to augment. It bundled
+the declaration types, so its `dist/index.d.ts` carried its own inlined copy of
+`interface ProviderConfigMap` and imported nothing from `@penvhq/core`: two
+interfaces shared a name, and the augmentation landed on the one `defineConfig`
+never consulted.
 
 The last release's claim that a misspelled Vercel target is a compile error was
 false in the published artifact: `targets: { production: "producton" }` compiled
