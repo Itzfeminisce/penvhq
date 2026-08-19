@@ -22,6 +22,7 @@
     "packages/**/src/**/*.ts",
     "packages/**/*.test-d.ts",
     "*.ts",
-    "packages/**/tsup.config.ts"
+    "packages/**/tsup.config.ts",
+    "packages/**/penv.d.ts"
   ]
 }

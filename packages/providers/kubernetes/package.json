@@ -15,15 +15,17 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "penv.d.ts"
   ],
+  "penv": {
+    "types": "penv.d.ts"
+  },
   "scripts": {
     "build": "tsup"
   },
-  "dependencies": {
-    "@penvhq/core": "workspace:*"
-  },
   "devDependencies": {
+    "@penvhq/core": "workspace:*",
     "@penvhq/provider-contract": "workspace:*"
   }
 }

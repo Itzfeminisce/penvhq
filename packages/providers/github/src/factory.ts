@@ -8,17 +8,8 @@
 import type { ProjectionProvider, ProviderFactoryContext } from "@penvhq/core";
 import { createGithubProvider } from "./github.js";
 
-declare module "@penvhq/core" {
-  interface ProviderConfigMap {
-    "@penvhq/provider-github": {
-      /**
-       * The repository penv maps the projection onto — `owner/repo`. Left
-       * unset, `gh` resolves it from the working directory.
-       */
-      readonly location?: string;
-    };
-  }
-}
+// The config shape this factory reads is declared once, in `penv.d.ts` — the
+// file `penv.types` ships and `penv add` commits into the project.
 
 /** Builds the GitHub provider for one environment's declared destination. */
 export function penvProviderFactory(context: ProviderFactoryContext): ProjectionProvider {
