@@ -367,20 +367,14 @@ function scanForbidden(value: unknown, path: PathSegment[]): ManifestError | und
   return undefined;
 }
 
-/**
- * What clears the refusal, for whatever section the bad field sits in.
- *
- * An extension entry has a command that rewrites it. The engine pin has none —
- * no penv command moves it — so the remedy says what to write instead of naming
- * something that would refuse the same way when it read the same file.
- */
+/** What clears the refusal, for whatever section the bad field sits in. */
 function sectionRemedy(path: readonly PathSegment[]): string {
   const [section, name] = path;
   if (section === "engine") {
     return (
-      `Restore it with \`git checkout ${MANIFEST_PATH}\`, or write the exact version and the ` +
-      `\`integrity\` npm published for that ${ENGINE_PACKAGE} release. penv runs the bytes this ` +
-      "pin names, so it will not guess one."
+      `Restore it with \`git checkout ${MANIFEST_PATH}\`, or run \`penv upgrade <version>\` to ` +
+      `write the pin again — it takes the \`integrity\` npm published for that ${ENGINE_PACKAGE} ` +
+      "release rather than asking you for it."
     );
   }
   if (section === "extensions" && typeof name === "string") {

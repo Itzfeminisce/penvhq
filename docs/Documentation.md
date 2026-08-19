@@ -55,6 +55,8 @@ That package is the typed `@env` surface and its validation helpers, and it is t
 
 There is one version to know: `penv --version` prints one line — the engine your project pins when you are inside a project.
 
+**`penv upgrade [version]` is what moves it.** It resolves the release from npm — no version means the latest — and writes the manifest's pin with the integrity npm published for those exact bytes, never one computed on your machine. The project's `@penvhq/penv` moves to the same exact version through the package manager your repository already uses. Both changes are shown before either happens, and one answer covers both: decline, and neither file is touched. Extensions keep their own pins — `penv add <package>@<version>` moves one.
+
 ## Quickstart
 
 Adopting penv is one conversational command. It shows you what it found, asks what to adopt, and moves nothing until everything it needs has passed:
@@ -837,7 +839,7 @@ Reporting is all it does. penv will not materialise a value file from a declarat
 | `penv run -- <command>` | Resolve, validate, and start `<command>` in a penv-owned child environment. `--source` defaults to `project`; `--env` falls back to `defaultEnvironment`; `--watch` opts into provider-backed restarts. |
 | `penv migrate` | Convert a project written under an earlier layout to `.penv/state/`. Previews first, moves records on approval, leaves your schema, config, and loader byte-identical. |
 | `penv add <package>[@<version>]` | Add a provider extension: record it in the manifest with its integrity, install it into the launcher's cache, generate its type declaration, offer the config edit and any onboarding step. `--registry <url>` for a private registry; `--trust-young` overrides the seven-day age gate; `--local` records a provider this repository builds, pinning nothing. |
-| `penv upgrade [version]` | Move the pinned engine and the project's `@penvhq/penv` dependency together. |
+| `penv upgrade [version]` | Move the pinned engine and the project's `@penvhq/penv` dependency to the same exact version. No version takes whatever `latest` points at. Shows both file changes and asks once; `--yes` answers in advance, and an unattended run needs it *and* an explicit version. Extensions keep their own pins. |
 | `penv install` | Install the exact engine and extensions the manifest pins. The preinstall step for CI and production, which never download during a run. |
 | `penv import <file>` | Import an existing dotenv file; it becomes the source of truth. The filename names the scope the values are written at (`.env.production` → `<name>.production`); `--env` names it for a file that doesn't, and contradicting the filename is an error. |
 | `penv generate` | Write a standard `.env` artifact for deploy targets. |

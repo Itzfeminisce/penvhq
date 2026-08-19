@@ -32,7 +32,7 @@ Everything below describes the *finished* design (see docs). This table says whe
 | Provider unification — `sinks` deleted, `@penvhq/provider-github`, `push`/`pull` against every provider | Yes | v0.7 (npm 0.5.0) |
 | Ambient delivery — blessed `process.env` mirror via `load(schema, { inject: true })`, schema exclusivity, per-framework seams, `override` rename | Yes | v0.8 (npm 0.6.0–0.7.0) |
 | `doctor`'s `ambient-shadow` check | Yes | after v0.9 |
-| `penv upgrade [version]` — moving the pinned engine and the runtime dependency together | Yes | after v0.9 |
+| `penv upgrade [version]` — moving the pinned engine and the runtime dependency together | Yes | v0.9 |
 | Two-module scaffold — `penv.schema.ts` shape + `.penv/env.ts` loader, tooling `load(schema.pick({…}))`, stray-code-file diagnosis | Yes | v0.8 (npm 0.8.0) |
 | Embedded snapshot — `penv snapshot`, `penv.snapshot.ts`, `source` pinning, digest staleness | No longer | shipped v0.8 (npm 0.8.0); **retired v0.9** |
 | Fully-qualified provider `type`, declaration-merged config types, `location` | Yes | v0.7 (npm 0.5.0) |
@@ -200,7 +200,7 @@ Decided 2026-07-19; the [v0.8 plan](./v0.8-plan.md) owns *how*, the RFC's "The a
 
 Decided 2026-08-17; the [PRD](./PRD-Developer-First-Execution-and-Delivery.md) (including its sealed adoption-friction review) owns *what*, the `docs/rebuild/` issue set owns *how*, and the RFC's five new sections — the launcher/engine split, `.penv/state/`, the all-or-nothing cutover, the external artifact, and the run-ergonomics seals — own *why*. In brief:
 
-- A **global launcher** (`penv`) and a project-pinned **engine** (`@penvhq/cli`). `.penv/state/manifest.json` is the committed contract naming the exact engine and extension versions with their integrity; the launcher resolves them from `$PENV_HOME` and delegates. A newer launcher never upgrades a project — the committed manifest is the only thing that moves a pin, and `penv install` fetches exactly what it names. One user-visible version: `penv --version` prints one line.
+- A **global launcher** (`penv`) and a project-pinned **engine** (`@penvhq/cli`). `.penv/state/manifest.json` is the committed contract naming the exact engine and extension versions with their integrity; the launcher resolves them from `$PENV_HOME` and delegates. A newer launcher never upgrades a project — the committed manifest is the only thing that moves a pin, and `penv install` fetches exactly what it names. `penv upgrade [version]` is what moves it, taking the integrity from the registry and moving the `@penvhq/penv` dependency with it. One user-visible version: `penv --version` prints one line.
 - **One runtime dependency**, `@penvhq/penv`, pinned to the engine's version. Provider extensions are installed by the launcher via `penv add <package>` and never enter `package.json`; each contributes a committed, type-only declaration under `.penv/state/extensions/`.
 - **`.penv/state/`** holds Penv-managed project state — manifest, records, extension declarations, and adoption recovery state — under one committed safety boundary. `penv migrate` converts an existing project on approval; the engine reads only the new layout and refuses an unmigrated one by name. This supersedes the PRD's "migration window" sentence: there is no dual-layout engine, because a fallback is how a layout silently becomes two layouts.
 - **`penv run -- <command>`** starts the developer's command as an opaque child of a validated, penv-owned environment. `--source` defaults to `project`; `--env` falls back to a declared `defaultEnvironment`. It contacts no provider, ever; `--watch` is the one opt-in mode that may synchronize.
@@ -211,8 +211,6 @@ Decided 2026-08-17; the [PRD](./PRD-Developer-First-Execution-and-Delivery.md) (
 Ships as one breaking release: the launcher (`penv`), the engine (`@penvhq/cli`), and `@penvhq/penv` carry the same version, which is what makes "one visible version" true on the npm side as well as at the keyboard.
 
 **Gate to advance:** the PRD's first-user journey runs end to end on a real project — `penv init` adopts a detected dotenv cascade with no partial state, the first `penv run -- pnpm dev` after cutover starts the app with zero edits to the drafted `penv.schema.ts`, and a container release built by `penv artifact build` starts from the artifact alone, with no `penv.config.ts`, no `.penv/` tree, no provider adapter, and no network.
-
-**Resequenced after v0.9.** `penv upgrade [version]` — the one command that moves the manifest's engine pin and the project's `@penvhq/penv` dependency together — is not built at v0.9. The launcher ships `penv install` and `penv add`; until `upgrade` lands, a pin moves by editing the committed manifest and the runtime dependency, which is the same edit `upgrade` will make on your behalf.
 
 **Accepted cost, carried from the PRD's friction review.** Retiring the committed snapshot means a clone no longer deploys by itself: CI must build the sealed artifact. Copy-paste artifact recipes for the major CI systems and platform-native delivery guides for Vercel and Cloudflare ship with this milestone, not after it.
 
