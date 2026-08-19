@@ -128,17 +128,16 @@ importers:
         version: 4.4.3
 
   packages/providers/github:
-    dependencies:
+    devDependencies:
       '@penvhq/core':
         specifier: workspace:*
         version: link:../../core
 
   packages/providers/kubernetes:
-    dependencies:
+    devDependencies:
       '@penvhq/core':
         specifier: workspace:*
         version: link:../../core
-    devDependencies:
       '@penvhq/provider-contract':
         specifier: workspace:*
         version: link:../contract
@@ -154,27 +153,25 @@ importers:
         version: link:../contract
 
   packages/providers/ssm:
-    dependencies:
+    devDependencies:
       '@penvhq/core':
         specifier: workspace:*
         version: link:../../core
-    devDependencies:
       '@penvhq/provider-contract':
         specifier: workspace:*
         version: link:../contract
 
   packages/providers/vault:
-    dependencies:
+    devDependencies:
       '@penvhq/core':
         specifier: workspace:*
         version: link:../../core
-    devDependencies:
       '@penvhq/provider-contract':
         specifier: workspace:*
         version: link:../contract
 
   packages/providers/vercel:
-    dependencies:
+    devDependencies:
       '@penvhq/core':
         specifier: workspace:*
         version: link:../../core
