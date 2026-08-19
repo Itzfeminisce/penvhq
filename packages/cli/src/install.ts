@@ -19,6 +19,14 @@
  * has to get right is the plan, the consent, and the refusal when the install
  * does not happen.
  *
+ * A plan is a list of steps, because in a workspace "the project's dependency"
+ * is plural. pnpm refuses a bare `add` at a workspace root (`-w` is how you say
+ * you meant the root), and a workspace package that declares `@penvhq/penv`
+ * itself is a second copy of the very version the manifest pins — one repository
+ * ran the 0.8 bridge under a 0.11 pin for three releases because nothing looked
+ * below the root. So every `package.json` that declares it moves, under one
+ * consent, and the commands shown are the ones that run.
+ *
  * Two commands write that dependency line: `penv init`, which is the engine's,
  * and `penv upgrade`, which is the launcher's. This module is published at
  * `@penvhq/cli/install` so the launcher reaches it without loading the command
@@ -26,8 +34,8 @@
  * rather than a second copy on the other side of the launcher/engine split.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 import { PenvError } from "@penvhq/core";
 import { startChild } from "./child.js";
 
@@ -48,13 +56,35 @@ const LOCKFILES: readonly (readonly [PackageManager, string])[] = [
   ["npm", "package-lock.json"],
 ];
 
-/** How each manager is told to add one exact version. */
-const ADD: Readonly<Record<PackageManager, readonly string[]>> = {
-  pnpm: ["pnpm", "add", "--save-exact"],
-  npm: ["npm", "install", "--save-exact"],
-  yarn: ["yarn", "add", "--exact"],
-  bun: ["bun", "add", "--exact"],
+/** How each manager is told to add a package. */
+const ADD: Readonly<Record<PackageManager, readonly [string, string]>> = {
+  pnpm: ["pnpm", "add"],
+  npm: ["npm", "install"],
+  yarn: ["yarn", "add"],
+  bun: ["bun", "add"],
 };
+
+/** How each manager is told to write the version down exactly, with no range. */
+const EXACT: Readonly<Record<PackageManager, string>> = {
+  pnpm: "--save-exact",
+  npm: "--save-exact",
+  yarn: "--exact",
+  bun: "--exact",
+};
+
+/** How each manager is told to keep the dependency in the block it is already in. */
+const DEV: Readonly<Record<PackageManager, string>> = {
+  pnpm: "-D",
+  npm: "--save-dev",
+  yarn: "--dev",
+  bun: "--dev",
+};
+
+/** pnpm refuses an install at a workspace root without this — `ERR_PNPM_ADDING_TO_ROOT`. */
+const WORKSPACE_ROOT_FLAG = "-w";
+
+/** pnpm's workspace file, which is both what declares the members and what makes the root refuse. */
+const PNPM_WORKSPACE = "pnpm-workspace.yaml";
 
 /** One package the adopted project needs, and what its `package.json` says today. */
 export interface InstallPackage {
@@ -66,16 +96,26 @@ export interface InstallPackage {
   readonly satisfied: boolean;
 }
 
+/** One `package.json` the install rewrites, and the command that rewrites it. */
+export interface InstallStep {
+  /** The file the diff names — `package.json`, or a workspace package's path to it. */
+  readonly manifest: string;
+  /** Everything this file needs, in the order the diff shows them. */
+  readonly packages: readonly InstallPackage[];
+  /** The command, argv-shaped — run from the project root, whichever file it writes. */
+  readonly command: readonly string[];
+  /** True when this file already declares every one of them. */
+  readonly satisfied: boolean;
+}
+
 export interface InstallPlan {
   readonly root: string;
   readonly manager: PackageManager;
-  /** Everything an adopted project needs, in the order the diff shows them. */
-  readonly packages: readonly InstallPackage[];
-  /** The command, argv-shaped — what runs, and what a refusal tells the user to run. */
-  readonly command: readonly string[];
+  /** The root's `package.json` first, then every workspace package that declares the runtime one. */
+  readonly steps: readonly InstallStep[];
   /** The lockfile the manager will rewrite, when the project has one. */
   readonly lockfile?: string;
-  /** True when every package is already there — nothing to install. */
+  /** True when every step is already satisfied — nothing to install. */
   readonly satisfied: boolean;
 }
 
@@ -177,19 +217,189 @@ function manifestOf(root: string): Record<string, unknown> | undefined {
   }
 }
 
-/** What `package.json` says about one package today, from either dependency block. */
-function declaredVersion(root: string, name: string): string | undefined {
-  const manifest = manifestOf(root);
+/** What one `package.json` says about a package today, and which block says it. */
+interface Declaration {
+  readonly version: string;
+  /** True when it sits in `devDependencies` — where an install has to leave it. */
+  readonly dev: boolean;
+}
+
+function declaredIn(dir: string, name: string): Declaration | undefined {
+  const manifest = manifestOf(dir);
   for (const field of ["dependencies", "devDependencies"] as const) {
     const block: unknown = manifest?.[field];
     if (block !== null && typeof block === "object" && !Array.isArray(block)) {
       const version: unknown = (block as Record<string, unknown>)[name];
       if (typeof version === "string") {
-        return version;
+        return { version, dev: field === "devDependencies" };
       }
     }
   }
   return undefined;
+}
+
+/** True when `root` is the root of a pnpm workspace, which is what `-w` is for. */
+export function isPnpmWorkspaceRoot(root: string): boolean {
+  return existsSync(join(root, PNPM_WORKSPACE)) && existsSync(join(root, "package.json"));
+}
+
+/** The `packages:` list from `pnpm-workspace.yaml`, block or flow form. */
+function workspaceGlobs(root: string): string[] {
+  let text: string;
+  try {
+    text = readFileSync(join(root, PNPM_WORKSPACE), "utf8");
+  } catch {
+    return [];
+  }
+  const unquote = (raw: string): string => raw.replace(/^['"]|['"]$/g, "").trim();
+  const globs: string[] = [];
+  let inside = false;
+  for (const line of text.split(/\r?\n/)) {
+    const flow = /^packages:\s*\[(.*)\]\s*$/.exec(line);
+    if (flow?.[1] !== undefined) {
+      return flow[1]
+        .split(",")
+        .map(unquote)
+        .filter((glob) => glob !== "");
+    }
+    if (/^packages:\s*$/.test(line)) {
+      inside = true;
+      continue;
+    }
+    if (!inside) {
+      continue;
+    }
+    const item = /^\s+-\s*(.+?)\s*$/.exec(line);
+    if (item?.[1] !== undefined) {
+      globs.push(unquote(item[1]));
+      continue;
+    }
+    if (line.trim() !== "" && !line.trimStart().startsWith("#")) {
+      break;
+    }
+  }
+  return globs;
+}
+
+function directoriesIn(dir: string): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name !== "node_modules")
+      .map((entry) => join(dir, entry.name));
+  } catch {
+    return [];
+  }
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** `packages/*` and `apps/**` against the filesystem, one path segment at a time. */
+function expandGlob(root: string, glob: string): string[] {
+  let dirs = [root];
+  for (const segment of glob.split("/").filter((part) => part !== "" && part !== ".")) {
+    const next: string[] = [];
+    for (const dir of dirs) {
+      if (segment === "**") {
+        const stack = [dir];
+        while (stack.length > 0) {
+          const current = stack.pop() as string;
+          next.push(current);
+          stack.push(...directoriesIn(current));
+        }
+        continue;
+      }
+      if (segment.includes("*")) {
+        const pattern = new RegExp(
+          `^${segment.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*")}$`,
+        );
+        next.push(
+          ...directoriesIn(dir).filter((child) => pattern.test(child.slice(dir.length + 1))),
+        );
+        continue;
+      }
+      const candidate = join(dir, segment);
+      if (isDirectory(candidate)) {
+        next.push(candidate);
+      }
+    }
+    dirs = next;
+  }
+  return dirs;
+}
+
+/**
+ * Every workspace package that declares `@penvhq/penv` itself, root excluded.
+ *
+ * Only the ones that already declare it: penv moves a dependency a package
+ * chose, and adding one to a package that never asked for it is a different
+ * decision than the one being consented to.
+ */
+function workspaceMembers(root: string, name: string): string[] {
+  if (!isPnpmWorkspaceRoot(root)) {
+    return [];
+  }
+  const globs = workspaceGlobs(root);
+  const excluded = globs
+    .filter((glob) => glob.startsWith("!"))
+    .flatMap((glob) => expandGlob(root, glob.slice(1)));
+  const found = new Set<string>();
+  for (const glob of globs.filter((entry) => !entry.startsWith("!"))) {
+    for (const dir of expandGlob(root, glob)) {
+      if (dir !== root && !excluded.includes(dir) && declaredIn(dir, name) !== undefined) {
+        found.add(dir);
+      }
+    }
+  }
+  return [...found].sort();
+}
+
+/** The path a diff shows for one of them, in the spelling every penv path uses. */
+function manifestPathOf(root: string, dir: string): string {
+  const within = relative(root, dir)
+    .split(sep)
+    .filter((part) => part !== "");
+  return [...within, "package.json"].join("/");
+}
+
+function addCommand(
+  manager: PackageManager,
+  options: { readonly filter?: string; readonly workspaceRoot: boolean; readonly dev: boolean },
+  specs: readonly string[],
+): string[] {
+  const [bin, verb] = ADD[manager];
+  return [
+    bin,
+    ...(options.filter === undefined ? [] : ["--filter", options.filter]),
+    verb,
+    ...(options.workspaceRoot ? [WORKSPACE_ROOT_FLAG] : []),
+    EXACT[manager],
+    ...(options.dev ? [DEV[manager]] : []),
+    ...specs,
+  ];
+}
+
+function stepFor(
+  manager: PackageManager,
+  manifest: string,
+  packages: readonly InstallPackage[],
+  options: { readonly filter?: string; readonly workspaceRoot: boolean; readonly dev: boolean },
+): InstallStep {
+  const pending = packages.filter((entry) => !entry.satisfied);
+  const specs = (pending.length === 0 ? packages : pending).map(
+    (entry) => `${entry.name}@${entry.version}`,
+  );
+  return {
+    manifest,
+    packages,
+    command: addCommand(manager, options, specs),
+    satisfied: pending.length === 0,
+  };
 }
 
 export function planInstall(root: string, version: string = engineVersion()): InstallPlan {
@@ -197,37 +407,68 @@ export function planInstall(root: string, version: string = engineVersion()): In
   const lockfile = LOCKFILES.find(
     ([name, file]) => name === manager && existsSync(join(root, file)),
   )?.[1];
+  const workspaceRoot = manager === "pnpm" && isPnpmWorkspaceRoot(root);
 
-  const runtimeDeclared = declaredVersion(root, RUNTIME_PACKAGE);
-  const zodDeclared = declaredVersion(root, SCHEMA_PACKAGE);
+  const runtime = declaredIn(root, RUNTIME_PACKAGE);
+  const zod = declaredIn(root, SCHEMA_PACKAGE);
   const packages: InstallPackage[] = [
     {
       name: RUNTIME_PACKAGE,
       version,
-      ...(runtimeDeclared === undefined ? {} : { declared: runtimeDeclared }),
-      satisfied: runtimeDeclared === version,
+      ...(runtime === undefined ? {} : { declared: runtime.version }),
+      satisfied: runtime?.version === version,
     },
     {
       name: SCHEMA_PACKAGE,
       version: schemaPackageVersion(),
-      ...(zodDeclared === undefined ? {} : { declared: zodDeclared }),
+      ...(zod === undefined ? {} : { declared: zod.version }),
       // Any declared zod counts: which zod a project uses is the project's
       // decision, and penv is here to make sure there is one, not to move it.
-      satisfied: zodDeclared !== undefined,
+      satisfied: zod !== undefined,
     },
   ];
 
+  // The block a package chose is the block penv writes back to — but only when
+  // every package this step installs lives there, since one command names one.
   const pending = packages.filter((entry) => !entry.satisfied);
-  const specs = (pending.length === 0 ? packages : pending).map(
-    (entry) => `${entry.name}@${entry.version}`,
-  );
+  const steps: InstallStep[] = [
+    stepFor(manager, "package.json", packages, {
+      workspaceRoot,
+      dev:
+        runtime?.dev === true &&
+        pending.every((entry) => entry.name === RUNTIME_PACKAGE) &&
+        pending.length > 0,
+    }),
+  ];
+  for (const dir of workspaceMembers(root, RUNTIME_PACKAGE)) {
+    const declared = declaredIn(dir, RUNTIME_PACKAGE) as Declaration;
+    steps.push(
+      stepFor(
+        manager,
+        manifestPathOf(root, dir),
+        [
+          {
+            name: RUNTIME_PACKAGE,
+            version,
+            declared: declared.version,
+            satisfied: declared.version === version,
+          },
+        ],
+        {
+          filter: `./${relative(root, dir).split(sep).join("/")}`,
+          workspaceRoot: false,
+          dev: declared.dev,
+        },
+      ),
+    );
+  }
+
   return {
     root,
     manager,
-    packages,
-    command: [...ADD[manager], ...specs],
+    steps,
     ...(lockfile === undefined ? {} : { lockfile }),
-    satisfied: pending.length === 0,
+    satisfied: steps.every((step) => step.satisfied),
   };
 }
 
@@ -235,22 +476,19 @@ function describe(entry: InstallPackage): string {
   return `${entry.name} ${entry.version}`;
 }
 
-/**
- * The change, as it will appear in the diff — the whole point of showing it is
- * that the reader recognises their own file, so these are the `package.json`
- * lines that land and the lockfile that gets rewritten, not a summary of both.
- */
-export function renderInstallPlan(plan: InstallPlan): string[] {
-  if (plan.satisfied) {
-    return [
-      `package.json already has ${plan.packages.map(describe).join(" and ")} — nothing to install.`,
-    ];
-  }
-  const pending = plan.packages.filter((entry) => !entry.satisfied);
+/** What this plan actually installs, once per package however many files declare it. */
+export function installedPackages(plan: InstallPlan): readonly InstallPackage[] {
+  const pending = plan.steps.flatMap((step) => step.packages).filter((entry) => !entry.satisfied);
+  return [...new Map(pending.map((entry) => [entry.name, entry])).values()];
+}
+
+/** The lines one `package.json` contributes to the diff. */
+function renderStep(step: InstallStep): string[] {
+  const pending = step.packages.filter((entry) => !entry.satisfied);
   const added = pending.filter((entry) => entry.declared === undefined);
   const replaced = pending.filter((entry) => entry.declared !== undefined);
   return [
-    "package.json",
+    step.manifest,
     ...(added.length === 0
       ? []
       : [
@@ -262,35 +500,73 @@ export function renderInstallPlan(plan: InstallPlan): string[] {
       `  - "${entry.name}": "${entry.declared}"`,
       `  + "${entry.name}": "${entry.version}"`,
     ]),
-    ...(plan.lockfile === undefined
-      ? []
-      : [plan.lockfile, ...pending.map((entry) => `  + ${entry.name}@${entry.version}`)]),
+  ];
+}
+
+/**
+ * The change, as it will appear in the diff — the whole point of showing it is
+ * that the reader recognises their own file, so these are the `package.json`
+ * lines that land and the lockfile that gets rewritten, not a summary of both.
+ *
+ * In a workspace that is more than one file, and the commands underneath are the
+ * ones that run: a "Run with:" line the reader cannot paste is worse than none.
+ */
+export function renderInstallPlan(plan: InstallPlan): string[] {
+  if (plan.satisfied) {
+    const packages = plan.steps[0]?.packages ?? [];
+    return [
+      `package.json already has ${packages.map(describe).join(" and ")} — nothing to install.`,
+    ];
+  }
+  const pending = plan.steps.filter((step) => !step.satisfied);
+  const [first, ...rest] = pending.map((step) => step.command.join(" "));
+  const landing = installedPackages(plan).map((entry) => `  + ${entry.name}@${entry.version}`);
+  return [
+    ...pending.flatMap(renderStep),
+    ...(plan.lockfile === undefined ? [] : [plan.lockfile, ...landing]),
     "",
-    `Run with: ${plan.command.join(" ")}`,
+    `Run with: ${first ?? ""}`,
+    ...rest.map((command) => `     then ${command}`),
   ];
 }
 
 /**
  * The real install: the project's own package manager, started the way any other
  * child is (`.cmd` shims on Windows included), with its output the user's to see.
+ *
+ * Every step runs from the project root — `-w` and `--filter` are how a workspace
+ * says which `package.json` it means, so the directory never changes.
  */
 export const installWithPackageManager: InstallRuntime = async (plan) => {
-  const child = startChild({
-    command: plan.command,
-    env: process.env as Record<string, string>,
-    cwd: plan.root,
-    purpose: `install ${plan.packages.map(describe).join(" and ")}`,
-  });
-  const ended = await child.ended;
-  if (ended.exitCode !== 0 || ended.signal !== null) {
-    throw installFailed(plan);
+  for (const step of plan.steps) {
+    if (step.satisfied) {
+      continue;
+    }
+    const child = startChild({
+      command: step.command,
+      env: process.env as Record<string, string>,
+      cwd: plan.root,
+      purpose: `install ${step.packages.map(describe).join(" and ")} in ${step.manifest}`,
+    });
+    const ended = await child.ended;
+    if (ended.exitCode !== 0 || ended.signal !== null) {
+      throw installFailed(plan, step);
+    }
   }
 };
 
-export function installFailed(plan: InstallPlan): PenvError {
+/**
+ * What to do about a package manager that refused.
+ *
+ * Never the command that just failed: the one remediation guaranteed not to work
+ * is the one the reader already ran. The manager said why, on their screen, and
+ * nothing was migrated — so the answer is that line and a second `penv init`.
+ */
+export function installFailed(plan: InstallPlan, step: InstallStep): PenvError {
   return new PenvError(
     "INIT_INSTALL_FAILED",
-    `${plan.command.join(" ")} did not finish, so penv migrated nothing`,
-    `Run \`${plan.command.join(" ")}\` yourself, then start this command again. Your dotenv files are exactly where they were.`,
+    `${step.command.join(" ")} did not finish, so penv migrated nothing`,
+    `Read what ${plan.manager} printed above — it names what it refused. Fix that and run this ` +
+      "command again; your dotenv files are exactly where they were.",
   );
 }

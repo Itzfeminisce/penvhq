@@ -73,6 +73,7 @@ import { draftFieldsAcross } from "../draft-schema.js";
 import type { InstallPlan, InstallRuntime } from "../install.js";
 import {
   detectPackageManager,
+  installedPackages,
   installWithPackageManager,
   planInstall,
   renderInstallPlan,
@@ -1940,9 +1941,11 @@ export function renderCutover(result: CutoverResult): string[] {
         ? { glyph, text: step.text }
         : { glyph, text: step.text, note: step.note };
     }),
-    ...plan.install.packages
-      .filter((entry) => !entry.satisfied)
-      .map((entry) => ({ glyph: CHECK, text: `Installed ${entry.name}`, note: entry.version })),
+    ...installedPackages(plan.install).map((entry) => ({
+      glyph: CHECK,
+      text: `Installed ${entry.name}`,
+      note: entry.version,
+    })),
     {
       glyph: CHECK,
       text: `Imported ${plan.fields.length} parameters`,

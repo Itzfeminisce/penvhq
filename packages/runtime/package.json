@@ -3,6 +3,12 @@
   "version": "0.11.0",
   "description": "penv's load() and the typed env surface. Ships into user apps — keep it light.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Itzfeminisce/penvhq.git",
+    "directory": "packages/runtime"
+  },
+  "homepage": "https://github.com/Itzfeminisce/penvhq#readme",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

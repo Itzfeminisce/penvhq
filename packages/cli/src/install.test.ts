@@ -13,14 +13,15 @@
  * project unable to load the schema init had just written.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   detectPackageManager,
   engineVersion,
+  installFailed,
   planInstall,
   renderInstallPlan,
   schemaPackageVersion,
@@ -34,6 +35,7 @@ function makeProject(files: Readonly<Record<string, string>> = {}): string {
   const root = mkdtempSync(join(tmpdir(), "penv-install-"));
   created.push(root);
   for (const [name, contents] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, name)), { recursive: true });
     writeFileSync(join(root, name), contents, "utf8");
   }
   return root;
@@ -80,7 +82,7 @@ describe("the install plan", () => {
 
     const plan = planInstall(root, "1.2.3");
 
-    expect(plan.command).toEqual([
+    expect(plan.steps[0]?.command).toEqual([
       "pnpm",
       "add",
       "--save-exact",
@@ -98,7 +100,7 @@ describe("the install plan", () => {
   it("names zod, because the schema penv writes imports it", () => {
     const plan = planInstall(makeProject(manifest({ name: "app" })), "1.2.3");
 
-    expect(plan.packages).toContainEqual({ name: "zod", version: ZOD, satisfied: false });
+    expect(plan.steps[0]?.packages).toContainEqual({ name: "zod", version: ZOD, satisfied: false });
   });
 
   it("names no lockfile the project does not have", () => {
@@ -113,7 +115,7 @@ describe("the install plan", () => {
     const plan = planInstall(root, "1.2.3");
 
     expect(plan.satisfied).toBe(true);
-    expect(plan.packages).toContainEqual({
+    expect(plan.steps[0]?.packages).toContainEqual({
       name: "@penvhq/penv",
       version: "1.2.3",
       declared: "1.2.3",
@@ -127,8 +129,13 @@ describe("the install plan", () => {
 
     const plan = planInstall(root, "1.2.3");
 
-    expect(plan.command).toEqual(["npm", "install", "--save-exact", "@penvhq/penv@1.2.3"]);
-    expect(plan.packages).toContainEqual({
+    expect(plan.steps[0]?.command).toEqual([
+      "npm",
+      "install",
+      "--save-exact",
+      "@penvhq/penv@1.2.3",
+    ]);
+    expect(plan.steps[0]?.packages).toContainEqual({
       name: "zod",
       version: ZOD,
       declared: "^4.9.0",
@@ -140,12 +147,152 @@ describe("the install plan", () => {
   it("treats a range as a version to replace", () => {
     const root = makeProject(manifest({ dependencies: { "@penvhq/penv": "^1.0.0" } }));
 
-    expect(planInstall(root, "1.2.3").packages).toContainEqual({
+    expect(planInstall(root, "1.2.3").steps[0]?.packages).toContainEqual({
       name: "@penvhq/penv",
       version: "1.2.3",
       declared: "^1.0.0",
       satisfied: false,
     });
+  });
+
+  /** The block a project chose is the block penv writes back to. */
+  it("keeps a dev-declared dependency in devDependencies", () => {
+    const root = makeProject({
+      ...manifest({ devDependencies: { "@penvhq/penv": "^1.0.0", zod: "4.4.3" } }),
+      "pnpm-lock.yaml": "",
+    });
+
+    expect(planInstall(root, "1.2.3").steps[0]?.command).toEqual([
+      "pnpm",
+      "add",
+      "--save-exact",
+      "-D",
+      "@penvhq/penv@1.2.3",
+    ]);
+  });
+});
+
+/**
+ * Finding 20: pnpm refuses a bare `add` at a workspace root
+ * (`ERR_PNPM_ADDING_TO_ROOT`), and penv printed that exact command twice — once
+ * to run and once as the remedy after it failed.
+ */
+describe("a pnpm workspace root", () => {
+  function workspaceProject(files: Readonly<Record<string, string>> = {}): string {
+    return makeProject({
+      ...manifest({ name: "acme", packageManager: "pnpm@11.3.0" }),
+      "pnpm-lock.yaml": "",
+      "pnpm-workspace.yaml": 'packages:\n  - "packages/*"\n',
+      ...files,
+    });
+  }
+
+  it("adds `-w`, because pnpm refuses the root without it", () => {
+    const plan = planInstall(workspaceProject(), "1.2.3");
+
+    expect(plan.steps[0]?.command).toEqual([
+      "pnpm",
+      "add",
+      "-w",
+      "--save-exact",
+      "@penvhq/penv@1.2.3",
+      `zod@${ZOD}`,
+    ]);
+    expect(renderInstallPlan(plan).join("\n")).toContain(
+      `Run with: pnpm add -w --save-exact @penvhq/penv@1.2.3 zod@${ZOD}`,
+    );
+  });
+
+  /** The quiet half: a plain project's command is exactly what it always was. */
+  it("leaves a project with no workspace file alone", () => {
+    const root = makeProject({ ...manifest({ name: "app" }), "pnpm-lock.yaml": "" });
+
+    expect(planInstall(root, "1.2.3").steps[0]?.command).not.toContain("-w");
+  });
+
+  /** And a workspace whose manager is not pnpm has no root flag to add. */
+  it("stays quiet for a workspace file beside another manager's lockfile", () => {
+    const root = makeProject({
+      ...manifest({ name: "acme" }),
+      "package-lock.json": "{}",
+      "pnpm-workspace.yaml": 'packages:\n  - "packages/*"\n',
+    });
+
+    expect(planInstall(root, "1.2.3").steps[0]?.command).not.toContain("-w");
+  });
+});
+
+/**
+ * Finding 21: `packages/db` declared `@penvhq/penv` at `^0.8.0` under a 0.11
+ * manifest, so every migration ran the 0.8 bridge. In a workspace "the project's
+ * dependency" is plural, and every one of them is in the one diff.
+ */
+describe("a workspace package that declares the dependency itself", () => {
+  function monorepo(members: Readonly<Record<string, unknown>>): string {
+    return makeProject({
+      ...manifest({ name: "acme", dependencies: { "@penvhq/penv": "^1.0.0", zod: "4.4.3" } }),
+      "pnpm-lock.yaml": "",
+      "pnpm-workspace.yaml": 'packages:\n  - "packages/*"\n',
+      ...Object.fromEntries(
+        Object.entries(members).map(([dir, body]) => [
+          `packages/${dir}/package.json`,
+          JSON.stringify(body),
+        ]),
+      ),
+    });
+  }
+
+  it("moves it too, in a step of its own", () => {
+    const plan = planInstall(
+      monorepo({ db: { name: "@acme/db", dependencies: { "@penvhq/penv": "^0.8.0" } } }),
+      "1.2.3",
+    );
+
+    expect(plan.steps).toHaveLength(2);
+    expect(plan.steps[1]?.manifest).toBe("packages/db/package.json");
+    expect(plan.steps[1]?.command).toEqual([
+      "pnpm",
+      "--filter",
+      "./packages/db",
+      "add",
+      "--save-exact",
+      "@penvhq/penv@1.2.3",
+    ]);
+  });
+
+  it("names it in the diff, and shows the command that writes it", () => {
+    const shown = renderInstallPlan(
+      planInstall(
+        monorepo({ db: { name: "@acme/db", devDependencies: { "@penvhq/penv": "^0.8.0" } } }),
+        "1.2.3",
+      ),
+    ).join("\n");
+
+    expect(shown).toContain("packages/db/package.json");
+    expect(shown).toContain('- "@penvhq/penv": "^0.8.0"');
+    expect(shown).toContain("     then pnpm --filter ./packages/db add --save-exact -D");
+  });
+
+  /** The quiet half: a workspace package that never asked for penv is not given it. */
+  it("leaves a member that declares no @penvhq/penv untouched", () => {
+    const plan = planInstall(
+      monorepo({ ui: { name: "@acme/ui", dependencies: { react: "19" } } }),
+      "1.2.3",
+    );
+
+    expect(plan.steps).toHaveLength(1);
+    expect(renderInstallPlan(plan).join("\n")).not.toContain("packages/ui");
+  });
+
+  /** Nothing to move below the root is nothing to say about it. */
+  it("is satisfied when every package.json already declares the version", () => {
+    const plan = planInstall(
+      monorepo({ db: { name: "@acme/db", dependencies: { "@penvhq/penv": "1.2.3" } } }),
+      "1.2.3",
+    );
+
+    expect(plan.steps.map((step) => step.satisfied)).toEqual([false, true]);
+    expect(renderInstallPlan(plan).join("\n")).not.toContain("packages/db");
   });
 });
 
@@ -179,6 +326,24 @@ describe("the change penv shows before installing", () => {
 
     expect(shown).not.toContain('"zod"');
     expect(shown).toContain('"@penvhq/penv": "1.2.3"');
+  });
+
+  /**
+   * Finding 20: the remedy was the command that had just failed, so running it
+   * verbatim failed again. It names what the manager said instead.
+   */
+  it("never tells the reader to run the command that just failed", () => {
+    const plan = planInstall(
+      makeProject({ ...manifest({ name: "acme" }), "pnpm-lock.yaml": "" }),
+      "1.2.3",
+    );
+    const step = plan.steps[0] as NonNullable<(typeof plan.steps)[0]>;
+
+    const failure = installFailed(plan, step);
+
+    expect(failure.summary).toContain(step.command.join(" "));
+    expect(failure.remedy).not.toContain(step.command.join(" "));
+    expect(failure.remedy).toContain("Read what pnpm printed above");
   });
 
   it("says there is nothing to install rather than showing an empty diff", () => {

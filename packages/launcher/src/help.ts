@@ -14,7 +14,7 @@
  */
 
 import { RUNTIME_PACKAGE } from "@penvhq/cli/install";
-import { ENGINE_PACKAGE, EXTENSIONS_PATH, MANIFEST_PATH } from "@penvhq/core";
+import { ENGINE_PACKAGE, EXTENSIONS_PATH, MANIFEST_PATH, OFFICIAL_SCOPE } from "@penvhq/core";
 import {
   INSTALL_COMMAND,
   LOCAL_FLAG,
@@ -54,10 +54,15 @@ export function printAddHelp(io: LauncherIo): void {
   io.out(
     `  ${TRUST_YOUNG_FLAG}      Add a release published less than ${MIN_PACKAGE_AGE_DAYS} days ago`,
   );
+  io.out(`  ${YES_FLAG}              Ask nothing — the config and onboarding offers print instead`);
   io.out("");
   io.out(`Pins the release in ${MANIFEST_PATH} and writes its type declaration to`);
   io.out(`${EXTENSIONS_PATH}/. Both are committed, so \`${INSTALL_COMMAND}\` gives every machine`);
   io.out(`the bytes you reviewed. \`${LOCAL_FLAG}\` pins nothing and touches no manifest.`);
+  io.out("");
+  io.out(`An \`${OFFICIAL_SCOPE}*\` package asks nothing, so it adds unattended. Anything else`);
+  io.out("records who publishes it and why you trust it, which needs a person at a terminal —");
+  io.out(`\`${YES_FLAG}\` cannot write that line for you.`);
 }
 
 /** `penv upgrade --help`. */

@@ -17,10 +17,13 @@
  * is two committed files with no runtime in them: the manifest entry, and a
  * type-only declaration.
  *
- * Because those two files are committed, `add` is a decision and needs a person:
- * `--no-download` and a run with nobody at it are both refused before the first
- * request, and CI gets `penv install`, which installs what the manifest already
- * pins rather than choosing what it should.
+ * `add` refuses a run with nobody at it only when it has something to ask. The
+ * questions are known from the package name before anything is fetched, and for
+ * `@penvhq/*` there are none — so the gate used to refuse a run that would have
+ * been silent. What cannot be answered unattended is the trust ceremony, whose
+ * one field is a sentence about why a stranger's code is trusted; `--yes` says
+ * nobody is here to be asked, so it cannot answer that either. `--no-download`
+ * is refused whatever the package, because there is nothing to pin without it.
  *
  * `--local` is the one path with no release behind it: a repository that writes
  * a provider adds the package it already builds. Nothing is fetched and nothing
@@ -29,7 +32,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Manifest, ManifestExtension, ManifestTrust, PackageEntry } from "@penvhq/core";
 import {
@@ -51,10 +54,10 @@ import {
   AddLocalFlagError,
   AddLocalInCiError,
   AddNoDownloadError,
-  AddNotInteractiveError,
   AddPackageNameError,
   AddRegistryError,
   AddSubjectError,
+  AddTrustUnattendedError,
   ExtensionNotImportableError,
   ExtensionUnloadableError,
   LOCAL_FLAG,
@@ -67,6 +70,7 @@ import {
   TrustDeclinedError,
   TrustPublisherMissingError,
   TrustReasonMissingError,
+  YES_FLAG,
 } from "./errors.js";
 import type { Fetcher } from "./fetcher.js";
 import type { LauncherIo } from "./io.js";
@@ -114,6 +118,8 @@ interface Request {
   readonly trustYoung: boolean;
   /** The package is this project's own — resolved from it, pinned nowhere. */
   readonly local: boolean;
+  /** Nobody is here to be asked: the offers print their advice instead. */
+  readonly yes: boolean;
 }
 
 /** npmjs under any spelling is not a registry the manifest records. */
@@ -144,11 +150,16 @@ function parseRequest(argv: readonly string[]): Request {
   let registry: string | undefined;
   let trustYoung = false;
   let local = false;
+  let yes = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index] ?? "";
     if (token === LOCAL_FLAG) {
       local = true;
+      continue;
+    }
+    if (token === YES_FLAG) {
+      yes = true;
       continue;
     }
     if (token === TRUST_YOUNG_FLAG) {
@@ -194,7 +205,18 @@ function parseRequest(argv: readonly string[]): Request {
       throw new AddLocalFlagError(`\`${TRUST_YOUNG_FLAG}\``);
     }
   }
-  return { name, version, registry, trustYoung, local };
+  return { name, version, registry, trustYoung, local, yes };
+}
+
+/**
+ * What this add would have to ask a person, known from the name alone.
+ *
+ * Discovered before the registry is read, because the refusal for a run with
+ * nobody at it has to come before the first request — and because an add with
+ * nothing to ask must not be refused for having nobody to ask it.
+ */
+function ceremonyFor(tier: Tier): string | undefined {
+  return tier === "official" ? undefined : "who publishes it and why you trust it";
 }
 
 function tierOf(request: Request): Tier {
@@ -307,14 +329,45 @@ function recordExtension(manifestFile: string, name: string, entry: ManifestExte
   return serializeManifest(next);
 }
 
+/** An answer that names no environment, and one that names every offered one. */
+const NONE = new Set(["", "none", "no", "n"]);
+const ALL = new Set(["all", "a", "yes", "y"]);
+
+/** The environments an answer names: all of them, none, or the ones it lists. */
+function chooseEnvironments(
+  answer: string,
+  offered: readonly string[],
+): { readonly chosen: readonly string[]; readonly unknown: readonly string[] } {
+  const normalized = answer.trim().toLowerCase();
+  if (NONE.has(normalized)) {
+    return { chosen: [], unknown: [] };
+  }
+  if (ALL.has(normalized)) {
+    return { chosen: offered, unknown: [] };
+  }
+  const chosen: string[] = [];
+  const unknown: string[] = [];
+  for (const token of normalized.split(/[\s,]+/).filter((part) => part !== "")) {
+    const match = offered.find((environment) => environment.toLowerCase() === token);
+    if (match === undefined) {
+      unknown.push(token);
+    } else {
+      chosen.push(match);
+    }
+  }
+  return { chosen, unknown };
+}
+
 /**
- * The `penv.config.ts` edit, offered once per environment and applied on a yes.
+ * The `penv.config.ts` edit, offered once for the whole file.
  *
- * Every provider entry is its own decision — a team rarely points development
- * and production at the same store on the same day — so this asks per
- * environment rather than assuming one answer covers the file.
+ * It used to ask per environment, so a provider that belongs to exactly one of
+ * them was three questions with no way to say which up front. One question names
+ * every environment it would repoint; the answer picks all of them, some by
+ * name, or none. A name it does not recognise repoints nothing — a typo in a
+ * list of environments is not an instruction to half-apply.
  */
-async function offerConfigEdit(options: AddOptions, name: string): Promise<void> {
+async function offerConfigEdit(options: AddOptions, name: string, ask: boolean): Promise<void> {
   const { io, root } = options;
   const configFile = findConfigFile(root);
   const line = `Add \`type: ${JSON.stringify(name)}\` to an environment in penv.config.ts.`;
@@ -330,29 +383,33 @@ async function offerConfigEdit(options: AddOptions, name: string): Promise<void>
     io.out(line);
     return;
   }
-  if (entries.every((entry) => entry.type === name)) {
+  const offered = entries.filter((entry) => entry.type !== name).map((entry) => entry.environment);
+  if (offered.length === 0) {
     return;
   }
-  if (!io.interactive) {
+  if (!ask) {
     io.out(line);
     return;
   }
 
-  for (const entry of entries) {
-    if (entry.type === name) {
-      continue;
-    }
-    if (!(await io.confirm(`Point \`${entry.environment}\` at ${name} in ${shown}?`))) {
-      continue;
-    }
-    const next = setProviderType(current, entry.environment, name);
+  const { chosen, unknown } = chooseEnvironments(
+    await io.ask(`Point which of ${offered.join(", ")} at ${name} in ${shown}? all / none / names`),
+    offered,
+  );
+  if (unknown.length > 0) {
+    io.out(`${shown} declares no ${unknown.join(", ")}, so nothing was repointed.`);
+    io.out(line);
+    return;
+  }
+  for (const environment of chosen) {
+    const next = setProviderType(current, environment, name);
     if (next === undefined) {
-      io.out(`Add \`type: ${JSON.stringify(name)}\` to \`${entry.environment}\` in ${shown}.`);
+      io.out(`Add \`type: ${JSON.stringify(name)}\` to \`${environment}\` in ${shown}.`);
       continue;
     }
     current = next;
     writeFileSync(configFile, current);
-    io.out(`✓ ${shown} points \`${entry.environment}\` at ${name}`);
+    io.out(`✓ ${shown} points \`${environment}\` at ${name}`);
   }
 }
 
@@ -361,6 +418,7 @@ async function offerOnboarding(
   io: LauncherIo,
   name: string,
   onboard: string | undefined,
+  ask: boolean,
 ): Promise<readonly string[] | undefined> {
   if (onboard === undefined) {
     return undefined;
@@ -370,7 +428,7 @@ async function offerOnboarding(
     return undefined;
   }
   const command = `penv ${args.join(" ")}`;
-  if (io.interactive && (await io.confirm(`Run \`${command}\` now?`))) {
+  if (ask && (await io.confirm(`Run \`${command}\` now?`))) {
     return args;
   }
   io.out(`Run \`${command}\` to finish setting ${name} up.`);
@@ -504,8 +562,9 @@ async function addLocal(options: AddOptions, request: Request): Promise<AddResul
   io.out(`✓ ${LOCAL_EXTENSIONS_PATH} records it`);
   io.out(`✓ ${declaration} declares its config type`);
 
-  await offerConfigEdit(options, request.name);
-  return { onboard: await offerOnboarding(io, request.name, installed.onboard) };
+  const ask = io.interactive && !request.yes;
+  await offerConfigEdit(options, request.name, ask);
+  return { onboard: await offerOnboarding(io, request.name, installed.onboard, ask) };
 }
 
 export async function add(options: AddOptions): Promise<AddResult> {
@@ -516,14 +575,16 @@ export async function add(options: AddOptions): Promise<AddResult> {
   }
   const tier = tierOf(request);
   const now = (options.now ?? (() => new Date()))();
+  const ask = io.interactive && !request.yes;
 
   // Both refusals come before the first request, so a run that cannot finish an
   // add has not read the registry, written the manifest, or filled the store.
   if (options.noDownload === true) {
     throw new AddNoDownloadError(request.name);
   }
-  if (options.ci === true || !io.interactive) {
-    throw new AddNotInteractiveError(request.name);
+  const ceremony = ceremonyFor(tier);
+  if (ceremony !== undefined && (options.ci === true || !ask)) {
+    throw new AddTrustUnattendedError(request.name, ceremony);
   }
 
   const release = await fetchRelease({
@@ -578,6 +639,6 @@ export async function add(options: AddOptions): Promise<AddResult> {
   io.out(`✓ ${MANIFEST_PATH} pins it`);
   io.out(`✓ ${declaration} declares its config type`);
 
-  await offerConfigEdit(options, release.name);
-  return { onboard: await offerOnboarding(io, release.name, installed.onboard) };
+  await offerConfigEdit(options, release.name, ask);
+  return { onboard: await offerOnboarding(io, release.name, installed.onboard, ask) };
 }

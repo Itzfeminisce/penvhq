@@ -3,6 +3,12 @@
   "version": "0.11.0",
   "description": "The AWS SSM Parameter Store penv provider — portability, generalized.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Itzfeminisce/penvhq.git",
+    "directory": "packages/providers/ssm"
+  },
+  "homepage": "https://github.com/Itzfeminisce/penvhq#readme",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

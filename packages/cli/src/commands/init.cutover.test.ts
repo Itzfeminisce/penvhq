@@ -33,7 +33,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { bundleDotenvFiles, bundledFiles, readCutover, runCleanup, runUndo } from "../cutover.js";
 import type { DotenvFile } from "../dotenv-files.js";
 import type { InstallPlan, InstallRuntime } from "../install.js";
-import { engineVersion, schemaPackageVersion } from "../install.js";
+import { engineVersion, installedPackages, schemaPackageVersion } from "../install.js";
 import { renderCleanup } from "./cleanup.js";
 import type { CutoverResult, PromptIo } from "./init.js";
 import {
@@ -128,7 +128,7 @@ function installer(): { readonly seam: InstallRuntime; readonly plans: InstallPl
     plans,
     seam: (plan) => {
       plans.push(plan);
-      const runtime = plan.packages.find((entry) => entry.name === "@penvhq/penv");
+      const runtime = installedPackages(plan).find((entry) => entry.name === "@penvhq/penv");
       installRuntime(plan.root, runtime?.version ?? VERSION);
       return Promise.resolve();
     },
@@ -416,7 +416,7 @@ describe("what the cutover writes", () => {
     expect(install.plans).toHaveLength(1);
     // zod comes too: the schema this cutover just drafted imports it, and pnpm
     // does not hoist a peer of @penvhq/penv to the project root.
-    expect(install.plans[0]?.command).toEqual([
+    expect(install.plans[0]?.steps[0]?.command).toEqual([
       "pnpm",
       "add",
       "--save-exact",
@@ -1262,7 +1262,7 @@ describe("the install", () => {
       environment: "development",
     });
 
-    expect(plan.install.packages).toContainEqual({
+    expect(plan.install.steps[0]?.packages).toContainEqual({
       name: "@penvhq/penv",
       version: engineVersion(),
       satisfied: false,
