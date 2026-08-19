@@ -88,6 +88,9 @@ importers:
 
   packages/penv:
     dependencies:
+      '@penvhq/core':
+        specifier: workspace:*
+        version: link:../core
       jiti:
         specifier: 2.7.0
         version: 2.7.0
@@ -95,9 +98,6 @@ importers:
       '@penvhq/cli':
         specifier: workspace:*
         version: link:../cli
-      '@penvhq/core':
-        specifier: workspace:*
-        version: link:../core
       '@penvhq/provider-filesystem':
         specifier: workspace:*
         version: link:../providers/filesystem
