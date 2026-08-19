@@ -484,6 +484,18 @@ shipped five — the whole job is:
    have a provider. If it does not pass, fix the provider. If it *cannot* pass without
    editing the suite, stop — you have found something about the contract, and that is a
    decision to raise, not a test to edit.
+5. Publish it self-contained, and declare its config shape. `penv add` unpacks one
+   tarball into `$PENV_HOME` and installs nothing beside it, so an entry point that
+   imports a package it did not bundle cannot load at all: bundle `@penvhq/core` and
+   everything else the adapter reads — the shipped providers' `tsup.config.ts` is the
+   model — and name your declaration file in `penv.types`. `penv install` imports every
+   extension it installs, so a package that would not load is refused there rather than
+   at someone's first `push`.
+
+Bundling means your refusals are built from your own copy of `@penvhq/core`'s error
+classes, and penv knows it: a caught error is recognised as a refusal by its shape
+(`isPenvErrorLike`), never by `instanceof`. Extend `PenvError`, give it a code and a
+remedy, and it prints as one of penv's own.
 
 The reference implementations to read alongside this document are the filesystem
 provider
