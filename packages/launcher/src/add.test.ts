@@ -15,12 +15,12 @@ import {
   LOCAL_EXTENSIONS_PATH,
   MANIFEST_PATH,
   type Manifest,
+  packageDir,
   serializeManifest,
 } from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { type AddOptions, add } from "./add.js";
 import type { Fetcher } from "./fetcher.js";
-import { packageDir } from "./home.js";
 import { integrityOf } from "./integrity.js";
 import type { LauncherIo } from "./io.js";
 import { packTar, type TarSource } from "./tarball.fixtures.js";

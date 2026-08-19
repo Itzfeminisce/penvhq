@@ -10,10 +10,11 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { packageDir } from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { DownloadFailedError, DownloadIntegrityError } from "./errors.js";
 import type { Fetcher } from "./fetcher.js";
-import { INTEGRITY_FILE, packageDir } from "./home.js";
+import { INTEGRITY_FILE } from "./home.js";
 import { integrityOf } from "./integrity.js";
 import { inspectInstall, installPin, type Pin, tarballUrl } from "./store.js";
 import { enginePackage, packTar } from "./tarball.fixtures.js";

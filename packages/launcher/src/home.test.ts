@@ -1,17 +1,14 @@
 /**
- * `$PENV_HOME` is where every version any project pins ends up, so the two
- * properties tested here are the ones that keep versions apart and keep an
- * archive from writing outside the store — plus the fallback that makes a
- * manifest-format refusal name a real command on a machine no installer
- * recorded anything on.
+ * The launcher's own record in the store: the command that updates it. Advisory,
+ * so what is tested is that it never turns a refusal about something else into a
+ * second failure about a metadata file.
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PenvError } from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { launcherUpdateCommand, NPM_UPDATE_COMMAND, packageDir, penvHome } from "./home.js";
+import { launcherUpdateCommand, NPM_UPDATE_COMMAND } from "./home.js";
 
 const created: string[] = [];
 
@@ -25,47 +22,6 @@ afterEach(() => {
   for (const dir of created.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
-});
-
-describe("penvHome", () => {
-  it("is ~/.penv unless the environment says otherwise", () => {
-    expect(penvHome({})).toBe(join(homedir(), ".penv"));
-    expect(penvHome({ PENV_HOME: "" })).toBe(join(homedir(), ".penv"));
-  });
-
-  it("takes the declared store, absolute", () => {
-    const dir = scratch();
-
-    expect(penvHome({ PENV_HOME: dir })).toBe(dir);
-  });
-});
-
-describe("packageDir", () => {
-  it("addresses a package by exact name and exact version", () => {
-    const home = scratch();
-
-    expect(packageDir(home, "engines", "@penvhq/cli", "0.9.0")).toBe(
-      join(home, "engines", "@penvhq", "cli", "0.9.0"),
-    );
-    expect(packageDir(home, "extensions", "provider-consul", "1.4.2")).toBe(
-      join(home, "extensions", "provider-consul", "1.4.2"),
-    );
-  });
-
-  it("refuses a name that resolves outside the store", () => {
-    const failure = () => packageDir(scratch(), "engines", "../../evil", "0.9.0");
-
-    expect(failure).toThrow(PenvError);
-    expect(failure).toThrow(/outside/);
-  });
-
-  /** Inside `$PENV_HOME` is not enough: an engine filed among the extensions is not an engine. */
-  it("refuses a name that lands in the other bucket", () => {
-    const failure = () => packageDir(scratch(), "engines", "../extensions/evil", "0.9.0");
-
-    expect(failure).toThrow(PenvError);
-    expect(failure).toThrow(/outside/);
-  });
 });
 
 describe("launcherUpdateCommand", () => {

@@ -15,12 +15,14 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Manifest, ManifestEngine } from "@penvhq/core";
+import type { Environment, Manifest, ManifestEngine, PackageKind } from "@penvhq/core";
 import {
   MANIFEST_FORMAT,
   MANIFEST_PATH,
+  PENV_HOME_VAR,
   PenvError,
   parseManifest,
+  penvHome,
   serializeManifest,
   UnsupportedManifestFormatError,
 } from "@penvhq/core";
@@ -36,13 +38,7 @@ import {
   PackageMissingError,
 } from "./errors.js";
 import type { Fetcher } from "./fetcher.js";
-import {
-  type Environment,
-  launcherUpdateCommand,
-  type PackageKind,
-  PENV_HOME_VAR,
-  penvHome,
-} from "./home.js";
+import { launcherUpdateCommand } from "./home.js";
 import type { LauncherIo } from "./io.js";
 import { releaseEnginePin } from "./pins.js";
 import type { Project } from "./project.js";
@@ -209,6 +205,7 @@ async function launch(options: LauncherOptions): Promise<number> {
   const { noDownload, forwarded } = splitLauncherFlags(argv);
   const first = forwarded[0];
   const home = penvHome(env);
+
   const project = findProject(cwd);
 
   if (project === undefined) {

@@ -18,9 +18,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { type PackageKind, packageDir } from "@penvhq/core";
 import { DownloadFailedError, DownloadIntegrityError } from "./errors.js";
 import type { Fetcher } from "./fetcher.js";
-import { INTEGRITY_FILE, type PackageKind, packageDir } from "./home.js";
+import { INTEGRITY_FILE } from "./home.js";
 import { integrityOf } from "./integrity.js";
 import { readTarball } from "./tar.js";
 

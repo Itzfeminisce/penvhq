@@ -13,13 +13,20 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ManifestEngine } from "@penvhq/core";
-import { MANIFEST_PATH, parseManifest, STATE_PATH, serializeManifest } from "@penvhq/core";
+import {
+  MANIFEST_PATH,
+  PENV_HOME_VAR,
+  packageDir,
+  parseManifest,
+  STATE_PATH,
+  serializeManifest,
+} from "@penvhq/core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Delegation } from "./delegate.js";
 import { nodeSpawner } from "./delegate.js";
 import type { Engine } from "./engine.js";
 import type { Fetcher } from "./fetcher.js";
-import { INTEGRITY_FILE, PENV_HOME_VAR, packageDir } from "./home.js";
+import { INTEGRITY_FILE } from "./home.js";
 import { integrityOf } from "./integrity.js";
 import type { LauncherIo } from "./io.js";
 import { type LauncherOptions, runLauncher } from "./launcher.js";

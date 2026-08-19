@@ -1,24 +1,14 @@
 /**
- * `$PENV_HOME` — the one directory the launcher owns.
+ * What the launcher alone knows about `$PENV_HOME`: how the installation that
+ * created it updates itself, and what it writes beside an installed package.
  *
- * Engines and extensions are addressed by exact name and exact version, so a
- * machine holds every version any of its projects pins at once and no project's
- * command is ever answered by another project's bytes.
+ * The store's layout — where `$PENV_HOME` is and where one exact version lives —
+ * is `@penvhq/core`'s, because the engine reads the same directories the
+ * launcher fills.
  */
 
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve, sep } from "node:path";
-import { PenvError } from "@penvhq/core";
-
-/** A read-only view of the process environment. */
-export type Environment = Readonly<Record<string, string | undefined>>;
-
-/** The variable that moves the store off `~/.penv`. */
-export const PENV_HOME_VAR = "PENV_HOME";
-
-/** The two things the store holds, and the directory each lives under. */
-export type PackageKind = "engines" | "extensions";
+import { join } from "node:path";
 
 /** How the launcher was installed, recorded by the installer that did it. */
 export const HOME_META_FILE = "meta.json";
@@ -28,41 +18,6 @@ export const INTEGRITY_FILE = ".penv-integrity";
 
 /** The update command for a launcher whose installer recorded nothing. */
 export const NPM_UPDATE_COMMAND = "npm install -g @penvhq/launcher";
-
-/** The store, from the environment. `~/.penv` unless `$PENV_HOME` says otherwise. */
-export function penvHome(env: Environment): string {
-  const declared = env[PENV_HOME_VAR];
-  if (declared !== undefined && declared.trim() !== "") {
-    return resolve(declared);
-  }
-  return join(homedir(), ".penv");
-}
-
-/**
- * Where one exact version lives.
- *
- * The manifest's grammar already refuses a name or a version that could climb
- * out of the store, so the containment check is the second lock rather than the
- * first: this function is also reached from `penv add`, where the name is
- * whatever the user typed.
- *
- * Containment is measured against the bucket, not against `$PENV_HOME`. A name
- * of `../extensions/x` stays inside the store while landing an engine among the
- * extensions, and a store where the two are not separated is a store where the
- * kind a caller asked for is not the kind it gets.
- */
-export function packageDir(home: string, kind: PackageKind, name: string, version: string): string {
-  const bucket = resolve(home, kind);
-  const dir = resolve(bucket, ...name.split("/"), version);
-  if (!dir.startsWith(bucket + sep)) {
-    throw new PenvError(
-      "PENV_HOME_ESCAPE",
-      `\`${name}\` at \`${version}\` resolves to ${dir}, which is outside ${bucket}`,
-      "Name the package exactly as npm does, e.g. `@penvhq/provider-vault`.",
-    );
-  }
-  return dir;
-}
 
 /** The advisory record an installer leaves in the store. */
 interface LauncherMeta {
