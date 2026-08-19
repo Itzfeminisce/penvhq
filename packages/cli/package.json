@@ -16,6 +16,11 @@
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
     },
+    "./install": {
+      "types": "./dist/install.d.ts",
+      "import": "./dist/install.js",
+      "require": "./dist/install.cjs"
+    },
     "./package.json": "./package.json"
   },
   "files": [

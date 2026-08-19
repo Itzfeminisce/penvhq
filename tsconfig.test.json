@@ -14,6 +14,7 @@
       "@penvhq/provider-github": ["./packages/providers/github/src/index.ts"],
       "@penvhq/provider-vercel": ["./packages/providers/vercel/src/index.ts"],
       "@penvhq/cli": ["./packages/cli/src/index.ts"],
+      "@penvhq/cli/install": ["./packages/cli/src/install.ts"],
       "penv": ["./packages/launcher/src/index.ts"]
     }
   },

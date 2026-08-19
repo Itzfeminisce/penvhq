@@ -878,7 +878,7 @@ describe("penv add", () => {
  * promising `penv <command> --help`.
  */
 describe("help for the launcher's own commands", () => {
-  it("names install and add under the engine's own help", async () => {
+  it("names install, add and upgrade under the engine's own help", async () => {
     const home = scratch("penv-home-");
     await install(home, ENGINE_PIN, ENGINE_TARBALL);
     const test = harness({ argv: ["--help"], cwd: projectAt(), home });
@@ -890,6 +890,7 @@ describe("help for the launcher's own commands", () => {
     expect(test.out.some((line) => line.startsWith("  install"))).toBe(true);
     expect(test.out.some((line) => line.startsWith("  add <package>"))).toBe(true);
     expect(test.out.some((line) => line.includes("--local <package>"))).toBe(true);
+    expect(test.out.some((line) => line.startsWith("  upgrade [version]"))).toBe(true);
   });
 
   it("prints usage for `penv add --help` and `penv install --help`, reaching no engine", async () => {
@@ -906,6 +907,12 @@ describe("help for the launcher's own commands", () => {
     expect(await runLauncher(installed.options)).toBe(0);
     expect(installed.asked).toEqual([]);
     expect(installed.out[0]).toBe("penv install");
+
+    const upgraded = harness({ argv: ["upgrade", "--help"], cwd, home });
+    expect(await runLauncher(upgraded.options)).toBe(0);
+    expect(upgraded.asked).toEqual([]);
+    expect(upgraded.out[0]).toBe("penv upgrade [version]");
+    expect(upgraded.out.some((line) => line.includes("--yes"))).toBe(true);
   });
 
   /** Help is the launcher's before it is a project's — there may be no project yet. */

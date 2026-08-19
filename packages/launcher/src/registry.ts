@@ -36,6 +36,8 @@ export interface ReleaseQuery {
   readonly version?: string;
   /** Only when the package comes from somewhere other than npmjs. */
   readonly registry?: string;
+  /** The command that would repeat this resolution. Absent means `penv add <name>`. */
+  readonly retry?: string;
   readonly fetcher: Fetcher;
 }
 
@@ -83,6 +85,7 @@ export async function fetchRelease(query: ReleaseQuery): Promise<Release> {
       query.name,
       url,
       cause instanceof Error ? cause.message : String(cause),
+      query.retry,
     );
   }
 
@@ -94,6 +97,7 @@ export async function fetchRelease(query: ReleaseQuery): Promise<Release> {
       query.name,
       url,
       cause instanceof Error ? cause.message : String(cause),
+      query.retry,
     );
   }
 
@@ -115,7 +119,7 @@ export async function fetchRelease(query: ReleaseQuery): Promise<Release> {
     record(at(versions, asked)) === undefined ? (text(at(tags, asked)) ?? asked) : asked;
   const release = record(at(versions, version));
   if (release === undefined) {
-    throw new VersionUnknownError(query.name, asked, url);
+    throw new VersionUnknownError(query.name, asked, url, query.retry);
   }
 
   const dist = record(at(release, "dist"));

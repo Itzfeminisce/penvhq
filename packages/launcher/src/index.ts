@@ -58,7 +58,15 @@ export {
   TrustDeclinedError,
   TrustPublisherMissingError,
   TrustReasonMissingError,
+  UPGRADE_COMMAND,
+  UpgradeDeclinedError,
+  UpgradeFlagError,
+  UpgradeInstallFailedError,
+  UpgradeNoDownloadError,
+  UpgradeSubjectError,
+  UpgradeUnattendedError,
   VersionUnknownError,
+  YES_FLAG,
 } from "./errors.js";
 export type { Fetcher } from "./fetcher.js";
 export { httpFetcher } from "./fetcher.js";
@@ -87,3 +95,5 @@ export type { Installation, InstallOptions, InstallState, Pin } from "./store.js
 export { DEFAULT_REGISTRY, inspectInstall, installPin, tarballUrl } from "./store.js";
 export type { ArchiveSubject, TarEntry } from "./tar.js";
 export { readTarball } from "./tar.js";
+export type { UpgradeOptions } from "./upgrade.js";
+export { upgrade } from "./upgrade.js";
