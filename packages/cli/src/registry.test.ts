@@ -12,17 +12,20 @@
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   localExtensionsFile,
+  MANIFEST_PATH,
   type PenvConfig,
   PenvError,
+  packageDir,
   recordsDir,
   serializeLocalExtensions,
+  serializeManifest,
 } from "@penvhq/core";
 import { FilesystemProvider } from "@penvhq/provider-filesystem";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { localTree, openProject, sourceProviderFor } from "./project.js";
 import {
   assertProvidersRegistered,
@@ -43,6 +46,11 @@ const VALID_PLUGIN = `export const penvProviderFactory = () => ({
   removeMeta: async () => {},
 });
 `;
+
+/** The same plugin under a chosen `type`, so a test can tell two copies of it apart. */
+function pluginWithType(type: string): string {
+  return VALID_PLUGIN.replace('"faketype"', JSON.stringify(type));
+}
 
 /** Writes a fake provider package into a project's node_modules, so it resolves by name. */
 function installFakeProvider(root: string, packageName: string, body: string): void {
@@ -79,6 +87,7 @@ function makeProject(config: PenvConfig): string {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const dir of created.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -116,7 +125,7 @@ describe("the provider registry", () => {
     const error = thrown as PenvError;
     expect(error.code).toBe("UNKNOWN_PROVIDER");
     expect(error.message).toContain("consul");
-    expect(error.remedy ?? "").toContain("npm i consul");
+    expect(error.remedy ?? "").toContain("penv add consul");
   });
 
   it("accepts a config naming the registered providers", () => {
@@ -278,7 +287,7 @@ describe("package-resolved providers", () => {
     expect(error.code).toBe("UNKNOWN_PROVIDER");
     expect(error.message).toContain("@penvhq/provider-penv-cloud");
     // The type is the package, so the remedy is actionable verbatim.
-    expect(error.remedy ?? "").toContain("npm i @penvhq/provider-penv-cloud");
+    expect(error.remedy ?? "").toContain("penv add @penvhq/provider-penv-cloud");
   });
 
   it("builds a package provider through the source-of-truth path", async () => {
@@ -318,5 +327,176 @@ describe("package-resolved providers", () => {
     await expect(sourceProviderFor(project, "production")).rejects.toMatchObject({
       code: "PROVIDER_PLUGIN_INVALID",
     });
+  });
+
+  /**
+   * Finding 18: the failure a provider threw is the diagnosis. A refusal that
+   * keeps neither the cause nor the file it tried sends the reader to reproduce
+   * the import by hand, outside penv.
+   */
+  it("carries the underlying failure and the file it tried", async () => {
+    const root = makeProject({
+      environments: ["production"],
+      providers: { production: { type: "@penvhq/provider-faketype" } },
+    });
+    installFakeProvider(
+      root,
+      "@penvhq/provider-faketype",
+      "throw new Error(\"Cannot find package 'consul-client'\");\n",
+    );
+    const project = openProject(root);
+
+    let thrown: unknown;
+    try {
+      await sourceProviderFor(project, "production");
+    } catch (error) {
+      thrown = error;
+    }
+    const error = thrown as PenvError;
+    expect(error.code).toBe("PROVIDER_PLUGIN_LOAD");
+    expect(error.summary).toContain("Cannot find package 'consul-client'");
+    expect(error.summary).toContain(join(root, "node_modules", "@penvhq", "provider-faketype"));
+  });
+});
+
+/**
+ * The store is the third and last place an extension comes from, and the only
+ * one `penv add <package>` fills: it leaves a type declaration in the project
+ * and the bytes in `$PENV_HOME`, so nothing about a pinned extension resolves
+ * from `node_modules`. Before this, every one of them ended at UNKNOWN_PROVIDER.
+ */
+describe("an extension the manifest pins", () => {
+  const CONSUL = "@penvhq/provider-consul";
+  const CONFIG: PenvConfig = {
+    environments: ["production"],
+    providers: { production: { type: CONSUL } },
+  };
+
+  const INTEGRITY = `sha512-${"a".repeat(86)}==`;
+
+  function store(): string {
+    const dir = mkdtempSync(join(FIXTURE_PARENT, "store-"));
+    created.push(dir);
+    vi.stubEnv("PENV_HOME", dir);
+    return dir;
+  }
+
+  /** A package in `$PENV_HOME` as `penv install` extracts one: a tarball, no node_modules. */
+  function installInStore(home: string, version: string, body: string): void {
+    const dir = packageDir(home, "extensions", CONSUL, version);
+    mkdirSync(join(dir, "dist"), { recursive: true });
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({
+        name: CONSUL,
+        version,
+        type: "module",
+        exports: { ".": { import: "./dist/index.js" } },
+      }),
+    );
+    writeFileSync(join(dir, "dist", "index.js"), body);
+  }
+
+  function pin(root: string, version: string): void {
+    const file = join(root, ...MANIFEST_PATH.split("/"));
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      serializeManifest({
+        format: 1,
+        engine: { package: "@penvhq/cli", version: "0.9.5", integrity: INTEGRITY },
+        extensions: { [CONSUL]: { version, integrity: INTEGRITY } },
+      }),
+    );
+  }
+
+  it("resolves and loads from $PENV_HOME at the pinned version", async () => {
+    const root = makeProject(CONFIG);
+    pin(root, "0.9.5");
+    installInStore(store(), "0.9.5", pluginWithType("fromstore"));
+
+    const source = await sourceProviderFor(openProject(root), "production");
+
+    expect(source.type).toBe("fromstore");
+  });
+
+  it("runs the version the manifest pins, not another one in the store", async () => {
+    const root = makeProject(CONFIG);
+    pin(root, "0.9.5");
+    const home = store();
+    installInStore(home, "0.9.5", pluginWithType("pinned"));
+    installInStore(home, "0.10.0", pluginWithType("newer"));
+
+    const source = await sourceProviderFor(openProject(root), "production");
+
+    expect(source.type).toBe("pinned");
+  });
+
+  it("refuses one the store does not hold, naming `penv install`", () => {
+    const root = makeProject(CONFIG);
+    pin(root, "0.9.5");
+    store();
+
+    let thrown: unknown;
+    try {
+      openProject(root);
+    } catch (error) {
+      thrown = error;
+    }
+    const error = thrown as PenvError;
+    expect(error.code).toBe("EXTENSION_NOT_INSTALLED");
+    expect(error.summary).toContain(`${CONSUL}\` 0.9.5 for environment production`);
+    expect(error.remedy ?? "").toContain("penv install");
+  });
+
+  /** The project's own copy is what a checkout developing against a provider runs. */
+  it("lets the project's own node_modules win over the store", async () => {
+    const root = makeProject(CONFIG);
+    pin(root, "0.9.5");
+    installInStore(store(), "0.9.5", pluginWithType("fromstore"));
+    installFakeProvider(root, CONSUL, pluginWithType("fromproject"));
+
+    const source = await sourceProviderFor(openProject(root), "production");
+
+    expect(source.type).toBe("fromproject");
+  });
+
+  /** The quiet half: a provider the manifest does not pin is refused as before. */
+  it("leaves a provider it does not pin unaffected", () => {
+    const root = makeProject({
+      environments: ["production"],
+      providers: { production: { type: "@acme/provider-consul" } },
+    });
+    pin(root, "0.9.5");
+    installInStore(store(), "0.9.5", pluginWithType("fromstore"));
+
+    let thrown: unknown;
+    try {
+      openProject(root);
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as PenvError).code).toBe("UNKNOWN_PROVIDER");
+  });
+
+  /**
+   * A local extension is the copy this checkout builds, so the store is not a
+   * second place to look for it — even when the manifest happens to pin the name.
+   */
+  it("never answers a local extension out of the store", () => {
+    const root = makeProject(CONFIG);
+    pin(root, "0.9.5");
+    installInStore(store(), "0.9.5", pluginWithType("fromstore"));
+    writeFileSync(localExtensionsFile(root), serializeLocalExtensions([CONSUL]), "utf8");
+
+    let thrown: unknown;
+    try {
+      openProject(root);
+    } catch (error) {
+      thrown = error;
+    }
+    const error = thrown as PenvError;
+    expect(error.code).toBe("LOCAL_EXTENSION_UNRESOLVED");
+    expect(error.remedy ?? "").toContain("dependency of the root");
   });
 });
