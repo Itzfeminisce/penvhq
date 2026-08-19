@@ -25,12 +25,13 @@ This is the reference for **penv as designed**: the complete system, every capab
 13. [Providers](#providers)
 14. [Provider extensions](#provider-extensions)
 15. [Projection providers](#projection-providers-github-actions-secrets)
-16. [Encryption](#encryption)
-17. [Rotation](#rotation)
-18. [`penv doctor`](#penv-doctor)
-19. [CLI reference](#cli-reference)
-20. [Migrating and leaving](#migrating-and-leaving)
-21. [Design tradeoffs](#design-tradeoffs)
+16. [Vercel projects](#vercel-projects)
+17. [Encryption](#encryption)
+18. [Rotation](#rotation)
+19. [`penv doctor`](#penv-doctor)
+20. [CLI reference](#cli-reference)
+21. [Migrating and leaving](#migrating-and-leaving)
+22. [Design tradeoffs](#design-tradeoffs)
 
 ---
 
@@ -594,9 +595,9 @@ This is also how these providers are consumed in practice: the Vault Agent Injec
 
 The consequence, stated rather than hidden: a deploy must materialise before it starts — a `penv pull` in the pipeline, a tree something else mounted, or the sealed artifact of [Deployment](#deployment). penv does not fetch secrets for you at start time, and a tree that was never pulled resolves to whatever is on disk — which is what `penv doctor`'s drift check is for.
 
-Supported providers: Filesystem, HashiCorp Vault, AWS SSM Parameter Store, Kubernetes Secrets, and GitHub Actions Secrets. The filesystem tree and the rehearsal mock ship with the engine; every other provider arrives as an extension — `penv add @penvhq/provider-vault` — and the `type` in your config is that package's name. See [Provider extensions](#provider-extensions).
+Supported providers: Filesystem, HashiCorp Vault, AWS SSM Parameter Store, Kubernetes Secrets, GitHub Actions Secrets, and Vercel project environment variables. The filesystem tree and the rehearsal mock ship with the engine; every other provider arrives as an extension — `penv add @penvhq/provider-vault` — and the `type` in your config is that package's name. See [Provider extensions](#provider-extensions).
 
-A provider declares its **capabilities**, and penv reads them rather than guessing. Two axes: what the store *holds* — penv records verbatim, or a resolved projection of them — and whether its values can be *read back*. Vault, SSM, and Kubernetes hold records and read back; they satisfy the full record contract, with the filesystem provider as its reference implementation. GitHub Actions Secrets holds a projection and withholds values — see [Projection providers](#projection-providers-github-actions-secrets) below.
+A provider declares its **capabilities**, and penv reads them rather than guessing. Two axes: what the store *holds* — penv records verbatim, or a resolved projection of them — and whether its values can be *read back*. Vault, SSM, and Kubernetes hold records and read back; they satisfy the full record contract, with the filesystem provider as its reference implementation. GitHub Actions Secrets and Vercel hold a projection and withhold values — see [Projection providers](#projection-providers-github-actions-secrets) and [Vercel projects](#vercel-projects) below.
 
 **Not every provider retains a previous value, and that is declared rather than assumed.** Rotation's grace window reads the previous value back from the provider, which Vault (KV v2) and AWS SSM support natively and Kubernetes Secrets do not support at all — a Secret is a current-state object with no history to read. A provider therefore declares whether it retains. `dual-valid` rotation requires one that does; `atomic-cutover` does not; and `penv doctor` tells you which of those an environment can perform rather than letting you discover it mid-rotation. This is the same asymmetry the filesystem has always had, and Kubernetes sits on the same side of it.
 
@@ -678,6 +679,36 @@ A store you can only half-see is still legible, as long as the half you cannot s
 | **Values** | **Unknown, permanently.** penv cannot read a GitHub secret back, so it can never tell you the two copies agree. `doctor` reports this as `unknown` — its own verdict, never a ✓. A check that did not look must never look like a check that looked and found nothing wrong. |
 
 Against a record-holding provider none of this hedging applies: `doctor` reads both copies and compares them value by value, exactly.
+
+## Vercel projects
+
+Vercel is the [managed-serverless case](#managed-serverless-the-platforms-own-store) with an adapter behind it: `@penvhq/provider-vercel` writes an environment's resolved values into a Vercel project's own environment-variable store, so the production cutover is `penv push --production` rather than forty rows typed into a settings form.
+
+```ts
+providers: {
+  production: {
+    type: "@penvhq/provider-vercel",
+    location: "prj_XLKmu1DyR1eY7zq8UgeRKbA7yVLA",   // the project id, or its name
+    targets: { production: "production", staging: "preview" },
+  },
+}
+```
+
+**The `targets` mapping is declared, never guessed.** Vercel has three targets — `production`, `preview`, `development` — and no file anywhere says which one your `staging` deploys to. An environment with no entry is refused by name (`providers.staging.targets`) before penv opens a connection, because a guess between production and preview is a guess about which deployment reads the secret. This is invariant 21 applied to a second product's vocabulary.
+
+**How penv's two push scopes land on Vercel's one axis.** Your environment scope maps to a variable on the single target that environment declares; the unscoped default maps to a variable covering all three targets — the value every deployment falls back to, expressed as the breadth Vercel actually has. That breadth is also how `penv pull` and `penv doctor` read the store back apart: a variable on all three targets is the shared default, a narrower one belongs to the environment whose target it carries.
+
+**The one thing Vercel cannot express, refused rather than fudged.** A Vercel variable is unique per key *and* target, and Vercel has no default that a target overrides — so a parameter that is one environment's own value *and* the shared default for the others has no representation there. penv refuses that push, naming the variable and the targets that collide, rather than silently overwriting one meaning with the other. Give the parameter an environment-scoped value for every environment you push to that project, and each lands on its own target.
+
+**Values cross as Vercel's `encrypted` type.** Vercel's `sensitive` type never returns a value again, which is the stronger posture — but Vercel allows it only on production and preview, so it cannot carry the unscoped default, which must also reach development. One type for every variable beats a store where the security of a value depends on which scope produced it.
+
+**The token is an ambient credential, never config.** penv reads `VERCEL_TOKEN` from the environment; the package declares it in `penv.credentials`, which is what makes `penv run` strip it before your application starts. It is never written into `penv.config.ts` and never recorded in the manifest. Mint one at your Vercel account's token settings; a team- or project-scoped token carries its own team, and only an account-wide token needs `teamId` in the provider entry.
+
+**Names are checked before anything is sent.** Vercel allows only letters, digits, and `_` in a key, and at most 256 characters — so a bad name is refused before the first write rather than forty variables in. Unlike GitHub, Vercel keys are case-sensitive, so two variables differing only in case are two variables.
+
+`doctor` reads this destination exactly as it reads any other value-withholding one: names exact, hand-edits detected through Vercel's own `updatedAt`, [values unknown permanently](#what-doctor-can-and-cannot-tell-you-about-a-value-withholding-provider).
+
+**`PENV_ENV` and `PENV_DELIVERY` are still yours to set.** They are the platform's environment store's job, not the push's — the push carries your parameters, and those two are the contract the platform needs *about* them. [Managed serverless: the platform's own store](#managed-serverless-the-platforms-own-store) says what each one is and how to capture the delivery map; set them beside the values penv pushed.
 
 ## Encryption
 
