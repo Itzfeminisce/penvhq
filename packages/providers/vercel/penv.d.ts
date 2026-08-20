@@ -6,7 +6,12 @@
  * module but `@penvhq/core`, the interface it augments: every type it needs is
  * written out here, including the three targets Vercel accepts. Without that a
  * config gets the open base shape, whose index signature accepts a misspelled
- * target and a target keyed by an environment that does not exist.
+ * target — `"prod"` compiles clean and fails at push time.
+ *
+ * The key side stays open, and deliberately: this interface is fixed, with no
+ * access to the `environments` the config declares, so `staging` as a key is
+ * something only the engine can judge. The provider refuses it at construction
+ * instead, naming the key and the declared list.
  */
 
 export {};

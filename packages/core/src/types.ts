@@ -262,16 +262,29 @@ type UnknownProviderFields<E, T extends KnownProviderType> = Exclude<
  * What `defineConfig` holds one `providers.<env>` entry to. A `type` that names
  * an installed provider package is checked against that package's own config
  * declaration — wrong field types fail, and a field the provider never declared
- * maps to `never` so the config cannot carry it. A `type` core has no
- * declaration for (a provider penv has not seen installed, or a third-party
- * package) keeps the open base shape: the compile-time answer and the runtime
- * `UNKNOWN_PROVIDER` answer are the same — install the package.
+ * is mapped to a shape the entry cannot satisfy so the config cannot carry it. A
+ * `type` core has no declaration for (a provider penv has not seen installed, or
+ * a third-party package) keeps the open base shape: the compile-time answer and
+ * the runtime `UNKNOWN_PROVIDER` answer are the same — install the package.
+ *
+ * The unknown field maps to an object whose single key *is* the sentence, so
+ * TypeScript prints it: `Type '3' is not assignable to type '3 & { readonly
+ * "retries is not a field @penvhq/provider-vercel declares": never }'`. Plain
+ * `never` compiled to `Type 'number' is not assignable to type 'never'` — the
+ * right line, and nothing about which field or whose config. The sentence has to
+ * be a *key*, not the value: a mapped type whose value is a string literal makes
+ * `defineConfig`'s contextual type circular, and every field of the entry then
+ * reports against `never` instead of the one that is wrong.
  */
 export type ValidatedProviderEntry<E> = E extends { readonly type: infer T extends string }
   ? T extends KnownProviderType
     ? UnknownProviderFields<E, T> extends never
       ? ProviderConfigMap[T] & { readonly type: T }
-      : { readonly [K in UnknownProviderFields<E, T>]: never }
+      : {
+          readonly [K in UnknownProviderFields<E, T>]: {
+            readonly [_ in `${K & string} is not a field ${T} declares`]: never;
+          };
+        }
     : E
   : E;
 

@@ -323,6 +323,56 @@ describe("a workspace package that declares the dependency itself", () => {
     expect(renderInstallPlan(plan).join("\n")).not.toContain("packages/ui");
   });
 
+  /**
+   * Finding 30: the same scan that found the second `@penvhq/penv` looked for
+   * `@penvhq/core` only in the root it was writing to, so a workspace kept two
+   * copies of the interfaces every committed declaration augments, five minor
+   * versions apart, under one engine pin.
+   */
+  it("moves a member's own @penvhq/core too, in a step of its own", () => {
+    const plan = planInstall(
+      monorepo({ api: { name: "@acme/api", dependencies: { "@penvhq/core": "^0.8.0" } } }),
+      "1.2.3",
+    );
+
+    expect(plan.steps).toHaveLength(3);
+    expect(plan.steps[2]?.manifest).toBe("packages/api/package.json");
+    expect(plan.steps[2]?.packages).toEqual([
+      { name: "@penvhq/core", version: "1.2.3", declared: "^0.8.0", satisfied: false },
+    ]);
+    expect(plan.steps[2]?.command).toEqual([
+      "pnpm",
+      "--filter",
+      "./packages/api",
+      "add",
+      "--save-exact",
+      "@penvhq/core@1.2.3",
+    ]);
+  });
+
+  /** The block a package chose is the block it stays in, core included. */
+  it("keeps a member's dev-declared @penvhq/core in devDependencies", () => {
+    const plan = planInstall(
+      monorepo({ api: { name: "@acme/api", devDependencies: { "@penvhq/core": "^0.8.0" } } }),
+      "1.2.3",
+    );
+
+    expect(plan.steps[2]?.dev).toBe(true);
+    expect(plan.steps[2]?.command).toContain("-D");
+    expect(renderInstallPlan(plan).join("\n")).toContain('- "@penvhq/core": "^0.8.0"');
+  });
+
+  /** The quiet half: a member declaring neither package is not given either. */
+  it("leaves a member that declares neither package untouched", () => {
+    const plan = planInstall(
+      monorepo({ ui: { name: "@acme/ui", dependencies: { react: "19", zod: "4.4.3" } } }),
+      "1.2.3",
+    );
+
+    expect(plan.steps).toHaveLength(2);
+    expect(renderInstallPlan(plan).join("\n")).not.toContain("packages/ui");
+  });
+
   /** Nothing to move below the root is nothing to say about it. */
   it("is satisfied when every package.json already declares the version", () => {
     const plan = planInstall(
@@ -349,6 +399,22 @@ describe("the change penv shows before installing", () => {
     // The second block is its own line, because it is its own command.
     expect(shown).toContain('  + "devDependencies": {');
     expect(shown).toContain("     then pnpm add --save-exact -D @penvhq/core@1.2.3");
+  });
+
+  /**
+   * Finding 33: the diff claimed to be creating a `devDependencies` block in a
+   * `package.json` that already had one with fourteen entries — the one
+   * nesting-shorthand line in an otherwise literal diff, and the one a reader
+   * would check by hand.
+   */
+  it("shows an existing block as context, not as an insertion", () => {
+    const root = makeProject(manifest({ devDependencies: { typescript: "5.9.3" } }));
+
+    const shown = renderInstallPlan(planInstall(root, "1.2.3")).join("\n");
+
+    expect(shown).toContain('    "devDependencies": {');
+    expect(shown).not.toContain('  + "devDependencies": {');
+    expect(shown).toContain('  +   "@penvhq/core": "1.2.3"');
   });
 
   it("shows the replacement when a version is already declared", () => {

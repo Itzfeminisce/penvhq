@@ -32,9 +32,9 @@ import { writeFileSync } from "node:fs";
 import {
   type InstallPlan,
   type InstallRuntime,
+  installedByManifest,
   installWithPackageManager,
   planInstall,
-  RUNTIME_PACKAGE,
   renderInstallPlan,
 } from "@penvhq/cli/install";
 import { ENGINE_PACKAGE, MANIFEST_PATH, type Manifest, serializeManifest } from "@penvhq/core";
@@ -194,13 +194,11 @@ export async function upgrade(options: UpgradeOptions): Promise<void> {
     } catch {
       throw new UpgradeInstallFailedError(plan.manager, release.version);
     }
-    // One line per file, not per command: the root writes two blocks now, and a
-    // file is what the reader recognises.
-    const moved = plan.steps.filter(
-      (entry) => !entry.satisfied && entry.packages.some((one) => one.name === RUNTIME_PACKAGE),
-    );
-    for (const step of moved) {
-      io.out(`✓ ${step.manifest} depends on ${RUNTIME_PACKAGE} ${release.version}`);
+    // One line per file, naming every package that landed in it: a closing line
+    // that confirms only the dependency penv has always moved says nothing about
+    // the one this release introduced.
+    for (const landed of installedByManifest(plan)) {
+      io.out(`✓ ${landed.manifest} depends on ${landed.packages}`);
     }
   }
 

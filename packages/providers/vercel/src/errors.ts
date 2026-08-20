@@ -39,7 +39,7 @@ export class VercelNameError extends PenvError {
 }
 
 /** Why penv will not write to a Vercel target. */
-export type VercelTargetReason = "unmapped" | "invalid" | "conflict";
+export type VercelTargetReason = "unmapped" | "invalid" | "conflict" | "undeclared";
 
 /**
  * The environment could not be placed on a Vercel target. Which target an
