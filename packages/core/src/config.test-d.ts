@@ -9,8 +9,9 @@
  * `@ts-expect-error` lines would fail here rather than in a user's editor.
  */
 
-import { describe, it } from "vitest";
+import { describe, expectTypeOf, it } from "vitest";
 import { defineConfig } from "./config.js";
+import type { ProviderConfigMap, ValidatedProviderEntry } from "./types.js";
 
 declare module "./types.js" {
   interface ProviderConfigMap {
@@ -38,6 +39,27 @@ describe("defineConfig provider typing", () => {
         production: { type: "@test/penv-provider-typed", repo: "acme/api" },
       },
     });
+  });
+
+  it("names the field and the provider in what it rejects an excess field against", () => {
+    expectTypeOf<
+      ValidatedProviderEntry<{ readonly type: "@test/penv-provider-typed"; readonly repo: string }>
+    >().toEqualTypeOf<{
+      readonly repo: { readonly "repo is not a field @test/penv-provider-typed declares": never };
+    }>();
+  });
+
+  it("leaves a sound entry's own fields intact — no rejection shape anywhere in it", () => {
+    expectTypeOf<
+      ValidatedProviderEntry<{
+        readonly type: "@test/penv-provider-typed";
+        readonly location: string;
+      }>
+    >().toEqualTypeOf<
+      ProviderConfigMap["@test/penv-provider-typed"] & {
+        readonly type: "@test/penv-provider-typed";
+      }
+    >();
   });
 
   it("rejects a declared field of the wrong type", () => {
