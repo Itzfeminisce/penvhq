@@ -75,6 +75,39 @@ export function resolveTarget(
   return declared;
 }
 
+/**
+ * Every key of `targets` is a penv environment, so a key the config never
+ * declared is a mapping for a deployment that does not exist — a typo that
+ * silently delivers nothing rather than being refused at push time.
+ *
+ * The check is here rather than in the committed declaration because the type
+ * cannot do it: `ProviderConfigMap["@penvhq/provider-vercel"]` is a fixed
+ * interface with no access to the config's own `environments`, and widening the
+ * contract so it could would be bending the provider contract around one
+ * provider. The factory has the declared list on hand, so the refusal is a
+ * construction-time one.
+ */
+export function checkTargetEnvironments(
+  targets: VercelTargetMap | undefined,
+  environments: readonly string[],
+  environment?: string,
+): void {
+  const undeclared = Object.keys(targets ?? {}).filter((key) => !environments.includes(key));
+  if (undeclared.length === 0) {
+    return;
+  }
+  const block = environment === undefined ? "`targets`" : `\`providers.${environment}.targets\``;
+  const declared = environments.length === 0 ? "none" : environments.join(", ");
+  throw new VercelTargetError(
+    "undeclared",
+    `${block} is keyed by ${undeclared.join(", ")}, which \`penv.config.ts\` does not declare as ${undeclared.length === 1 ? "an environment" : "environments"}`,
+    `This project declares: ${declared}. Fix the key, or add the environment to \`environments\` ` +
+      "in `penv.config.ts` — a target for an environment penv has never heard of is a mapping " +
+      "nothing will ever use.",
+    ...(environment === undefined ? [] : [environment]),
+  );
+}
+
 /** One environment variable as Vercel's list endpoint reports it. */
 interface VercelEnv {
   readonly key: string;

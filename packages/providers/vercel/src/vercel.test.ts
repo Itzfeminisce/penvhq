@@ -286,7 +286,7 @@ describe("VercelProvider capabilities", () => {
 });
 
 describe("penvProviderFactory", () => {
-  const config = { environments: ["production"], providers: {} };
+  const config = { environments: ["production", "staging"], providers: {} };
 
   it("refuses a provider entry with no project", () => {
     expect(() =>
@@ -323,6 +323,38 @@ describe("penvProviderFactory", () => {
         environment: "production",
       }),
     ).toThrow(/production, preview, development/);
+  });
+
+  it("refuses a target keyed by an environment the config does not declare", () => {
+    expect(() =>
+      penvProviderFactory({
+        root: "/app",
+        config: { environments: ["production"], providers: {} },
+        providerConfig: {
+          type: "@penvhq/provider-vercel",
+          location: "prj_app",
+          targets: { production: "production", staging: "preview" },
+        },
+        environment: "production",
+      }),
+    ).toThrow(
+      /`providers\.production\.targets` is keyed by staging.*This project declares: production/s,
+    );
+  });
+
+  it("accepts targets keyed only by declared environments", () => {
+    expect(() =>
+      penvProviderFactory({
+        root: "/app",
+        config,
+        providerConfig: {
+          type: "@penvhq/provider-vercel",
+          location: "prj_app",
+          targets: TARGETS,
+        },
+        environment: "staging",
+      }),
+    ).not.toThrow();
   });
 
   it("builds a provider that declares the projection capability", () => {

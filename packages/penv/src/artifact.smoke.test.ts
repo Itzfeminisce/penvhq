@@ -289,6 +289,8 @@ describe("the published artifact", () => {
        }`,
     );
     expect(undeclared.ok).toBe(false);
-    expect(undeclared.out).toContain("not assignable to type 'never'");
+    expect(undeclared.out).toContain(
+      "bogusFieldThatDoesNotExist is not a field @penvhq/provider-vercel declares",
+    );
   });
 });

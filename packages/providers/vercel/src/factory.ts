@@ -9,7 +9,7 @@
 import type { ProjectionProvider, ProviderFactoryContext } from "@penvhq/core";
 import { PenvError } from "@penvhq/core";
 import type { VercelTargetMap } from "./vercel.js";
-import { createVercelProvider, resolveTarget } from "./vercel.js";
+import { checkTargetEnvironments, createVercelProvider, resolveTarget } from "./vercel.js";
 
 // The config shape this factory reads is declared once, in `penv.d.ts` — the
 // file `penv.types` ships and `penv add` commits into the project.
@@ -35,8 +35,10 @@ export function penvProviderFactory(context: ProviderFactoryContext): Projection
 
   const targets = asTargetMap(context.providerConfig?.["targets"]);
   // Refused here, before `verify` opens a connection: an environment with no
-  // declared target has no safe place to land, and the config key that fixes it
-  // is named in the refusal.
+  // declared target has no safe place to land, and a target keyed by an
+  // environment the config never declared has no deployment to reach. The config
+  // key that fixes either is named in the refusal.
+  checkTargetEnvironments(targets, context.config.environments, context.environment);
   if (context.environment !== undefined) {
     resolveTarget(targets, context.environment);
   }
