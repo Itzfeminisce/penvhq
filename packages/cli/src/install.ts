@@ -24,8 +24,10 @@
  * you meant the root), and a workspace package that declares `@penvhq/penv`
  * itself is a second copy of the very version the manifest pins — one repository
  * ran the 0.8 bridge under a 0.11 pin for three releases because nothing looked
- * below the root. So every `package.json` that declares it moves, under one
- * consent, and the commands shown are the ones that run.
+ * below the root, and the same repository then held two `@penvhq/core`s five
+ * minor versions apart because the scan looked for only one name. So every
+ * `package.json` that declares either moves, under one consent, and the commands
+ * shown are the ones that run.
  *
  * Two commands write that dependency line: `penv init`, which is the engine's,
  * and `penv upgrade`, which is the launcher's. This module is published at
@@ -126,6 +128,13 @@ export interface InstallStep {
   readonly command: readonly string[];
   /** The block this step writes into, which is what the diff shows. */
   readonly dev: boolean;
+  /**
+   * True when that block is already in the file. The diff then shows it as the
+   * context it is, without a `+`: claiming to create a `devDependencies` beside
+   * fourteen entries is the one line in an otherwise literal diff that a reader
+   * would go and check by hand.
+   */
+  readonly blockPresent: boolean;
   /** True when this file already declares every one of them. */
   readonly satisfied: boolean;
 }
@@ -135,7 +144,8 @@ export interface InstallPlan {
   readonly manager: PackageManager;
   /**
    * The root's `package.json` — one step per block it writes, since one command
-   * names one — then every workspace package that declares the runtime one.
+   * names one — then one per workspace package that declares the runtime package
+   * or the types package itself.
    */
   readonly steps: readonly InstallStep[];
   /** The lockfile the manager will rewrite, when the project has one. */
@@ -263,6 +273,12 @@ function declaredIn(dir: string, name: string): Declaration | undefined {
   return undefined;
 }
 
+/** True when `package.json` already has the block a step writes into. */
+function blockPresentIn(dir: string, dev: boolean): boolean {
+  const block: unknown = manifestOf(dir)?.[dev ? "devDependencies" : "dependencies"];
+  return block !== null && typeof block === "object" && !Array.isArray(block);
+}
+
 /** True when `root` is the root of a pnpm workspace, which is what `-w` is for. */
 export function isPnpmWorkspaceRoot(root: string): boolean {
   return existsSync(join(root, PNPM_WORKSPACE)) && existsSync(join(root, "package.json"));
@@ -359,7 +375,9 @@ function expandGlob(root: string, glob: string): string[] {
 }
 
 /**
- * Every workspace package that declares `@penvhq/penv` itself, root excluded.
+ * Every workspace package that declares `name` itself, root excluded — asked
+ * once for `@penvhq/penv` and once for `@penvhq/core`, since a member holding
+ * its own copy of either is a second version running under one pin.
  *
  * Only the ones that already declare it: penv moves a dependency a package
  * chose, and adding one to a package that never asked for it is a different
@@ -413,7 +431,12 @@ function stepFor(
   manager: PackageManager,
   manifest: string,
   packages: readonly InstallPackage[],
-  options: { readonly filter?: string; readonly workspaceRoot: boolean; readonly dev: boolean },
+  options: {
+    readonly filter?: string;
+    readonly workspaceRoot: boolean;
+    readonly dev: boolean;
+    readonly dir: string;
+  },
 ): InstallStep {
   const pending = packages.filter((entry) => !entry.satisfied);
   const specs = (pending.length === 0 ? packages : pending).map(
@@ -424,6 +447,7 @@ function stepFor(
     packages,
     command: addCommand(manager, options, specs),
     dev: options.dev,
+    blockPresent: blockPresentIn(options.dir, options.dev),
     satisfied: pending.length === 0,
   };
 }
@@ -471,34 +495,41 @@ export function planInstall(root: string, version: string = engineVersion()): In
   const steps: InstallStep[] = [
     stepFor(manager, "package.json", packages, {
       workspaceRoot,
+      dir: root,
       dev:
         runtime?.dev === true &&
         pending.every((entry) => entry.name === RUNTIME_PACKAGE) &&
         pending.length > 0,
     }),
-    stepFor(manager, "package.json", [typesPackage], { workspaceRoot, dev: true }),
+    stepFor(manager, "package.json", [typesPackage], { workspaceRoot, dir: root, dev: true }),
   ];
-  for (const dir of workspaceMembers(root, RUNTIME_PACKAGE)) {
-    const declared = declaredIn(dir, RUNTIME_PACKAGE) as Declaration;
-    steps.push(
-      stepFor(
-        manager,
-        manifestPathOf(root, dir),
-        [
+  // Both packages, because a member declaring either holds its own copy of it:
+  // `@penvhq/penv` is a second bridge running under the pin, and `@penvhq/core`
+  // is a second copy of the interfaces every committed declaration augments.
+  for (const name of [RUNTIME_PACKAGE, TYPES_PACKAGE]) {
+    for (const dir of workspaceMembers(root, name)) {
+      const declared = declaredIn(dir, name) as Declaration;
+      steps.push(
+        stepFor(
+          manager,
+          manifestPathOf(root, dir),
+          [
+            {
+              name,
+              version,
+              declared: declared.version,
+              satisfied: declared.version === version,
+            },
+          ],
           {
-            name: RUNTIME_PACKAGE,
-            version,
-            declared: declared.version,
-            satisfied: declared.version === version,
+            filter: `./${relative(root, dir).split(sep).join("/")}`,
+            workspaceRoot: false,
+            dir,
+            dev: declared.dev,
           },
-        ],
-        {
-          filter: `./${relative(root, dir).split(sep).join("/")}`,
-          workspaceRoot: false,
-          dev: declared.dev,
-        },
-      ),
-    );
+        ),
+      );
+    }
   }
 
   return {
@@ -520,6 +551,36 @@ export function installedPackages(plan: InstallPlan): readonly InstallPackage[] 
   return [...new Map(pending.map((entry) => [entry.name, entry])).values()];
 }
 
+/** One file the plan wrote, and what landed in it. */
+export interface InstalledManifest {
+  readonly manifest: string;
+  /** `@penvhq/penv 1.2.3 and @penvhq/core 1.2.3` — every package this file gained. */
+  readonly packages: string;
+}
+
+/**
+ * What the install landed, one entry per `package.json`.
+ *
+ * Per file rather than per step, because the root is two steps and a file is
+ * what the reader recognises — and every package in it, because a caller
+ * confirming only the one it happened to name leaves the release's own new
+ * dependency unmentioned in the lines that say the upgrade worked.
+ */
+export function installedByManifest(plan: InstallPlan): readonly InstalledManifest[] {
+  const byManifest = new Map<string, InstallPackage[]>();
+  for (const step of plan.steps.filter((entry) => !entry.satisfied)) {
+    const landed = byManifest.get(step.manifest) ?? [];
+    landed.push(...step.packages.filter((entry) => !entry.satisfied));
+    byManifest.set(step.manifest, landed);
+  }
+  return [...byManifest].map(([manifest, packages]) => ({
+    manifest,
+    packages: series(
+      [...new Map(packages.map((entry) => [entry.name, entry])).values()].map(describe),
+    ),
+  }));
+}
+
 /** Every package the plan names, once each — the root's blocks are two steps now. */
 function plannedPackages(plan: InstallPlan): readonly InstallPackage[] {
   const all = plan.steps.flatMap((step) => step.packages);
@@ -539,14 +600,16 @@ function renderStep(step: InstallStep): string[] {
   const added = pending.filter((entry) => entry.declared === undefined);
   const replaced = pending.filter((entry) => entry.declared !== undefined);
   const block = step.dev ? "devDependencies" : "dependencies";
+  // The block's own lines are an insertion only when the block is not there yet.
+  const edge = step.blockPresent ? "   " : "  +";
   return [
     step.manifest,
     ...(added.length === 0
       ? []
       : [
-          `  + "${block}": {`,
+          `${edge} "${block}": {`,
           ...added.map((entry) => `  +   "${entry.name}": "${entry.version}"`),
-          "  + }",
+          `${edge} }`,
         ]),
     ...replaced.flatMap((entry) => [
       `  - "${entry.name}": "${entry.declared}"`,

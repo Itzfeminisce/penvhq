@@ -106,8 +106,13 @@ interface ProjectOptions {
   readonly types?: string | null;
   /** The lockfile that names the project's package manager. */
   readonly lockfile?: string;
-  /** Workspace packages under `packages/`, each with what it declares. */
-  readonly workspace?: Readonly<Record<string, string>>;
+  /** Workspace packages under `packages/`. A bare version is `@penvhq/penv` in `dependencies`. */
+  readonly workspace?: Readonly<Record<string, string | WorkspaceMember>>;
+}
+
+interface WorkspaceMember {
+  readonly dependencies?: Readonly<Record<string, string>>;
+  readonly devDependencies?: Readonly<Record<string, string>>;
 }
 
 function projectAt(options: ProjectOptions = {}): string {
@@ -135,9 +140,11 @@ function projectAt(options: ProjectOptions = {}): string {
     for (const [name, declared] of Object.entries(options.workspace)) {
       const dir = join(root, "packages", name);
       mkdirSync(dir, { recursive: true });
+      const body: WorkspaceMember =
+        typeof declared === "string" ? { dependencies: { "@penvhq/penv": declared } } : declared;
       writeFileSync(
         join(dir, "package.json"),
-        `${JSON.stringify({ name: `@acme/${name}`, dependencies: { "@penvhq/penv": declared } }, null, 2)}\n`,
+        `${JSON.stringify({ name: `@acme/${name}`, ...body }, null, 2)}\n`,
       );
     }
   }
@@ -166,7 +173,7 @@ function harness(overrides: {
   noDownload?: boolean;
   /** Makes the package manager refuse, the way a failed `pnpm add` does. */
   installFails?: boolean;
-  workspace?: Readonly<Record<string, string>>;
+  workspace?: Readonly<Record<string, string | WorkspaceMember>>;
 }): Harness {
   const root = projectAt({
     ...(overrides.manifest === undefined ? {} : { manifest: overrides.manifest }),
@@ -371,6 +378,22 @@ describe("the one consent", () => {
     expect(test.questions).toEqual([`Move this project to ${LATEST}?`]);
   });
 
+  /**
+   * Finding 33: the closing `✓` lines confirmed the two `@penvhq/penv`
+   * declarations and the pin, and never mentioned `@penvhq/core` — the only
+   * change new in that release, and the whole reason the upgrade was worth
+   * running. It landed; `upgrade` just did not say so.
+   */
+  it("confirms every package it moved in the closing lines, core included", async () => {
+    const test = harness({ argv: [LATEST], types: null, consent: true });
+
+    await upgrade(test.options);
+
+    expect(test.out).toContain(
+      `✓ package.json depends on @penvhq/penv ${LATEST} and @penvhq/core ${LATEST}`,
+    );
+  });
+
   /** The quiet half: a project that already declares it is not told about it again. */
   it("says nothing about @penvhq/core when the project already declares it", async () => {
     const test = harness({ argv: [LATEST], consent: true });
@@ -457,22 +480,62 @@ describe("a workspace whose packages declare the dependency too", () => {
     expect(test.out).toContain(`✓ packages/db/package.json depends on @penvhq/penv ${LATEST}`);
   });
 
+  /**
+   * Finding 30: the scan that found the second `@penvhq/penv` looked for
+   * `@penvhq/core` only in the root it was writing to, so two members kept a
+   * 0.8 copy of the interfaces every committed declaration augments while the
+   * root moved to 0.13.
+   */
+  it("moves a package's own @penvhq/core too, in the same one diff", async () => {
+    const test = harness({
+      argv: [LATEST],
+      consent: true,
+      workspace: {
+        integrations: { dependencies: { "@penvhq/core": "^0.8.0" } },
+        cloud: { devDependencies: { "@penvhq/core": "^0.8.0" } },
+      },
+    });
+
+    await upgrade(test.options);
+
+    const shown = test.out.join("\n");
+    expect(shown).toContain("packages/integrations/package.json");
+    expect(shown).toContain('  - "@penvhq/core": "^0.8.0"');
+    expect(test.questions).toEqual([`Move this project to ${LATEST}?`]);
+    expect(
+      test.installs[0]?.steps
+        .filter((step) => !step.satisfied)
+        .map((step) => step.command.join(" ")),
+    ).toEqual([
+      `pnpm add -w --save-exact @penvhq/penv@${LATEST}`,
+      `pnpm --filter ./packages/cloud add --save-exact -D @penvhq/core@${LATEST}`,
+      `pnpm --filter ./packages/integrations add --save-exact @penvhq/core@${LATEST}`,
+    ]);
+    expect(test.out).toContain(`✓ packages/cloud/package.json depends on @penvhq/core ${LATEST}`);
+  });
+
   it("leaves every file untouched when the one question is declined", async () => {
-    const test = harness({ argv: [LATEST], consent: false, workspace: { db: "^0.8.0" } });
+    const test = harness({
+      argv: [LATEST],
+      consent: false,
+      workspace: { db: "^0.8.0", integrations: { dependencies: { "@penvhq/core": "^0.8.0" } } },
+    });
     const manifestBefore = manifestTextIn(test.root);
     const rootBefore = packageTextIn(test.root);
     const dbBefore = packageTextAt(test.root, "db");
+    const integrationsBefore = packageTextAt(test.root, "integrations");
 
     await expect(upgrade(test.options)).rejects.toThrow("was not installed");
 
     expect(manifestTextIn(test.root)).toBe(manifestBefore);
     expect(packageTextIn(test.root)).toBe(rootBefore);
     expect(packageTextAt(test.root, "db")).toBe(dbBefore);
+    expect(packageTextAt(test.root, "integrations")).toBe(integrationsBefore);
     expect(test.installs).toHaveLength(0);
   });
 
-  /** The quiet half: a workspace package that never declared penv is not given it. */
-  it("says nothing about a package that declares no @penvhq/penv", async () => {
+  /** The quiet half: a workspace package that declared neither is given neither. */
+  it("says nothing about a package that declares neither of them", async () => {
     const test = harness({ argv: [LATEST], consent: true, workspace: { db: "^0.8.0" } });
     mkdirSync(join(test.root, "packages", "ui"), { recursive: true });
     writeFileSync(
