@@ -19,8 +19,9 @@ import { LAST_PUSHED_KEY } from "./push.js";
 const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", import.meta.url));
 
 const CONFIG = {
-  environments: ["production"],
-  providers: { production: { type: "@penvhq/provider-github", location: "org/app" } },
+  environments: {
+    production: { provider: "@penvhq/provider-github", repository: "org/app" },
+  },
 };
 
 const created: string[] = [];
@@ -218,7 +219,7 @@ describe("doctor projection checks", () => {
   it("adds no projection findings when the environment's provider is the local tree", async () => {
     const root = makeProject({
       tree: { "api-key.production": "v" },
-      config: { providers: { production: { type: "@penvhq/provider-filesystem" } } },
+      config: { environments: { production: "@penvhq/provider-filesystem" } },
     });
 
     const report = await runDoctor({ cwd: root, environment: "production" });

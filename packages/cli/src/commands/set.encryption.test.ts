@@ -31,13 +31,14 @@ const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", i
 
 /** Only production declares a key source, so `development` is the no-key case too. */
 const CONFIG = {
-  environments: ["development", "test", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    test: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-filesystem" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    test: "@penvhq/provider-filesystem",
+    production: {
+      provider: "@penvhq/provider-filesystem",
+      keySource: { source: "env", id: "prod" },
+    },
   },
-  keys: { production: { source: "env", id: "prod" } },
 };
 
 const KEY_VARIABLE = "PENV_KEY_PROD";
@@ -257,8 +258,8 @@ describe("a secret penv cannot seal", () => {
 
   /**
    * A key source declared nowhere is a different situation from a key that is
-   * missing, and both refuse: development declares no `keys` block, so penv was
-   * never told where to look rather than having looked and found nothing.
+   * missing, and both refuse: development's entry declares no `keySource`, so
+   * penv was never told where to look rather than having looked and found nothing.
    */
   it("refuses when the environment declares no key source at all", async () => {
     const root = makeProject({ tree: { "db-password.json": SECRET } });

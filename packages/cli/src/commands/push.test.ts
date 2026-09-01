@@ -32,12 +32,14 @@ import { runSet } from "./set.js";
 const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", import.meta.url));
 
 const CONFIG = {
-  environments: ["development", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-github", location: "org/app" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: {
+      provider: "@penvhq/provider-github",
+      repository: "org/app",
+      keySource: { source: "env", id: "prod" },
+    },
   },
-  keys: { production: { source: "env", id: "prod" } },
 };
 
 const KEY_VARIABLE = "PENV_KEY_PROD";
@@ -179,7 +181,6 @@ describe("runPush to a projection-holding provider", () => {
     expect(result.pushed).toBe(2);
     expect(result.environmentSecrets).toBe(1);
     expect(result.repositorySecrets).toBe(1);
-    expect(result.location).toBe("org/app");
     expect(pushes).toContainEqual({
       name: "DB_URL",
       value: "postgres://prod",
@@ -351,9 +352,9 @@ describe("the missing destination target", () => {
 
 describe("runPush to a record-holding provider", () => {
   const VAULT_CONFIG = {
-    providers: {
-      development: { type: "@penvhq/provider-filesystem" },
-      production: { type: "@penvhq/provider-vault", location: "penv/prod" },
+    environments: {
+      development: "@penvhq/provider-filesystem",
+      production: { provider: "@penvhq/provider-vault", path: "penv/prod" },
     },
   };
 
@@ -421,42 +422,25 @@ describe("the destination itself", () => {
     const root = makeProject({
       tree: { "api-key": "v" },
       config: {
-        providers: {
-          development: { type: "@penvhq/provider-filesystem" },
-          production: { type: "@penvhq/provider-filesystem" },
+        environments: {
+          development: "@penvhq/provider-filesystem",
+          production: "@penvhq/provider-filesystem",
         },
       },
     });
 
-    await expect(runPush({ cwd: root, environment: "production", now: NOW })).rejects.toMatchObject(
-      { code: "NO_DESTINATION" },
-    );
-  });
-
-  it("pushes once to a --destination override without touching the declared provider", async () => {
-    const root = makeProject({
-      tree: { "api-key": "v" },
-      config: {
-        providers: {
-          development: { type: "@penvhq/provider-filesystem" },
-          production: { type: "@penvhq/provider-filesystem" },
-        },
-      },
-    });
-    const { provider, pushes } = fakeProjection();
-
-    const result = await runPush({
+    const refusal = await runPush({
       cwd: root,
       environment: "production",
-      destination: "@penvhq/provider-github",
-      location: "acme/api",
-      provider,
       now: NOW,
-    });
+    }).catch((error: { code: string; remedy?: string }) => error);
 
-    expect(result.destination).toBe("@penvhq/provider-github");
-    expect(result.location).toBe("acme/api");
-    expect(pushes).toHaveLength(1);
+    expect(refusal).toMatchObject({ code: "NO_DESTINATION" });
+    // The remedy teaches the config edit and nothing else: the ad-hoc push died
+    // with the generic address field it hung on.
+    const remedy = (refusal as { remedy?: string }).remedy ?? "";
+    expect(remedy).toContain('provider: "@penvhq/provider-github"');
+    expect(remedy).not.toContain("--destination");
   });
 });
 

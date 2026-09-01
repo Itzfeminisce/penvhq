@@ -14,11 +14,10 @@ import {
 } from "./env-flags.js";
 
 const CONFIG: PenvConfig = {
-  environments: ["development", "staging", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    staging: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-filesystem" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    staging: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
   },
 };
 
@@ -77,10 +76,9 @@ describe("environmentFromShorthand", () => {
 describe("shadowedEnvironments", () => {
   it("names an environment a real flag shadows", () => {
     const config: PenvConfig = {
-      environments: ["yes", "production"],
-      providers: {
-        yes: { type: "@penvhq/provider-filesystem" },
-        production: { type: "@penvhq/provider-filesystem" },
+      environments: {
+        yes: "@penvhq/provider-filesystem",
+        production: "@penvhq/provider-filesystem",
       },
     };
     expect(shadowedEnvironments(config)).toEqual(["yes"]);

@@ -5,9 +5,9 @@
  * edits. The two are deliberately distinct: an environment can flip its source to
  * `vault` while the working copy on disk stays filesystem.
  *
- * These tests assert the mapping from a `providers.*` entry to a concrete
- * provider, and the fallback: an environment with no entry has no separate source
- * of truth, so it resolves to the local tree rather than erroring.
+ * These tests assert the mapping from an `environments.*` entry to a concrete
+ * provider, and the case that keeps the two the same: an entry naming the
+ * filesystem has no separate source of truth, so it resolves to the local tree.
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -50,10 +50,9 @@ afterEach(() => {
 describe("sourceProviderFor", () => {
   it("builds the vault provider an environment declares as its source of truth", async () => {
     const root = makeProject({
-      environments: ["development", "production"],
-      providers: {
-        development: { type: "@penvhq/provider-filesystem" },
-        production: { type: "@penvhq/provider-vault", location: "secret/app" },
+      environments: {
+        development: "@penvhq/provider-filesystem",
+        production: { provider: "@penvhq/provider-vault", path: "secret/app" },
       },
     });
     const project = openProject(root);
@@ -65,10 +64,9 @@ describe("sourceProviderFor", () => {
 
   it("builds the mock provider an environment declares", async () => {
     const root = makeProject({
-      environments: ["development", "production"],
-      providers: {
-        development: { type: "@penvhq/provider-mock" },
-        production: { type: "@penvhq/provider-filesystem" },
+      environments: {
+        development: "@penvhq/provider-mock",
+        production: "@penvhq/provider-filesystem",
       },
     });
     const project = openProject(root);
@@ -78,11 +76,11 @@ describe("sourceProviderFor", () => {
     expect(source.type).toBe("@penvhq/provider-mock");
   });
 
-  it("falls back to the local filesystem tree when the environment declares no provider", async () => {
+  it("builds the local tree for an environment whose entry names the filesystem", async () => {
     const root = makeProject({
-      environments: ["development", "production"],
-      providers: {
-        development: { type: "@penvhq/provider-filesystem" },
+      environments: {
+        development: "@penvhq/provider-filesystem",
+        production: "@penvhq/provider-filesystem",
       },
     });
     const project = openProject(root);

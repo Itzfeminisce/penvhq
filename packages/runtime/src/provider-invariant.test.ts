@@ -6,8 +6,8 @@
  * runtime reads what is on disk. That identity is what makes changing a provider
  * a config change rather than an application rewrite, and it only holds if the
  * runtime cannot dial a network provider at boot. The provider *registry* — the
- * one place a `providers.*.type` becomes a concrete provider — lives in the CLI
- * for exactly this reason.
+ * one place an `environments.*.provider` becomes a concrete provider — lives in
+ * the CLI for exactly this reason.
  *
  * `load.test.ts` pins the *behaviour* (a vault-declared environment resolves off
  * disk). This pins the *structure* that guarantees it: the runtime never imports
@@ -29,8 +29,8 @@ function read(relative: string): string {
 
 /**
  * The source with its comments removed, so a docstring that *names* the
- * invariant it upholds — `load` "never inspects `providers.*.type`" — is not
- * mistaken for the code that would break it.
+ * invariant it upholds — `load` "never inspects `environments.*.provider`" — is
+ * not mistaken for the code that would break it.
  */
 function code(relative: string): string {
   return read(relative)
@@ -75,12 +75,12 @@ describe("the runtime never selects a provider", () => {
 
   it("never inspects a declared provider type", () => {
     // The runtime reads config for environments and keys, never to choose a
-    // backend: `providers.*.type` is the CLI's to dispatch on, never the
-    // runtime's. No runtime source may read a provider's `type`.
+    // backend: `environments.*.provider` is the CLI's to dispatch on, never the
+    // runtime's. No runtime source may index the record to read one.
     for (const source of SOURCES) {
       const text = code(source);
-      expect(text, `${source} must not read a provider's \`type\``).not.toMatch(
-        /providers\b[^\n]*\.type/,
+      expect(text, `${source} must not read an entry's \`provider\` off the record`).not.toMatch(
+        /environments\b[^\n]*\.provider/,
       );
     }
   });

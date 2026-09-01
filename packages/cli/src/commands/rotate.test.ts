@@ -30,12 +30,9 @@ import { runRotate } from "./rotate.js";
 const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", import.meta.url));
 
 const CONFIG = {
-  environments: ["development", "production"],
-  providers: {
-    // A non-retaining source of truth, for the refusal test.
-    development: { type: "@penvhq/provider-filesystem" },
-    // A retaining source of truth, for the dual-valid and cutover tests.
-    production: { type: "@penvhq/provider-mock" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-mock",
   },
 };
 
@@ -84,7 +81,15 @@ const T_CUTOVER = "2026-03-01T00:00:00.000Z";
 
 /** The key `development` seals under in the local-tree rotation tests. */
 const KEY_VARIABLE = "PENV_KEY_DEV";
-const KEYS = { keys: { development: { source: "env", id: "dev" } } };
+const KEYS = {
+  environments: {
+    ...CONFIG.environments,
+    development: {
+      provider: "@penvhq/provider-filesystem",
+      keySource: { source: "env", id: "dev" },
+    },
+  },
+};
 
 /** A real key, not a fixed one: a constant in a test is a constant in a habit. */
 function freshKey(): string {
@@ -256,9 +261,9 @@ describe("runRotate", () => {
 });
 
 /**
- * When an environment has no separate `providers` entry — or one that IS the
- * filesystem — its source of truth is the local `.penv` tree, which penv owns the
- * envelope of. Rotating a value into it must obey the same seal-and-twin physics
+ * When an environment's entry names the filesystem provider, its source of truth
+ * is the local `.penv` tree, which penv owns the envelope of. Rotating a value
+ * into it must obey the same seal-and-twin physics
  * `set` does: a secret is sealed, its plaintext twin removed. The defect these
  * cover was `rotate` hard-coding `encrypted: false` and skipping the twin removal,
  * so the live credential landed as cleartext `.penv/<name>.<env>` — committed to

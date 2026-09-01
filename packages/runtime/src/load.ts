@@ -147,7 +147,7 @@ function place(root: Record<string, unknown>, path: readonly string[], value: st
  * the only question the injected environment cannot answer about itself.
  */
 function deliveryConfig(names: Readonly<Record<string, string>>): PenvConfig {
-  return { environments: [], providers: {}, override: names };
+  return { environments: {}, override: names };
 }
 
 /** The environment a refusal names: what the caller said, then what `penv run` pinned. */

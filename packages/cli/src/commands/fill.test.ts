@@ -30,12 +30,13 @@ import { runGet } from "./get.js";
 const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", import.meta.url));
 
 const CONFIG = {
-  environments: ["development", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-filesystem" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: {
+      provider: "@penvhq/provider-filesystem",
+      keySource: { source: "env", id: "prod" },
+    },
   },
-  keys: { production: { source: "env", id: "prod" } },
 };
 
 /** Only production declares a key source, so a secret fill targets that environment. */

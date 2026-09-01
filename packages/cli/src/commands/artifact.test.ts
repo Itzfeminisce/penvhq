@@ -22,10 +22,9 @@ import { runArtifactBuild } from "./artifact.js";
 const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", import.meta.url));
 
 const CONFIG = {
-  environments: ["development", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-filesystem" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
   },
 };
 
@@ -191,7 +190,15 @@ describe("the bytes", () => {
 
   it("are identical on a rebuild, sealed values included", async () => {
     const root = makeProject({
-      config: { keys: { production: { source: "env", id: KEY_ID } } },
+      config: {
+        environments: {
+          ...CONFIG.environments,
+          production: {
+            provider: "@penvhq/provider-filesystem",
+            keySource: { source: "env", id: KEY_ID },
+          },
+        },
+      },
       tree: {
         "database-url.production.enc": seal(
           {
@@ -235,10 +242,13 @@ describe("what never reaches the artifact", () => {
   function fullProject(): string {
     return makeProject({
       config: {
-        keys: { production: { source: "env", id: KEY_ID } },
-        providers: {
-          development: { type: "@penvhq/provider-filesystem" },
-          production: { type: "@penvhq/provider-vault", location: "secret/app" },
+        environments: {
+          development: "@penvhq/provider-filesystem",
+          production: {
+            provider: "@penvhq/provider-vault",
+            path: "secret/app",
+            keySource: { source: "env", id: KEY_ID },
+          },
         },
       },
       tree: {

@@ -28,7 +28,7 @@
  */
 
 import type { ParameterRef, PenvConfig } from "@penvhq/core";
-import { deliveryNames, own, PenvError } from "@penvhq/core";
+import { deliveryNames, environmentEntry, environmentNames, own, PenvError } from "@penvhq/core";
 import type { z } from "zod";
 import {
   CONTROL_VARIABLES,
@@ -194,11 +194,15 @@ export function strippedVariables(
   credentials?: DeclaredCredentials,
 ): string[] {
   const names = penvOwnVariables(host);
-  for (const provider of Object.values(config.providers)) {
-    for (const name of own(PROVIDER_CREDENTIALS, provider.type) ?? []) {
+  for (const environment of environmentNames(config)) {
+    const provider = environmentEntry(config, environment)?.provider;
+    if (provider === undefined) {
+      continue;
+    }
+    for (const name of own(PROVIDER_CREDENTIALS, provider) ?? []) {
       names.add(name);
     }
-    for (const name of own(credentials, provider.type) ?? []) {
+    for (const name of own(credentials, provider) ?? []) {
       names.add(name);
     }
   }

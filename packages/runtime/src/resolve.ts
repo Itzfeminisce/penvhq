@@ -17,10 +17,10 @@
  * environment declares, and this is the design rather than a limitation. A
  * provider is where an environment's source of truth *lives*, not where the
  * runtime reads from: `penv pull` materialises the tree from the provider, and
- * the runtime then reads what is on disk. So nothing here inspects
- * `providers.*.type` — a Vault-backed environment resolves through exactly the
- * code path a filesystem-backed one does, which is what makes changing provider
- * a configuration change rather than an application rewrite.
+ * the runtime then reads what is on disk. So nothing here inspects an entry's
+ * `provider` to pick a backend — a Vault-backed environment resolves through
+ * exactly the code path a filesystem-backed one does, which is what makes
+ * changing provider a configuration change rather than an application rewrite.
  *
  * Decryption happens here, synchronously, and that is the same knife applied a
  * second time. Key *acquisition* is async and happens before the process starts:
@@ -37,11 +37,11 @@ import {
   assertMigrated,
   ConfigError,
   candidatesFor,
+  environmentEntry,
   findConfigFile,
   formatValueFile,
   loadConfigFrom,
   openValue,
-  own,
   parameterId,
   recordsDir,
   resolveEnvironment,
@@ -67,8 +67,8 @@ const LOCAL_TREE_TYPE = "@penvhq/provider-filesystem";
  * owner to run `penv pull` would send them to a command with nothing to do.
  */
 export function hasRemoteSource(config: PenvConfig, environment: string): boolean {
-  const declared = own(config.providers, environment);
-  return declared !== undefined && declared.type !== LOCAL_TREE_TYPE;
+  const declared = environmentEntry(config, environment);
+  return declared !== undefined && declared.provider !== LOCAL_TREE_TYPE;
 }
 
 /** One parameter that resolved to a present value for the target environment. */

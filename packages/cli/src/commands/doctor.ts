@@ -59,6 +59,7 @@ import {
   accessPath,
   assertNever,
   effectiveMeta,
+  environmentEntry,
   formatValueFile,
   holdsProjection,
   holdsRecords,
@@ -300,7 +301,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     check: "provider",
     severity: "pass",
     label: "Provider",
-    subject: project.config.providers[environment]?.type ?? project.provider.type,
+    subject: environmentEntry(project.config, environment)?.provider ?? project.provider.type,
   });
 
   return {
@@ -736,8 +737,8 @@ async function projectionFindings(
   if (override !== undefined) {
     projection = override;
   } else {
-    const declared = project.config.providers[environment];
-    if (declared === undefined || declared.type === LOCAL_TREE_TYPE) {
+    const declared = environmentEntry(project.config, environment);
+    if (declared === undefined || declared.provider === LOCAL_TREE_TYPE) {
       return [];
     }
     let source: Awaited<ReturnType<typeof sourceProviderFor>>;
@@ -749,7 +750,7 @@ async function projectionFindings(
           check: "projection-unreachable",
           severity: "unknown",
           label: "Destination",
-          subject: `could not build the ${declared.type} provider for ${environment}`,
+          subject: `could not build the ${declared.provider} provider for ${environment}`,
           detail: errorDetail(error),
         },
       ];
@@ -1131,12 +1132,12 @@ async function rotationSubjects(
   local: readonly Subject[],
   override: Provider | undefined,
 ): Promise<RotationSubjects> {
-  const providerConfig = project.config.providers[environment];
+  const providerConfig = environmentEntry(project.config, environment);
   // No override and a local-tree source: the meta is the same meta `subjects`
   // already hold, so reuse it and make no extra round-trips.
   if (
     override === undefined &&
-    (providerConfig === undefined || providerConfig.type === LOCAL_TREE_TYPE)
+    (providerConfig === undefined || providerConfig.provider === LOCAL_TREE_TYPE)
   ) {
     return { kind: "read", subjects: local };
   }
@@ -1162,7 +1163,7 @@ async function rotationSubjects(
         check: "rotation-overdue",
         severity: "unknown",
         label: "Rotation",
-        subject: `could not reach the ${providerConfig?.type ?? source.type} source of truth for ${environment}`,
+        subject: `could not reach the ${providerConfig?.provider ?? source.type} source of truth for ${environment}`,
         detail: errorDetail(error),
       },
     };
@@ -1405,8 +1406,8 @@ async function providerDriftFindings(
   environment: string,
   override: Provider | undefined,
 ): Promise<DoctorFinding[]> {
-  const providerConfig = project.config.providers[environment];
-  if (providerConfig === undefined || providerConfig.type === LOCAL_TREE_TYPE) {
+  const providerConfig = environmentEntry(project.config, environment);
+  if (providerConfig === undefined || providerConfig.provider === LOCAL_TREE_TYPE) {
     return [
       {
         check: "provider-value-drift",
@@ -1436,7 +1437,7 @@ async function providerDriftFindings(
         check: "provider-value-drift",
         severity: "unknown",
         label: "Provider values",
-        subject: `could not reach the ${providerConfig.type} provider for ${environment}`,
+        subject: `could not reach the ${providerConfig.provider} provider for ${environment}`,
         detail: errorDetail(error),
       },
     ];
@@ -1462,7 +1463,7 @@ async function providerDriftFindings(
           severity: "unknown",
           label: "Provider value unreadable",
           subject: formatValueFile(here.file),
-          detail: `the local value is sealed and did not open, so it cannot be compared against the ${providerConfig.type} source of truth`,
+          detail: `the local value is sealed and did not open, so it cannot be compared against the ${providerConfig.provider} source of truth`,
         });
         continue;
       }
@@ -1475,7 +1476,7 @@ async function providerDriftFindings(
           severity: "failure",
           label: "Provider value drift",
           subject: formatValueFile(here.file),
-          detail: `the local tree and the ${providerConfig.type} source of truth hold different values`,
+          detail: `the local tree and the ${providerConfig.provider} source of truth hold different values`,
         });
       }
       continue;
@@ -1492,8 +1493,8 @@ async function providerDriftFindings(
       subject: formatValueFile(present.file),
       detail:
         here !== undefined
-          ? `present locally, absent from the ${providerConfig.type} source of truth`
-          : `present in the ${providerConfig.type} source of truth, absent from the local tree`,
+          ? `present locally, absent from the ${providerConfig.provider} source of truth`
+          : `present in the ${providerConfig.provider} source of truth, absent from the local tree`,
     });
   }
 
@@ -1505,7 +1506,7 @@ async function providerDriftFindings(
       check: "provider-value-drift",
       severity: "pass",
       label: "Provider values",
-      subject: `every value matches the ${providerConfig.type} source of truth for ${environment}`,
+      subject: `every value matches the ${providerConfig.provider} source of truth for ${environment}`,
     },
   ];
 }

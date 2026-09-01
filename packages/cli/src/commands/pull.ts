@@ -7,8 +7,8 @@
  * It only means anything when the environment declares a real backend
  * (`vault`, `mock`): those hold the truth somewhere penv does not edit in place,
  * and pulling copies it down so every other command — which reads the local tree
- * — sees it. An environment with no separate `providers` entry has the local
- * tree *as* its source of truth, so a pull would be the tree copying onto
+ * — sees it. An environment whose entry names the filesystem provider has the
+ * local tree *as* its source of truth, so a pull would be the tree copying onto
  * itself; that degenerate case is reported as nothing to do, never a self-copy.
  *
  * Values cross verbatim. They are opaque envelope strings the source holds and

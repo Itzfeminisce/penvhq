@@ -24,15 +24,13 @@ import {
 } from "./child-env.js";
 
 const CONFIG = {
-  environments: ["development"],
-  providers: { development: { type: "@penvhq/provider-filesystem" } },
+  environments: { development: "@penvhq/provider-filesystem" },
 };
 
 const VAULT_CONFIG = {
-  environments: ["development", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-vault", location: "secret/app" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: { provider: "@penvhq/provider-vault", path: "secret/app" },
   },
 };
 
@@ -298,10 +296,9 @@ describe("names, as the platform reads them", () => {
  */
 describe("an extension's declared credentials", () => {
   const CONSUL_CONFIG = {
-    environments: ["development", "production"],
-    providers: {
-      development: { type: "@penvhq/provider-filesystem" },
-      production: { type: "@acme/provider-consul" },
+    environments: {
+      development: "@penvhq/provider-filesystem",
+      production: "@acme/provider-consul",
     },
   };
 
