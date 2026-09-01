@@ -2,7 +2,9 @@ import type { ParameterRef, PenvConfig } from "@penvhq/core";
 import { describe, expect, it } from "vitest";
 import { checkVercelNames } from "./names.js";
 
-const CONFIG: PenvConfig = { environments: ["production"], providers: {} };
+const CONFIG: PenvConfig = {
+  environments: { production: { provider: "@penvhq/provider-vercel", project: "prj_app" } },
+};
 
 function ref(namespace: readonly string[], name: string): ParameterRef {
   return { namespace, name };

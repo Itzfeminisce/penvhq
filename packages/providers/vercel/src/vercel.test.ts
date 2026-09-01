@@ -10,17 +10,18 @@
  * omission for the same reason.
  */
 
-import type { SecretScope } from "@penvhq/core";
+import type { PenvConfig, SecretScope } from "@penvhq/core";
 import { describe, expect, it } from "vitest";
 import { VercelTargetError, VercelUnavailableError } from "./errors.js";
 import { penvProviderFactory } from "./factory.js";
 import type { VercelRequest, VercelResponse, VercelTransport } from "./transport.js";
 import { defaultVercelTransport } from "./transport.js";
+import type { VercelTarget } from "./vercel.js";
 import { createVercelProvider } from "./vercel.js";
 
 const PRODUCTION: SecretScope = { kind: "environment", environment: "production" };
+const STAGING: SecretScope = { kind: "environment", environment: "staging" };
 const REPOSITORY: SecretScope = { kind: "repository" };
-const TARGETS = { production: "production", staging: "preview" } as const;
 
 interface Answer {
   readonly status?: number;
@@ -47,14 +48,17 @@ function recording(answers: Readonly<Record<string, Answer>> = {}): {
   return { transport, calls };
 }
 
-function provider(answers: Readonly<Record<string, Answer>> = {}, teamId?: string) {
+function provider(
+  answers: Readonly<Record<string, Answer>> = {},
+  options: { readonly teamId?: string; readonly target?: VercelTarget } = {},
+) {
   const { transport, calls } = recording(answers);
   const instance = createVercelProvider({
     project: "prj_app",
-    targets: TARGETS,
+    target: options.target ?? "production",
     transport,
     now: () => 1_700_000_000_000,
-    ...(teamId === undefined ? {} : { teamId }),
+    ...(options.teamId === undefined ? {} : { teamId: options.teamId }),
   });
   return { provider: instance, calls };
 }
@@ -65,7 +69,7 @@ function envs(...entries: readonly Record<string, unknown>[]): Answer {
 }
 
 describe("VercelProvider.push", () => {
-  it("writes an environment's value to the single target that environment declares", async () => {
+  it("writes an environment's value to the single target it resolved to", async () => {
     const { provider: p, calls } = provider();
     await p.push("API_URL", "https://x", PRODUCTION);
     const post = calls.find((call) => call.method === "POST");
@@ -78,9 +82,9 @@ describe("VercelProvider.push", () => {
     });
   });
 
-  it("maps a penv environment through the declared mapping, not through its own name", async () => {
-    const { provider: p, calls } = provider();
-    await p.push("API_URL", "https://x", { kind: "environment", environment: "staging" });
+  it("writes to the declared target rather than to the environment's own name", async () => {
+    const { provider: p, calls } = provider({}, { target: "preview" });
+    await p.push("API_URL", "https://x", STAGING);
     const post = calls.find((call) => call.method === "POST");
     expect(post?.body).toMatchObject({ target: ["preview"] });
   });
@@ -102,7 +106,7 @@ describe("VercelProvider.push", () => {
   });
 
   it("names the team only when one is declared", async () => {
-    const withTeam = provider({}, "team_acme");
+    const withTeam = provider({}, { teamId: "team_acme" });
     await withTeam.provider.push("A", "v", PRODUCTION);
     expect(withTeam.calls[0]?.query).toMatchObject({ teamId: "team_acme" });
 
@@ -143,16 +147,6 @@ describe("VercelProvider.push", () => {
     });
     await expect(p.push("API_URL", "v", PRODUCTION)).rejects.toThrow(/The env key is invalid/);
   });
-
-  it("refuses an environment with no declared target, naming the config key", async () => {
-    const { provider: p } = provider();
-    await expect(
-      p.push("A", "v", { kind: "environment", environment: "qa" }),
-    ).rejects.toMatchObject({ name: "VercelTargetError", reason: "unmapped" });
-    await expect(p.push("A", "v", { kind: "environment", environment: "qa" })).rejects.toThrow(
-      /providers\.qa\.targets/,
-    );
-  });
 });
 
 describe("VercelProvider.verify", () => {
@@ -170,11 +164,11 @@ describe("VercelProvider.verify", () => {
     await expect(p.verify()).rejects.toMatchObject({ reason: "not-authenticated" });
   });
 
-  it("maps an unknown project to project-not-found, naming location", async () => {
+  it("maps an unknown project to project-not-found, naming project", async () => {
     const { provider: p } = provider({ GET: { status: 404 } });
     await expect(p.verify()).rejects.toBeInstanceOf(VercelUnavailableError);
     await expect(p.verify()).rejects.toMatchObject({ reason: "project-not-found" });
-    await expect(p.verify()).rejects.toThrow(/location/);
+    await expect(p.verify()).rejects.toThrow(/`project`/);
   });
 
   it("maps a token without access to forbidden, pointing at teamId", async () => {
@@ -240,9 +234,9 @@ describe("VercelProvider.list", () => {
   it("reports a narrower variable as the secret of the environment whose target it carries", async () => {
     const { provider: p } = provider({ GET: store });
     expect((await p.list(PRODUCTION)).map((secret) => secret.name)).toEqual(["PROD_ONLY"]);
-    expect(
-      (await p.list({ kind: "environment", environment: "staging" })).map((s) => s.name),
-    ).toEqual(["PREVIEW_ONLY"]);
+
+    const preview = provider({ GET: store }, { target: "preview" });
+    expect((await preview.provider.list(STAGING)).map((s) => s.name)).toEqual(["PREVIEW_ONLY"]);
   });
 
   it("leaves Vercel's own system variables out of both halves", async () => {
@@ -286,28 +280,56 @@ describe("VercelProvider capabilities", () => {
 });
 
 describe("penvProviderFactory", () => {
-  const config = { environments: ["production", "staging"], providers: {} };
+  const config: PenvConfig = {
+    environments: {
+      production: { provider: "@penvhq/provider-vercel", project: "prj_app" },
+      preview: { provider: "@penvhq/provider-vercel", project: "prj_app" },
+      staging: { provider: "@penvhq/provider-vercel", project: "prj_app", target: "preview" },
+    },
+  };
 
-  it("refuses a provider entry with no project", () => {
-    expect(() =>
+  it("refuses an entry with no project — the string shorthand included", () => {
+    // `{ provider }` is what core hands the factory once it expands the
+    // shorthand, so one refusal covers both forms.
+    const build = () =>
       penvProviderFactory({
         root: "/app",
         config,
-        providerConfig: { type: "@penvhq/provider-vercel", targets: TARGETS },
+        providerConfig: { provider: "@penvhq/provider-vercel" },
         environment: "production",
-      }),
-    ).toThrow(/location/);
+      });
+    expect(build).toThrow(/Environment production names no `project`/);
+    expect(build).toThrow(/provider: "@penvhq\/provider-vercel", project: "prj_…"/);
+    expect(build).toThrow(/object form/);
   });
 
-  it("refuses before a connection is opened when the environment has no declared target", () => {
-    expect(() =>
+  it("defaults the target to the environment's own name", () => {
+    const built = penvProviderFactory({
+      root: "/app",
+      config,
+      providerConfig: { provider: "@penvhq/provider-vercel", project: "prj_app" },
+      environment: "preview",
+    });
+    expect(built.type).toBe("@penvhq/provider-vercel");
+  });
+
+  it("refuses an environment that is not a target and declares none, naming both remedies", () => {
+    const build = () =>
       penvProviderFactory({
         root: "/app",
         config,
-        providerConfig: { type: "@penvhq/provider-vercel", location: "prj_app", targets: {} },
-        environment: "production",
-      }),
-    ).toThrow(VercelTargetError);
+        providerConfig: { provider: "@penvhq/provider-vercel", project: "prj_app" },
+        environment: "staging",
+      });
+    expect(build).toThrow(VercelTargetError);
+    expect(build).toThrow(/Set `target`[\s\S]*rename the environment/);
+    let thrown: unknown;
+    try {
+      build();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({ reason: "unmapped", environment: "staging" });
   });
 
   it("refuses a target that is not one of Vercel's three", () => {
@@ -316,45 +338,13 @@ describe("penvProviderFactory", () => {
         root: "/app",
         config,
         providerConfig: {
-          type: "@penvhq/provider-vercel",
-          location: "prj_app",
-          targets: { production: "prod" },
+          provider: "@penvhq/provider-vercel",
+          project: "prj_app",
+          target: "prod",
         },
         environment: "production",
       }),
     ).toThrow(/production, preview, development/);
-  });
-
-  it("refuses a target keyed by an environment the config does not declare", () => {
-    expect(() =>
-      penvProviderFactory({
-        root: "/app",
-        config: { environments: ["production"], providers: {} },
-        providerConfig: {
-          type: "@penvhq/provider-vercel",
-          location: "prj_app",
-          targets: { production: "production", staging: "preview" },
-        },
-        environment: "production",
-      }),
-    ).toThrow(
-      /`providers\.production\.targets` is keyed by staging.*This project declares: production/s,
-    );
-  });
-
-  it("accepts targets keyed only by declared environments", () => {
-    expect(() =>
-      penvProviderFactory({
-        root: "/app",
-        config,
-        providerConfig: {
-          type: "@penvhq/provider-vercel",
-          location: "prj_app",
-          targets: TARGETS,
-        },
-        environment: "staging",
-      }),
-    ).not.toThrow();
   });
 
   it("builds a provider that declares the projection capability", () => {
@@ -362,12 +352,12 @@ describe("penvProviderFactory", () => {
       root: "/app",
       config,
       providerConfig: {
-        type: "@penvhq/provider-vercel",
-        location: "prj_app",
-        targets: TARGETS,
+        provider: "@penvhq/provider-vercel",
+        project: "prj_app",
+        target: "preview",
         teamId: "team_acme",
       },
-      environment: "production",
+      environment: "staging",
     });
     expect(built.capabilities).toEqual({ holds: "projection", readsValues: false });
   });

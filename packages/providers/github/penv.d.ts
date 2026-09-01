@@ -17,7 +17,7 @@ declare module "@penvhq/core" {
        * The repository penv maps the projection onto — `owner/repo`. Left
        * unset, `gh` resolves it from the working directory.
        */
-      readonly location?: string;
+      readonly repository?: string;
     };
   }
 }
