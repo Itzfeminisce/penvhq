@@ -154,7 +154,7 @@ export async function upgrade(options: UpgradeOptions): Promise<void> {
   if (options.noDownload === true) {
     throw new UpgradeNoDownloadError();
   }
-  if ((options.ci === true || !io.interactive) && !(request.yes && request.version !== undefined)) {
+  if ((options.ci === true || !io.interactive) && !request.yes) {
     throw new UpgradeUnattendedError();
   }
 

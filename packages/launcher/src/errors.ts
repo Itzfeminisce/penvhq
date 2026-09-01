@@ -616,10 +616,11 @@ export class UpgradeNoDownloadError extends PenvError {
 /**
  * `penv upgrade` on a machine with nobody at it.
  *
- * Unattended, penv will move the pin only to a version somebody named and only
- * with the flag that says they meant it: what upgrade rewrites is two committed
- * files, and a pipeline that picks the engine is a pipeline choosing which bytes
- * the project runs.
+ * What upgrade rewrites is two committed files, so unattended it needs the flag
+ * that says somebody meant it. The version stays optional there, exactly as it is
+ * interactively: absent means `latest`, the same default `penv add` takes. A
+ * pipeline that wants today's pin rather than today's `latest` runs
+ * `penv install`, which is what the remedy names.
  */
 export class UpgradeUnattendedError extends PenvError {
   override readonly name = "UpgradeUnattendedError";
@@ -628,9 +629,9 @@ export class UpgradeUnattendedError extends PenvError {
     super(
       "PENV_UPGRADE_UNATTENDED",
       `Upgrading rewrites ${MANIFEST_PATH} and package.json, and this run has nobody to decide that`,
-      `Run \`${UPGRADE_COMMAND} <version> ${YES_FLAG}\` — unattended, penv moves the pin only to a ` +
-        `version you named. In CI, run \`${INSTALL_COMMAND}\`: it installs what the committed ` +
-        "manifest already pins.",
+      `Run \`${UPGRADE_COMMAND} ${YES_FLAG}\` to take what \`latest\` points at, or ` +
+        `\`${UPGRADE_COMMAND} <version> ${YES_FLAG}\` to name one. In CI, run ` +
+        `\`${INSTALL_COMMAND}\`: it installs what the committed manifest already pins.`,
     );
   }
 }

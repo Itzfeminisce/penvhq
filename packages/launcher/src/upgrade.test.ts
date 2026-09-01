@@ -568,8 +568,8 @@ describe("what it refuses", () => {
     expect(String(failure)).toContain("Run `penv upgrade` again when the registry is reachable");
   });
 
-  it("refuses an unattended run with no version", async () => {
-    const test = harness({ argv: ["--yes"], interactive: false });
+  it("refuses an unattended run with no `--yes`", async () => {
+    const test = harness({ argv: [], interactive: false });
 
     await expect(upgrade(test.options)).rejects.toThrow(
       `Upgrading rewrites ${MANIFEST_PATH} and package.json, and this run has nobody to decide that`,
@@ -583,6 +583,15 @@ describe("what it refuses", () => {
 
     await expect(upgrade(test.options)).rejects.toThrow("nobody to decide that");
     expect(test.asked).toEqual([]);
+  });
+
+  /** `--yes` is the whole consent; the version defaults to `latest` as it does interactively. */
+  it("upgrades unattended to `latest` when `--yes` names no version", async () => {
+    const test = harness({ argv: ["--yes"], ci: true, interactive: false });
+    await upgrade(test.options);
+
+    expect(manifestIn(test.root).engine.version).toBe(LATEST);
+    expect(test.questions).toEqual([]);
   });
 
   it("upgrades unattended when the version and `--yes` are both there", async () => {
