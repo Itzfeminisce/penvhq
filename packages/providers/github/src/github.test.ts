@@ -207,7 +207,7 @@ describe("GithubProvider capabilities and targets", () => {
     ]);
   });
 
-  it("resolves the repository from gh once when no location named one", async () => {
+  it("resolves the repository from gh once when no repository named one", async () => {
     const { run, calls } = recording({
       "repo view --json nameWithOwner --jq .nameWithOwner": "acme/api\n",
     });

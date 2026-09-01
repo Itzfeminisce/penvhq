@@ -7,10 +7,10 @@
  * (production, preview, development). penv's own axis is the cascade, and the two
  * halves a push presents — the unscoped default and one environment's scoped
  * value — land on it as: the default covers all three targets, an environment's
- * value covers the single target that environment is *declared* to deploy to. The
- * declaration is `providers.<env>.targets`; penv never guesses it, because
- * guessing between production and preview is guessing which deployment reads a
- * secret.
+ * value covers the single target that environment deploys to. That target is
+ * `environments.<env>.target`, defaulting to the environment's own name; penv
+ * never guesses past that, because guessing between production and preview is
+ * guessing which deployment reads a secret.
  *
  * Values cross as `type: "encrypted"` — Vercel's universally-available encrypted
  * store. `type: "sensitive"` withholds values permanently but Vercel allows it
@@ -27,7 +27,6 @@ import type {
   ProjectionSecret,
   SecretScope,
 } from "@penvhq/core";
-import { own } from "@penvhq/core";
 import { VercelTargetError, VercelUnavailableError } from "./errors.js";
 import { checkVercelNames } from "./names.js";
 import type { VercelRequest, VercelResponse, VercelTransport } from "./transport.js";
@@ -37,75 +36,46 @@ import { defaultVercelTransport } from "./transport.js";
 export const VERCEL_TARGETS = ["production", "preview", "development"] as const;
 export type VercelTarget = (typeof VERCEL_TARGETS)[number];
 
-/** penv environment name → the Vercel target it deploys to. Declared, never inferred. */
-export type VercelTargetMap = Readonly<Record<string, VercelTarget>>;
-
 function isTarget(value: unknown): value is VercelTarget {
   return typeof value === "string" && (VERCEL_TARGETS as readonly string[]).includes(value);
 }
 
 /**
- * The Vercel target an environment deploys to, refusing an undeclared one by
- * name. Shared by the factory (which refuses before a push starts) and the
- * provider (which refuses before a write lands on the wrong target).
+ * The Vercel target an environment deploys to: the entry's own `target` when it
+ * declares one, otherwise the target named like the environment. An environment
+ * whose name is not one of Vercel's three and declares no `target` is refused
+ * here — at construction, before a push opens a connection — naming both
+ * remedies. penv never guesses a mapping: the guess decides which deployment
+ * reads the secret.
  */
-export function resolveTarget(
-  targets: VercelTargetMap | undefined,
-  environment: string,
-): VercelTarget {
-  const declared = own(targets, environment);
+export function resolveTarget(declared: unknown, environment: string | undefined): VercelTarget {
   if (declared === undefined) {
+    if (isTarget(environment)) {
+      return environment;
+    }
+    const summary =
+      environment === undefined
+        ? "The Vercel provider entry declares no `target` and no environment to default it from"
+        : `Environment ${environment} declares no \`target\`, and its name is not a Vercel target`;
     throw new VercelTargetError(
       "unmapped",
-      `Environment ${environment} has no Vercel target declared in \`providers.${environment}.targets\``,
-      `Add one — \`targets: { ${environment}: "preview" }\` — naming which of Vercel's ` +
-        `${VERCEL_TARGETS.join(", ")} this environment deploys to. penv will not guess it: ` +
-        "the guess decides which deployment reads the secret.",
+      summary,
+      `Set \`target\` to one of ${VERCEL_TARGETS.join(", ")}, or rename the environment to the ` +
+        "target it deploys to. penv will not guess it: the guess decides which deployment reads " +
+        "the secret.",
       environment,
     );
   }
   if (!isTarget(declared)) {
+    const where = environment === undefined ? "" : ` for environment ${environment}`;
     throw new VercelTargetError(
       "invalid",
-      `\`providers.${environment}.targets.${environment}\` is \`${String(declared)}\`, which is not a Vercel target`,
+      `\`target\`${where} is \`${String(declared)}\`, which is not a Vercel target`,
       `Vercel has three: ${VERCEL_TARGETS.join(", ")}. Name one of them.`,
       environment,
     );
   }
   return declared;
-}
-
-/**
- * Every key of `targets` is a penv environment, so a key the config never
- * declared is a mapping for a deployment that does not exist — a typo that
- * silently delivers nothing rather than being refused at push time.
- *
- * The check is here rather than in the committed declaration because the type
- * cannot do it: `ProviderConfigMap["@penvhq/provider-vercel"]` is a fixed
- * interface with no access to the config's own `environments`, and widening the
- * contract so it could would be bending the provider contract around one
- * provider. The factory has the declared list on hand, so the refusal is a
- * construction-time one.
- */
-export function checkTargetEnvironments(
-  targets: VercelTargetMap | undefined,
-  environments: readonly string[],
-  environment?: string,
-): void {
-  const undeclared = Object.keys(targets ?? {}).filter((key) => !environments.includes(key));
-  if (undeclared.length === 0) {
-    return;
-  }
-  const block = environment === undefined ? "`targets`" : `\`providers.${environment}.targets\``;
-  const declared = environments.length === 0 ? "none" : environments.join(", ");
-  throw new VercelTargetError(
-    "undeclared",
-    `${block} is keyed by ${undeclared.join(", ")}, which \`penv.config.ts\` does not declare as ${undeclared.length === 1 ? "an environment" : "environments"}`,
-    `This project declares: ${declared}. Fix the key, or add the environment to \`environments\` ` +
-      "in `penv.config.ts` — a target for an environment penv has never heard of is a mapping " +
-      "nothing will ever use.",
-    ...(environment === undefined ? [] : [environment]),
-  );
 }
 
 /** One environment variable as Vercel's list endpoint reports it. */
@@ -208,8 +178,8 @@ function retryAfterSeconds(response: VercelResponse, now: number): number | unde
 export interface VercelProviderOptions {
   /** The project penv writes into — its id (`prj_…`) or its name. */
   readonly project: string;
-  /** penv environment → Vercel target. */
-  readonly targets: VercelTargetMap;
+  /** The one target this environment's values land on — see {@link resolveTarget}. */
+  readonly target: VercelTarget;
   /** The team owning the project. Only a full-account token needs it. */
   readonly teamId?: string;
   /** The API transport. Defaults to `fetch` against api.vercel.com; injected in tests. */
@@ -230,7 +200,7 @@ export class VercelProvider implements ProjectionProvider {
   readonly capabilities = { holds: "projection", readsValues: false } as const;
 
   readonly #project: string;
-  readonly #targets: VercelTargetMap;
+  readonly #target: VercelTarget;
   readonly #teamId: string | undefined;
   readonly #transport: VercelTransport;
   readonly #now: () => number;
@@ -239,7 +209,7 @@ export class VercelProvider implements ProjectionProvider {
 
   constructor(options: VercelProviderOptions) {
     this.#project = options.project;
-    this.#targets = options.targets;
+    this.#target = options.target;
     this.#teamId = options.teamId;
     this.#transport = options.transport ?? defaultVercelTransport();
     this.#now = options.now ?? Date.now;
@@ -306,8 +276,7 @@ export class VercelProvider implements ProjectionProvider {
    * `doctor` compares each half against the half a push would place there.
    */
   async list(scope: SecretScope): Promise<ProjectionSecret[]> {
-    const target =
-      scope.kind === "repository" ? undefined : resolveTarget(this.#targets, scope.environment);
+    const target = scope.kind === "repository" ? undefined : this.#target;
     return (
       (await this.#list())
         // A `system` variable is Vercel's own (`VERCEL_URL` and its peers), not
@@ -330,13 +299,10 @@ export class VercelProvider implements ProjectionProvider {
   /**
    * The targets one push scope lands on. The unscoped default is the value every
    * environment falls back to, so it covers all three; an environment's own value
-   * covers the one target that environment is declared to deploy to.
+   * covers the one target this provider was built for.
    */
   #targetsFor(scope: SecretScope): VercelTarget[] {
-    if (scope.kind === "repository") {
-      return [...VERCEL_TARGETS];
-    }
-    return [resolveTarget(this.#targets, scope.environment)];
+    return scope.kind === "repository" ? [...VERCEL_TARGETS] : [this.#target];
   }
 
   async #list(): Promise<VercelEnv[]> {
@@ -387,15 +353,15 @@ export class VercelProvider implements ProjectionProvider {
         "forbidden",
         `Vercel refused this token access to the project \`${this.#project}\``,
         `Give the token access to the project, or — with a full-account token — name the owning ` +
-          `team as \`teamId\` in the provider entry.${detail(response.body)}`,
+          `team as \`teamId\` in the environment's entry.${detail(response.body)}`,
       );
     }
     if (response.status === 404) {
       return new VercelUnavailableError(
         "project-not-found",
         `Vercel has no project \`${this.#project}\``,
-        "Set `location` in the provider entry to the project's id (`prj_…`) or its name, and set " +
-          "`teamId` too when the project belongs to a team and your token is account-wide.",
+        "Set `project` in the environment's entry to the project's id (`prj_…`) or its name, and " +
+          "set `teamId` too when the project belongs to a team and your token is account-wide.",
       );
     }
     if (response.status === 429) {

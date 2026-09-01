@@ -1,8 +1,7 @@
 /**
- * The plugin seam: what the penv CLI calls when a `providers.*.type` names this
- * package. The factory owns the translation from the config's provider-agnostic
- * surface (`location`) to this provider's own options, so the config never
- * learns GitHub vocabulary and the provider never parses config.
+ * The plugin seam: what the penv CLI calls when an `environments.*.provider`
+ * names this package. The factory reads the entry's `repository` and hands the
+ * provider its options, so the provider never parses config.
  */
 
 import type { ProjectionProvider, ProviderFactoryContext } from "@penvhq/core";
@@ -13,6 +12,7 @@ import { createGithubProvider } from "./github.js";
 
 /** Builds the GitHub provider for one environment's declared destination. */
 export function penvProviderFactory(context: ProviderFactoryContext): ProjectionProvider {
-  const location = context.providerConfig?.location;
-  return createGithubProvider(location === undefined ? {} : { repo: location });
+  const repository = context.providerConfig?.["repository"];
+  // Optional: unset, the provider asks `gh` once for the repo this directory is in.
+  return createGithubProvider(typeof repository === "string" ? { repo: repository } : {});
 }

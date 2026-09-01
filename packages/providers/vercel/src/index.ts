@@ -21,5 +21,5 @@ export type {
   VercelTransport,
 } from "./transport.js";
 export { defaultVercelTransport, TOKEN_VARIABLE, VERCEL_API_BASE } from "./transport.js";
-export type { VercelProviderOptions, VercelTarget, VercelTargetMap } from "./vercel.js";
+export type { VercelProviderOptions, VercelTarget } from "./vercel.js";
 export { createVercelProvider, resolveTarget, VERCEL_TARGETS, VercelProvider } from "./vercel.js";
