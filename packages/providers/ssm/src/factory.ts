@@ -6,6 +6,7 @@
  */
 
 import type { Provider, ProviderFactoryContext } from "@penvhq/core";
+import { PenvError } from "@penvhq/core";
 import { createSsmProvider } from "./ssm.js";
 
 // The config shape this factory reads is declared once, in `penv.d.ts` — the
@@ -14,5 +15,17 @@ import { createSsmProvider } from "./ssm.js";
 /** Builds the SSM provider for one environment's declared source of truth. */
 export function penvProviderFactory(context: ProviderFactoryContext): Provider {
   const path = context.providerConfig?.path;
-  return createSsmProvider({ path: typeof path === "string" ? path : "penv" });
+  if (path === undefined) {
+    return createSsmProvider({ path: "penv" });
+  }
+  // An empty `path` is what an interpolated value that came up empty leaves
+  // behind, and it is not the same declaration as leaving the field out.
+  if (typeof path !== "string" || path.trim() === "") {
+    throw new PenvError(
+      "PROVIDER_FIELD_EMPTY",
+      "`path` in this environment's penv.config.ts entry is not a path",
+      "Give `path` the prefix this environment's parameters live under, or leave it out and penv uses `penv`.",
+    );
+  }
+  return createSsmProvider({ path });
 }

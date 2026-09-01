@@ -889,6 +889,35 @@ const NESTED_KEY_DECLARATION = `declare module "@penvhq/core" {
 export {};
 `;
 
+/** The same reserved field, named through an alias the map member points at. */
+const ALIASED_DECLARATION = `interface TypedEntry {
+  readonly path?: string;
+  readonly keySource?: "consul";
+}
+
+declare module "@penvhq/core" {
+  interface ProviderConfigMap {
+    "@acme/provider-typed": TypedEntry;
+  }
+}
+
+export {};
+`;
+
+/** An inline shape the scan can read, with a second one intersected onto it that it cannot. */
+const INTERSECTED_DECLARATION = `interface Reserving {
+  readonly key: string;
+}
+
+declare module "@penvhq/core" {
+  interface ProviderConfigMap {
+    "@acme/provider-typed": { readonly path?: string } & Reserving;
+  }
+}
+
+export {};
+`;
+
 function typedRegistry(source: string): {
   registry: Readonly<Record<string, Uint8Array>>;
   tarball: Uint8Array;
@@ -980,6 +1009,35 @@ describe("the generated declaration", () => {
         `  Report it to ${TYPED}. penv reserves \`provider\`, \`keySource\`, \`key\`, \`keyId\` inside ` +
         "an `environments` entry, so a provider names its own fields in its own vocabulary — " +
         "`project`, `path` — and leaves those four to penv.",
+    });
+    expect(existsSync(join(test.root, ...EXTENSIONS_PATH.split("/")))).toBe(false);
+  });
+
+  /**
+   * The reserved-field scan is the whole of the enforcement, so a shape it cannot
+   * read is one `add` does not commit — otherwise the collision lands as a type
+   * error in the user's config that names neither the field nor the declaration.
+   */
+  it.each([
+    { form: "an alias", source: ALIASED_DECLARATION },
+    { form: "an intersection", source: INTERSECTED_DECLARATION },
+  ])("refuses one whose entry shape is written as $form", async ({ source }) => {
+    const test = harness({
+      argv: [TYPED],
+      serve: typedRegistry(source).registry,
+      interactive: true,
+      consent: true,
+      answers: ["Reviewed the adapter."],
+    });
+
+    await expect(add(test.options)).rejects.toMatchObject({
+      code: "PENV_DECLARATION_SHAPE_UNREADABLE",
+      message:
+        `The declaration ${TYPED} ships at \`config.d.ts\` writes \`@acme/provider-typed\` as ` +
+        "something other than an entry shape\n" +
+        `  Report it to ${TYPED}. Each \`ProviderConfigMap\` member is written as its own object ` +
+        'literal — `"@acme/provider-x": { readonly path: string }` — so penv can check it names ' +
+        "none of `provider`, `keySource`, `key`, `keyId`, which it owns on every environment entry.",
     });
     expect(existsSync(join(test.root, ...EXTENSIONS_PATH.split("/")))).toBe(false);
   });

@@ -26,7 +26,7 @@ import type {
 import { formatValueFile, parameterId, recordsDir } from "@penvhq/core";
 import { checkGithubNames } from "@penvhq/provider-github";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { LAST_PUSHED_KEY, runPush } from "./push.js";
+import { assertNoRedirect, LAST_PUSHED_KEY, runPush } from "./push.js";
 import { runSet } from "./set.js";
 
 const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", import.meta.url));
@@ -445,6 +445,30 @@ describe("the destination itself", () => {
     const remedy = (refusal as { remedy?: string }).remedy ?? "";
     expect(remedy).toContain('provider: "@penvhq/provider-github"');
     expect(remedy).not.toContain("--destination");
+  });
+});
+
+/**
+ * The flags that used to redirect a push. citty rejects no unknown flag, and one
+ * carrying a value is not an environment shorthand either — so without this the
+ * secrets would go to the declared entry while the operator read their own
+ * `--destination` on the command line.
+ */
+describe("the flags a push no longer redirects with", () => {
+  it.each(["destination", "dest", "d", "location", "l"])("refuses `--%s`", (flag) => {
+    expect(() =>
+      assertNoRedirect({ env: "production", [flag]: "@penvhq/provider-github" }),
+    ).toThrow(expect.objectContaining({ code: "REMOVED_FLAG" }));
+  });
+
+  it("refuses the bare switch too, rather than reading it as an environment", () => {
+    expect(() => assertNoRedirect({ destination: true })).toThrow(
+      expect.objectContaining({ code: "REMOVED_FLAG" }),
+    );
+  });
+
+  it("passes an invocation that names none of them", () => {
+    expect(() => assertNoRedirect({ env: "production", yes: true })).not.toThrow();
   });
 });
 

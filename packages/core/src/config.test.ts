@@ -203,6 +203,45 @@ describe("loadConfigFrom", () => {
     expect(() => loadConfigFrom(file)).toThrow(file);
     expect(() => loadConfigFrom(file)).toThrow(/not a configuration object/);
   });
+
+  /**
+   * The migration is refused where the config enters the system, not only in
+   * `penv validate`. Nothing past this point can read the old spine: `environments`
+   * as a list has keys `"0"` and `"1"`, and the first command to touch it reports
+   * an environment name as an unknown provider package.
+   */
+  it("refuses the pre-0.14 spine at load, before any command reads it", () => {
+    const root = makeProject(
+      [
+        "export default {",
+        '  environments: ["development", "production"],',
+        '  providers: { production: { type: "@penvhq/provider-vercel", location: "penv-cloud" } },',
+        '  keys: { production: { source: "env", id: "production" } },',
+        "};",
+        "",
+      ].join("\n"),
+    );
+
+    expect(() => loadConfigFrom(resolve(root, "penv.config.ts"))).toThrowError(
+      expect.objectContaining({ code: "CONFIG_ENVIRONMENTS_MERGED" }),
+    );
+  });
+
+  it("refuses a config that kept a top-level `keys` block beside the new record", () => {
+    const root = makeProject(
+      [
+        "export default {",
+        '  environments: { production: { provider: "@penvhq/provider-ssm", path: "penv" } },',
+        '  keys: { production: { source: "env" } },',
+        "};",
+        "",
+      ].join("\n"),
+    );
+
+    expect(() => loadConfigFrom(resolve(root, "penv.config.ts"))).toThrowError(
+      expect.objectContaining({ code: "CONFIG_ENVIRONMENTS_MERGED" }),
+    );
+  });
 });
 
 describe("loadConfig", () => {

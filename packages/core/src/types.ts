@@ -165,6 +165,11 @@ export interface ProviderConfig {
  *
  * The bare package-specifier string is the shorthand for an entry that needs no
  * fields — filesystem, mock — and {@link environmentEntry} expands it.
+ *
+ * This is the *read* view, which is why {@link PenvConfig} does not use it: a
+ * config's own entries are held to {@link ValidatedEnvironmentEntry}, and a
+ * closed field in the constraint `defineConfig` infers against turns one wrong
+ * `keySource` into a second error on a correct sibling field.
  */
 export interface EnvironmentEntry extends ProviderConfig {
   /**
@@ -310,6 +315,60 @@ type ValidatedShorthand<T extends string> = T extends KnownProviderType
       }
   : T;
 
+/** What the declaration says one of the entry's own fields is: core's, then the provider's. */
+type DeclaredFieldType<T extends KnownProviderType, K> = K extends keyof EntryBase<T>
+  ? EntryBase<T>[K]
+  : K extends keyof ProviderConfigMap[T]
+    ? ProviderConfigMap[T][K]
+    : unknown;
+
+/**
+ * One field of an entry whose fields are all declared somewhere.
+ *
+ * A value that fits resolves to the declared type, so the entry keeps the shape
+ * the declaration gives it. A value that does *not* fit resolves to the sentence
+ * instead of the declared type, and that is the whole reason this is written
+ * per-field: `defineConfig` intersects the entry with what it is validated
+ * against, and TypeScript reduces an object intersection to `never` the moment a
+ * unit-typed field's own intersection is empty. Restating `target?: "production"
+ * | "preview" | "development"` beside a misspelled `"producton"` did exactly
+ * that, and every field of the entry then reported against `never` while none of
+ * them named the wrong one. A sentence-keyed object intersects with the bad
+ * value instead of annihilating it.
+ */
+type ValidatedEntryField<E, T extends KnownProviderType, K extends keyof E> = [E[K]] extends [
+  DeclaredFieldType<T, K>,
+]
+  ? DeclaredFieldType<T, K>
+  : K extends keyof EntryBase<T>
+    ? {
+        readonly [_ in `${K & string} is not a key source: a name like "env", or { source, id }`]: never;
+      }
+    : { readonly [_ in `${K & string} is not a value ${T} declares for it`]: never };
+
+/** True when every field the entry carries holds the type its declaration gives it. */
+type EveryFieldFits<E, T extends KnownProviderType> = {
+  readonly [K in keyof E]: [E[K]] extends [DeclaredFieldType<T, K>] ? true : false;
+}[keyof E] extends true
+  ? true
+  : false;
+
+/**
+ * An entry every field of which the provider or core declares.
+ *
+ * A sound entry is the declaration itself, so nothing about the shape a correct
+ * config gets depends on this. Only when a field does not fit is the entry
+ * rewritten field by field, the wrong one carrying the sentence and the rest of
+ * the declaration intersected back in — so a required field the entry never
+ * names is still missing from it.
+ */
+type ValidatedEntry<E, T extends KnownProviderType> =
+  EveryFieldFits<E, T> extends true
+    ? ProviderConfigMap[T] & EntryBase<T>
+    : {
+        readonly [K in keyof E]: ValidatedEntryField<E, T, K>;
+      } & Omit<ProviderConfigMap[T] & EntryBase<T>, keyof E>;
+
 /**
  * What `defineConfig` holds one `environments.<env>` entry to. A `provider` that
  * names an installed provider package is checked against that package's own
@@ -333,7 +392,7 @@ export type ValidatedEnvironmentEntry<E> = E extends string
   : E extends { readonly provider: infer T extends string }
     ? T extends KnownProviderType
       ? UnknownProviderFields<E, T> extends never
-        ? ProviderConfigMap[T] & EntryBase<T>
+        ? ValidatedEntry<E, T>
         : {
             readonly [K in UnknownProviderFields<E, T>]: {
               readonly [_ in `${K & string} is not a field ${T} declares`]: never;
@@ -406,7 +465,7 @@ export interface PenvConfig {
    * and never read out of a folder or a filename. Read them through
    * {@link environmentNames} and {@link environmentEntry} rather than by hand.
    */
-  readonly environments: Readonly<Record<string, string | EnvironmentEntry>>;
+  readonly environments: Readonly<Record<string, string | ProviderConfig>>;
   /**
    * The environment a command acts on when `--env` is absent and nothing in the
    * environment says otherwise. It must be one of {@link environments}.
@@ -477,7 +536,10 @@ export function environmentEntry(
   if (declared === undefined) {
     return undefined;
   }
-  return typeof declared === "string" ? { provider: declared } : declared;
+  // The config is a user's TypeScript evaluated by jiti, so every field of it is
+  // unchecked here whatever its declared type says; `keySource` is narrowed where
+  // it is read (see `keyConfigFor`), not asserted here.
+  return typeof declared === "string" ? { provider: declared } : (declared as EnvironmentEntry);
 }
 
 /**

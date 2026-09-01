@@ -517,6 +517,32 @@ export class DeclarationReservedFieldError extends PenvError {
   }
 }
 
+/**
+ * The declaration a package ships writes an entry shape penv cannot read.
+ *
+ * The reserved-field check is the whole of the enforcement, and it can only read
+ * a shape written where it stands. A member that names its shape through an
+ * alias or an intersection hides whatever it declares, and a hidden `keySource`
+ * makes every config entry for that provider uncompilable against a type error
+ * that names neither the field nor the collision.
+ */
+export class DeclarationShapeUnreadableError extends PenvError {
+  override readonly name = "DeclarationShapeUnreadableError";
+
+  constructor(name: string, file: string, member: string | undefined) {
+    super(
+      "PENV_DECLARATION_SHAPE_UNREADABLE",
+      member === undefined
+        ? `The declaration ${name} ships at \`${file}\` has a \`ProviderConfigMap\` member penv cannot read`
+        : `The declaration ${name} ships at \`${file}\` writes \`${member}\` as something other than an entry shape`,
+      `Report it to ${name}. Each \`ProviderConfigMap\` member is written as its own object ` +
+        'literal — `"@acme/provider-x": { readonly path: string }` — so penv can check it names ' +
+        `none of ${RESERVED_ENTRY_FIELDS.map((reserved) => `\`${reserved}\``).join(", ")}, ` +
+        "which it owns on every environment entry.",
+    );
+  }
+}
+
 /** A launcher built from source, asked to record which bytes it just ran. */
 export class EnginePinUnreleasedError extends PenvError {
   override readonly name = "EnginePinUnreleasedError";

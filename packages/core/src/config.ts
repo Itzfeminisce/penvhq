@@ -271,6 +271,16 @@ export function loadConfigFrom(file: string): PenvConfig {
     );
   }
 
+  // The old spine is refused where the config enters the system, not only in
+  // `penv validate`: nothing downstream can read it, so every command past this
+  // point would report some consequence of the same one fact — `environments`
+  // read as `["0", "1"]`, an environment name resolved as a provider package.
+  const merged = mergedEnvironmentsBlock(config as PenvConfig);
+  const first = merged[0];
+  if (first !== undefined) {
+    throw first;
+  }
+
   return config as PenvConfig;
 }
 
@@ -393,11 +403,28 @@ function mergedEnvironmentsBlock(config: PenvConfig): PenvError[] {
         '`environments: ["production"], providers: { production: { type: "@penvhq/provider-vercel", ' +
         'location: "penv-cloud", targets: { production: "production" } } }, keys: { production: ' +
         '{ source: "env", id: "production" } }` becomes `environments: { production: { provider: ' +
-        '"@penvhq/provider-vercel", project: "penv-cloud", keySource: "env" } }`. An environment ' +
-        "whose provider needs no fields is just the package name: `development: " +
-        '"@penvhq/provider-filesystem"`.',
+        '"@penvhq/provider-vercel", project: "penv-cloud", keySource: "env" } }`. A key id that is ' +
+        "not the environment's own name has to stay in the object form — `keySource: { source: " +
+        '"env", id: "prod" }` — because the shorthand names the key after the environment, and a ' +
+        "renamed key is a key the sealed values do not carry. An environment whose provider needs " +
+        'no fields is just the package name: `development: "@penvhq/provider-filesystem"`.',
     ),
   ];
+}
+
+/**
+ * An entry that names no backend. Written here and thrown at open time too: an
+ * entry penv cannot name a provider for is one whose credentials the run path
+ * cannot strip, so the refusal has to happen before any command reaches it.
+ */
+export function providerMissing(environment: string): PenvError {
+  return new PenvError(
+    "PROVIDER_MISSING",
+    `The entry for environment ${environment} declares no \`provider\``,
+    `Name the package of the backend that holds this environment's values, e.g. ` +
+      `\`${environment}: { provider: "@penvhq/provider-filesystem" }\`. If it still says ` +
+      "`type`, that is the field `provider` replaced.",
+  );
 }
 
 /**
@@ -480,14 +507,7 @@ export function validateConfig(config: PenvConfig): PenvError[] {
     }
     const provider: unknown = (entry as Readonly<Record<string, unknown>>).provider;
     if (typeof provider !== "string" || provider.trim().length === 0) {
-      errors.push(
-        new PenvError(
-          "PROVIDER_MISSING",
-          `The entry for environment ${environment} declares no \`provider\``,
-          `Name the package of the backend that holds this environment's values, e.g. ` +
-            `\`${environment}: { provider: "@penvhq/provider-filesystem" }\`.`,
-        ),
-      );
+      errors.push(providerMissing(environment));
       continue;
     }
     const nameError = validateProviderName(environment, provider);

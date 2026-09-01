@@ -457,6 +457,29 @@ export function renderPush(result: PushResult): string[] {
   return formatRows(rows);
 }
 
+/**
+ * The flags that used to redirect a push, and the one case that must not fall
+ * through. citty rejects no unknown flag, and a flag carrying a value is not a
+ * shorthand candidate either — so `--destination @penvhq/provider-github` would be
+ * dropped in silence and the secrets would land at the declared entry instead.
+ */
+const REDIRECT_FLAGS = ["destination", "dest", "d", "location", "l"] as const;
+
+export function assertNoRedirect(args: Readonly<Record<string, unknown>>): void {
+  const given = REDIRECT_FLAGS.filter((flag) => args[flag] !== undefined);
+  const named = given[0];
+  if (named === undefined) {
+    return;
+  }
+  throw new PenvError(
+    "REMOVED_FLAG",
+    `\`--${named}\` is not a flag \`penv push\` takes`,
+    "A push only ever goes where the config says this environment lives. Declare the " +
+      "destination in `environments.<env>` — the provider package, addressed in that provider's " +
+      "own words — and push with `--env <name>`.",
+  );
+}
+
 export const pushCommand = defineCommand({
   meta: {
     name: "push",
@@ -477,6 +500,7 @@ export const pushCommand = defineCommand({
   },
   run({ args }) {
     return guard(async () => {
+      assertNoRedirect(args);
       const result = await runPush({
         cwd: process.cwd(),
         ...(args.env === undefined ? {} : { environment: args.env }),

@@ -27,6 +27,7 @@ export {
   loadConfig,
   loadConfigFrom,
   lookupEnvironment,
+  providerMissing,
   resolveEnvironment,
   SCHEMA_HARVEST_ENV,
   schemaHarvestActive,

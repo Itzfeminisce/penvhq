@@ -164,6 +164,28 @@ describe("the provider registry", () => {
     expect(error.message).toContain("production");
     expect(error.message).toContain("consul");
   });
+
+  /**
+   * A half-migrated entry — one that kept `type:` — names no provider at all.
+   * Skipped, it opens the project cleanly and `penv run` hands the child every
+   * credential the strip in `child-env.ts` can only name a provider for.
+   */
+  it("refuses an entry that names no provider, naming the environment", () => {
+    const root = makeProject({ environments: {} });
+    const halfMigrated = {
+      environments: { production: { type: "@penvhq/provider-vault", path: "secret/app" } },
+    } as unknown as PenvConfig;
+    let thrown: unknown;
+    try {
+      assertProvidersRegistered(halfMigrated, root);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(PenvError);
+    const error = thrown as PenvError;
+    expect(error.code).toBe("PROVIDER_MISSING");
+    expect(error.message).toContain("production");
+  });
 });
 
 /**

@@ -21,6 +21,8 @@ declare module "./types.js" {
   interface ProviderConfigMap {
     "@test/penv-provider-typed": {
       readonly project: string;
+      /** Unit-typed, because a wrong literal is the case that used to take the whole entry down. */
+      readonly target?: "production" | "preview";
       readonly teamId?: string;
     };
     /** Config-free, so the bare package name is a complete declaration. */
@@ -99,6 +101,49 @@ describe("defineConfig entry typing", () => {
       environments: {
         // @ts-expect-error `project` is a string, not a number.
         production: { provider: "@test/penv-provider-typed", project: 7 },
+      },
+    });
+  });
+
+  /**
+   * The one field, and only it. A wrong literal in a unit-typed field used to
+   * collapse the whole entry to `never`, and every field of it — including the
+   * correct ones — then reported against `never` while none named the typo.
+   */
+  it("rejects a misspelled unit-typed value at the field that carries it", () => {
+    defineConfig({
+      environments: {
+        production: {
+          provider: "@test/penv-provider-typed",
+          project: "acme-web",
+          // @ts-expect-error `producton` is not one of the targets this provider declares.
+          target: "producton",
+        },
+      },
+    });
+  });
+
+  /**
+   * `keySource` is core's own field, and a wrong one used to break the config
+   * against `PenvConfig` itself — which took `defineConfig` to its constraint and
+   * produced a second error on a *correct* sibling, naming a provider package the
+   * config never mentioned.
+   */
+  it("rejects a wrong `keySource` at `keySource`, leaving its siblings alone", () => {
+    defineConfig({
+      environments: {
+        production: {
+          provider: "@test/penv-provider-typed",
+          project: "acme-web",
+          // @ts-expect-error `keychian` is not a key source.
+          keySource: "keychian",
+        },
+        staging: {
+          provider: "@test/penv-provider-typed",
+          project: "acme-web",
+          // @ts-expect-error a key id is a string.
+          keySource: { source: "env", id: 7 },
+        },
       },
     });
   });

@@ -152,8 +152,43 @@ function providerSlotIn(source: string, open: number, close: number): ProviderSl
   return undefined;
 }
 
+/**
+ * The same text with every comment blanked to spaces — same length, so an offset
+ * into it is an offset into the original.
+ *
+ * `penv init` scaffolds the empty block with a worked example above it, comment
+ * markers and all, and that example contains the literal `environments: {`. Read
+ * raw, the scan anchored inside the comment and then walked the config's *other*
+ * top-level keys as if they were environments.
+ */
+function blankComments(source: string): string {
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    const ch = source.charAt(i);
+    if (QUOTES.has(ch)) {
+      const end = skipString(source, i);
+      out += source.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === "/" && (source.charAt(i + 1) === "/" || source.charAt(i + 1) === "*")) {
+      const line = source.charAt(i + 1) === "/";
+      const found = line ? source.indexOf("\n", i) : source.indexOf("*/", i + 2);
+      const end = found === -1 ? source.length : line ? found : found + 2;
+      out += source.slice(i, end).replace(/[^\n]/g, " ");
+      i = end;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
 /** The `environments` block's entries, or `undefined` for a config penv cannot read. */
-function scan(source: string): Entry[] | undefined {
+function scan(raw: string): Entry[] | undefined {
+  const source = blankComments(raw);
   const found = /(?:^|[\s{,;])environments\s*:\s*\{/.exec(source);
   if (found === null) {
     return undefined;

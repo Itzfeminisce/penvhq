@@ -45,6 +45,7 @@ import {
   parseLocalExtensions,
   parseManifest,
   penvHome,
+  providerMissing,
   recordsDir,
 } from "@penvhq/core";
 import { createFilesystemProvider } from "@penvhq/provider-filesystem";
@@ -177,6 +178,11 @@ async function loadPluginProvider(type: string, context: ProviderContext): Promi
  * unknown providers hears about both, and never as a crash from the later command
  * that would have been the first to reach one.
  *
+ * An entry naming no provider at all is refused here too, rather than skipped. A
+ * half-migrated entry — one that kept `type:` — otherwise opens cleanly, and the
+ * credential strip in `child-env.ts` cannot name the credentials of a provider
+ * penv was never told about: `penv run` would hand the child `VAULT_TOKEN`.
+ *
  * A pre-installed type passes on the map; any other passes only if
  * {@link resolveExtension} finds it — a *synchronous* existence check that runs
  * no provider code, so the open-time guarantee holds without `openProject`
@@ -192,7 +198,10 @@ export function assertProvidersRegistered(
   const ci = options?.ci ?? isCi(process.env.CI);
   for (const environment of environmentNames(config)) {
     const provider = environmentEntry(config, environment)?.provider;
-    if (provider === undefined || isProviderRegistered(provider)) {
+    if (typeof provider !== "string" || provider.trim().length === 0) {
+      throw providerMissing(environment);
+    }
+    if (isProviderRegistered(provider)) {
       continue;
     }
     if (ci && local.includes(provider)) {
