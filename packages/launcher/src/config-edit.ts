@@ -4,26 +4,29 @@
  * The file is the user's, so it is scanned rather than parsed and re-emitted:
  * reformatting someone's config — dropping its comments, resorting its keys — to
  * change one string is not the edit that was offered. The scanner understands
- * exactly one thing, the `providers` block, and answers "I do not know this
+ * exactly one thing, the `environments` block, and answers "I do not know this
  * file" for anything else rather than guessing at a rewrite.
+ *
+ * An entry comes in two shapes and both are repointable: the bare package string
+ * is replaced whole, and the object form has its `provider` string replaced.
  */
 
-/** One environment's entry in the `providers` block. */
-export interface ProviderEntry {
+/** One environment's declared provider, as the `environments` block writes it. */
+export interface EnvironmentProvider {
   readonly environment: string;
-  /** The package it names today, when the entry declares a `type` string. */
-  readonly type: string | undefined;
+  /** The package it names today — the shorthand string, or the entry's `provider`. */
+  readonly provider: string | undefined;
 }
 
-interface TypeSlot {
-  /** The `type` string literal's bounds, quotes included. */
+interface ProviderSlot {
+  /** The string literal a repoint replaces, quotes included. */
   readonly start: number;
   readonly end: number;
   readonly value: string;
 }
 
-interface Entry extends ProviderEntry {
-  readonly slot: TypeSlot | undefined;
+interface Entry extends EnvironmentProvider {
+  readonly slot: ProviderSlot | undefined;
 }
 
 const QUOTES = new Set(['"', "'", "`"]);
@@ -108,8 +111,8 @@ function readKey(source: string, index: number): { key: string; end: number } | 
   return match === null ? undefined : { key: match[0], end: index + match[0].length };
 }
 
-/** The `type: "..."` literal directly inside one entry, when it has one. */
-function typeSlotIn(source: string, open: number, close: number): TypeSlot | undefined {
+/** The `provider: "..."` literal directly inside one entry, when it has one. */
+function providerSlotIn(source: string, open: number, close: number): ProviderSlot | undefined {
   let i = skipTrivia(source, open + 1);
   while (i < close - 1) {
     const key = readKey(source, i);
@@ -125,7 +128,7 @@ function typeSlotIn(source: string, open: number, close: number): TypeSlot | und
     let valueEnd: number;
     if (QUOTES.has(ch)) {
       valueEnd = skipString(source, valueStart);
-      if (key.key === "type" && ch !== "`") {
+      if (key.key === "provider" && ch !== "`") {
         return {
           start: valueStart,
           end: valueEnd,
@@ -149,9 +152,9 @@ function typeSlotIn(source: string, open: number, close: number): TypeSlot | und
   return undefined;
 }
 
-/** The `providers` block's entries, or `undefined` for a config penv cannot read. */
+/** The `environments` block's entries, or `undefined` for a config penv cannot read. */
 function scan(source: string): Entry[] | undefined {
-  const found = /(?:^|[\s{,;])providers\s*:\s*\{/.exec(source);
+  const found = /(?:^|[\s{,;])environments\s*:\s*\{/.exec(source);
   if (found === null) {
     return undefined;
   }
@@ -173,16 +176,31 @@ function scan(source: string): Entry[] | undefined {
       return undefined;
     }
     const entryOpen = skipTrivia(source, colon + 1);
-    if (source.charAt(entryOpen) !== "{") {
+    const ch = source.charAt(entryOpen);
+    let entryEnd: number;
+    let slot: ProviderSlot | undefined;
+    if (ch === "{") {
+      entryEnd = matchBrace(source, entryOpen);
+      if (entryEnd === -1) {
+        return undefined;
+      }
+      slot = providerSlotIn(source, entryOpen, entryEnd);
+    } else if (QUOTES.has(ch)) {
+      // The shorthand: the whole value is the package, so the whole value is the slot.
+      entryEnd = skipString(source, entryOpen);
+      slot =
+        ch === "`"
+          ? undefined
+          : {
+              start: entryOpen,
+              end: entryEnd,
+              value: source.slice(entryOpen + 1, entryEnd - 1),
+            };
+    } else {
       return undefined;
     }
-    const entryClose = matchBrace(source, entryOpen);
-    if (entryClose === -1) {
-      return undefined;
-    }
-    const slot = typeSlotIn(source, entryOpen, entryClose);
-    entries.push({ environment: key.key, type: slot?.value, slot });
-    i = skipTrivia(source, entryClose);
+    entries.push({ environment: key.key, provider: slot?.value, slot });
+    i = skipTrivia(source, entryEnd);
     if (source.charAt(i) === ",") {
       i = skipTrivia(source, i + 1);
     }
@@ -190,20 +208,20 @@ function scan(source: string): Entry[] | undefined {
   return entries;
 }
 
-/** Every environment the `providers` block names, in the order the file declares them. */
-export function readProviderEntries(source: string): ProviderEntry[] | undefined {
-  return scan(source)?.map(({ environment, type }) => ({ environment, type }));
+/** Every environment the `environments` block names, in the order the file declares them. */
+export function readEnvironmentProviders(source: string): EnvironmentProvider[] | undefined {
+  return scan(source)?.map(({ environment, provider }) => ({ environment, provider }));
 }
 
-/** The same text with one environment pointed at `type`, or `undefined` if it cannot be. */
-export function setProviderType(
+/** The same text with one environment pointed at `provider`, or `undefined` if it cannot be. */
+export function setEnvironmentProvider(
   source: string,
   environment: string,
-  type: string,
+  provider: string,
 ): string | undefined {
   const entry = scan(source)?.find((candidate) => candidate.environment === environment);
   if (entry?.slot === undefined) {
     return undefined;
   }
-  return `${source.slice(0, entry.slot.start)}${JSON.stringify(type)}${source.slice(entry.slot.end)}`;
+  return `${source.slice(0, entry.slot.start)}${JSON.stringify(provider)}${source.slice(entry.slot.end)}`;
 }

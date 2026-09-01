@@ -4,9 +4,11 @@
  * whose index signature accepts a misspelled key and a misspelled value alike.
  *
  * Every official provider that has a config shape is checked here against the
- * two rules the committed file lives by: the declared path exists inside the
- * package, and its text passes the self-containment check, since it lands in a
- * repository where the package it came from is not installed.
+ * three rules the committed file lives by: the declared path exists inside the
+ * package, its text passes the self-containment check — it lands in a repository
+ * where the package it came from is not installed — and it names none of the
+ * fields core writes into an entry. The last two are what `renderDeclaration`
+ * refuses, so a render that returns at all is both of them passing.
  */
 
 import { readFileSync } from "node:fs";

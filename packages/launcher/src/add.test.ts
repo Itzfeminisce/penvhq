@@ -110,15 +110,14 @@ function packument(options: PackumentOptions): Uint8Array {
   );
 }
 
+/** Both entry shapes, because `add` has to repoint either one. */
 const CONFIG = `import { defineConfig } from "@penvhq/penv";
 
 export default defineConfig({
-  environments: ["development", "production"],
-
   // One entry per environment: where that environment's values are read from.
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-filesystem" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: { provider: "@penvhq/provider-filesystem" },
   },
 });
 `;
@@ -254,9 +253,14 @@ const VAULT_REGISTRY: Readonly<Record<string, Uint8Array>> = {
 
 /** A config that already points one environment at the package being added. */
 const CONFIG_POINTED = CONFIG.replace(
-  `production: { type: "@penvhq/provider-filesystem" }`,
-  `production: { type: "${VAULT}" }`,
+  `production: { provider: "@penvhq/provider-filesystem" }`,
+  `production: { provider: "${VAULT}" }`,
 );
+
+/** The line `add` prints when it knows no environment to name. */
+const BLIND_ADVICE =
+  `Point an environment at ${VAULT} in penv.config.ts: \`production: "${VAULT}"\`, or ` +
+  `\`production: { provider: "${VAULT}" }\` plus the provider's own fields and a \`keySource\`.`;
 
 /** And one that points every environment at it, so there is nothing to advise. */
 const CONFIG_ALL_POINTED = CONFIG.replaceAll("@penvhq/provider-filesystem", VAULT);
@@ -281,7 +285,7 @@ describe("an official extension", () => {
       `✓ ${VAULT} 0.9.0 installed — npm records a provenance attestation`,
       `✓ ${MANIFEST_PATH} pins it`,
       `✓ ${EXTENSIONS_PATH}/${VAULT}.d.ts declares its config type`,
-      `Add \`type: "${VAULT}"\` to an environment in penv.config.ts.`,
+      BLIND_ADVICE,
     ]);
   });
 
@@ -304,8 +308,25 @@ describe("an official extension", () => {
       `Point which of development, production at ${VAULT} in penv.config.ts? all / none / names`,
     ]);
     const config = readFileSync(join(test.root, "penv.config.ts"), "utf8");
-    expect(config).toContain(`development: { type: "@penvhq/provider-filesystem" }`);
-    expect(config).toContain(`production: { type: "${VAULT}" }`);
+    expect(config).toContain(`development: "@penvhq/provider-filesystem"`);
+    expect(config).toContain(`production: { provider: "${VAULT}" }`);
+  });
+
+  /** The two entry shapes: the shorthand is replaced whole, the object at its `provider`. */
+  it("repoints a string entry and an object entry alike", async () => {
+    const test = harness({
+      argv: [VAULT],
+      config: CONFIG,
+      serve: VAULT_REGISTRY,
+      interactive: true,
+      answers: ["all"],
+    });
+
+    await add(test.options);
+
+    const config = readFileSync(join(test.root, "penv.config.ts"), "utf8");
+    expect(config).toContain(`development: "${VAULT}"`);
+    expect(config).toContain(`production: { provider: "${VAULT}" }`);
   });
 
   it("repoints every environment on `all`, and none on an empty answer", async () => {
@@ -384,7 +405,7 @@ describe("an official extension", () => {
     await add(test.options);
 
     expect(test.questions).toEqual([]);
-    expect(test.out).toContain(`Add \`type: "${VAULT}"\` to an environment in penv.config.ts.`);
+    expect(test.out).toContain(BLIND_ADVICE);
     expect(readFileSync(join(test.root, "penv.config.ts"), "utf8")).toBe(
       "export default loadFromSomewhereElse();\n",
     );
@@ -614,7 +635,7 @@ describe("what add will not do on its own", () => {
     expect(manifestIn(test.root)).toMatchObject({ extensions: { [VAULT]: { version: "0.9.0" } } });
     expect(declarationIn(test.root, VAULT)).toContain(VAULT);
     // The offer it could not make is printed, not skipped in silence.
-    expect(test.out).toContain(`Add \`type: "${VAULT}"\` to an environment in penv.config.ts.`);
+    expect(test.out).toContain(BLIND_ADVICE);
   });
 
   /**
@@ -629,9 +650,9 @@ describe("what add will not do on its own", () => {
 
     expect(test.out).toContain(
       `\`production\` already points at ${VAULT}. ` +
-        `Add \`type: "${VAULT}"\` to \`development\` in penv.config.ts if it should too.`,
+        "Point `development` at it in penv.config.ts if it should too.",
     );
-    expect(test.out).not.toContain(`Add \`type: "${VAULT}"\` to an environment in penv.config.ts.`);
+    expect(test.out).not.toContain(BLIND_ADVICE);
   });
 
   /** The quiet half: nothing left to advise, so nothing is said about the config. */
@@ -657,7 +678,10 @@ describe("what add will not do on its own", () => {
 
     expect(test.questions).toEqual([]);
     expect(readFileSync(join(test.root, "penv.config.ts"), "utf8")).toBe(CONFIG);
-    expect(test.out).toContain(`Add \`type: "${CLOUD}"\` to an environment in penv.config.ts.`);
+    expect(test.out).toContain(
+      `Point an environment at ${CLOUD} in penv.config.ts: \`production: "${CLOUD}"\`, or ` +
+        `\`production: { provider: "${CLOUD}" }\` plus the provider's own fields and a \`keySource\`.`,
+    );
     expect(test.out).toContain(`Run \`penv cloud login\` to finish setting ${CLOUD} up.`);
   });
 
@@ -826,8 +850,38 @@ const TYPED = "@acme/provider-typed";
 const TYPED_DECLARATION = `declare module "@penvhq/core" {
   interface ProviderConfigMap {
     "@acme/provider-typed": {
-      readonly location?: string;
+      readonly path?: string;
       readonly datacenter?: string;
+    };
+  }
+}
+
+export {};
+`;
+
+/** A shape claiming one of the four names core writes into every entry. */
+const RESERVING_DECLARATION = `declare module "@penvhq/core" {
+  interface ProviderConfigMap {
+    "@acme/provider-typed": {
+      readonly path?: string;
+      readonly keySource?: "consul";
+    };
+  }
+}
+
+export {};
+`;
+
+/** The quiet half: the same names nested, and in prose, collide with nothing. */
+const NESTED_KEY_DECLARATION = `declare module "@penvhq/core" {
+  interface ProviderConfigMap {
+    "@acme/provider-typed": {
+      readonly path?: string;
+      /**
+       * The keypair this provider signs with. Nothing in it is penv's: the id
+       * the environment seals under is keySource: in the entry, one level up.
+       */
+      readonly keypairAuth?: { readonly key: string; readonly keyId: string };
     };
   }
 }
@@ -904,6 +958,47 @@ describe("the generated declaration", () => {
     });
   });
 
+  /**
+   * Decision 7: core reserves four names inside an entry and checks for them
+   * nowhere, because a declaration is the only way a shape gets in — so the
+   * refusal is here, before the file is committed.
+   */
+  it("refuses one that declares a field core owns on every entry", async () => {
+    const test = harness({
+      argv: [TYPED],
+      serve: typedRegistry(RESERVING_DECLARATION).registry,
+      interactive: true,
+      consent: true,
+      answers: ["Reviewed the adapter."],
+    });
+
+    await expect(add(test.options)).rejects.toMatchObject({
+      code: "PENV_DECLARATION_RESERVED_FIELD",
+      message:
+        `The declaration ${TYPED} ships at \`config.d.ts\` declares \`keySource\`, which penv owns ` +
+        "on every environment entry\n" +
+        `  Report it to ${TYPED}. penv reserves \`provider\`, \`keySource\`, \`key\`, \`keyId\` inside ` +
+        "an `environments` entry, so a provider names its own fields in its own vocabulary — " +
+        "`project`, `path` — and leaves those four to penv.",
+    });
+    expect(existsSync(join(test.root, ...EXTENSIONS_PATH.split("/")))).toBe(false);
+  });
+
+  /** The negative case: the same words nested inside the provider's own field, and in a comment. */
+  it("commits one whose reserved-looking names are nested or in prose", async () => {
+    const test = harness({
+      argv: [TYPED],
+      serve: typedRegistry(NESTED_KEY_DECLARATION).registry,
+      interactive: true,
+      consent: true,
+      answers: ["Reviewed the adapter."],
+    });
+
+    await add(test.options);
+
+    expect(declarationIn(test.root, TYPED)).toContain(NESTED_KEY_DECLARATION);
+  });
+
   it("falls back to the open shape for a package that ships none", async () => {
     const test = harness({ argv: [VAULT], serve: VAULT_REGISTRY, interactive: true });
 
@@ -920,7 +1015,7 @@ describe("the generated declaration", () => {
         "\n" +
         'declare module "@penvhq/core" {\n' +
         "  interface ProviderConfigMap {\n" +
-        `    "${VAULT}": ProviderConfig & { readonly type: "${VAULT}" };\n` +
+        `    "${VAULT}": ProviderConfig & { readonly provider: "${VAULT}" };\n` +
         "  }\n" +
         "}\n",
     );
