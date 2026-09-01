@@ -226,7 +226,7 @@ A penv project has three ownership zones, and the layout makes them visible: you
 ```
 project-root/
 ├── package.json
-├── penv.config.ts          # yours — environments, providers, name overrides
+├── penv.config.ts          # yours — environments and their providers, name overrides
 ├── penv.schema.ts          # yours — the schema shape (side-effect free; import for types/tooling)
 ├── tsconfig.json           # contains the @env alias
 └── .penv/
@@ -514,19 +514,20 @@ Set that one line as `PENV_DELIVERY`, and capture it again whenever a parameter 
 import { defineConfig } from "@penvhq/penv";
 
 export default defineConfig({
-  environments: ["development", "staging", "production"],
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    staging: {
+      provider: "@penvhq/provider-vault",
+      path: "secret/staging",
+      keySource: "keychain",
+    },
+    production: {
+      provider: "@penvhq/provider-ssm",
+      path: "/prod/app",
+      keySource: { source: "env", id: "prod" },
+    },
+  },
   defaultEnvironment: "development",
-
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    staging:     { type: "@penvhq/provider-vault", location: "secret/staging" },
-    production:  { type: "@penvhq/provider-ssm",   location: "/prod/app" },
-  },
-
-  keys: {
-    staging:    { source: "keychain", id: "staging" },
-    production: { source: "env",      id: "prod" },
-  },
 
   schemaFile: "src/env.ts",
   publicPrefixes: ["NEXT_PUBLIC_"],
@@ -537,24 +538,25 @@ export default defineConfig({
 });
 ```
 
+**An entry is the whole declaration of an environment.** Which provider holds it, addressed in that provider's own words, and which key seals it — one place, with nothing about the environment kept anywhere else in this file. A provider that needs no fields is written as its package name alone; one that needs fields takes an object, and everything beside `provider` is the store's own vocabulary rather than a generic slot you translate into.
+
 **What `penv init` writes here, and what it refuses to.** `init` reads your `package.json`, recognises your framework, and *proposes* — a schema next to your source, your framework's public prefix. You confirm, and what lands in this file is the decision, not the detection: there is no `framework` key, because a config that stored an identity would let penv reinterpret your project later. It records what you chose, so nothing shifts under you.
 
 **The alias is not a key here**, because it already lives in the file that resolves it. `@env` is a `tsconfig.json` `paths` entry — TypeScript understands it, a bundler resolves it, and plain `node dist/index.js` does not, since `paths` is erased by the compiler. `#env` is a `package.json` `imports` entry, which Node resolves natively. `init` offers `#env` to a project already carrying an `imports` block and `@env` otherwise, `--alias` overrides, and either way the answer is recorded where it functions rather than copied here.
 
-It will not invent `environments`. penv cannot observe your deployment topology — no `package.json` says whether you have a staging tier — so `init` asks, and an unanswered `init` writes an empty list and tells you so. An environment penv guessed is one that accepts writes for a tier that does not exist.
+It will not invent `environments`. penv cannot observe your deployment topology — no `package.json` says whether you have a staging tier — so `init` asks, and an unanswered `init` writes an empty record and tells you so. An environment penv guessed is one that accepts writes for a tier that does not exist.
 
 | Field | Meaning |
 |---|---|
-| `environments` | Whitelist of valid environment names. The only source of truth for what counts as an environment; segments are matched against this list, never inferred — including by `penv init`, which asks rather than inventing them. |
+| `environments` | Every environment this project has, each mapped to its complete declaration. The record's keys are the whitelist of valid environment names — the only source of truth for what counts as an environment; segments are matched against them, never inferred, including by `penv init`, which asks rather than inventing them. |
+| `environments.*` | One environment's entry: the package name alone when its provider needs no fields (`development: "@penvhq/provider-filesystem"`), an object when it does. Where the values live, and where the key lives, are the same declaration. |
+| `environments.*.provider` | The provider package's fully-qualified name — `@penvhq/provider-vault`. The name is what `penv add @penvhq/provider-vault` records in the manifest and installs into the launcher's cache — never into your `package.json`. The filesystem tree and the mock ship with the engine; every other provider, including any third-party one, is added this way. Always a plain string: your config stays data-only, so it still loads in a checkout where no adapter is installed. |
+| The provider's own fields | Everything beside `provider` belongs to the store and is spelled the way that store spells it — Vault's and SSM's `path`, Vercel's `project` and `target`, Kubernetes' `secret` and `namespace`. Each package brings those fields along through a committed type-only declaration, so your editor checks the entry against the provider's own definition — and a field it does not declare is a compile error — without the adapter ever being importable from your app. penv owns no generic address field, because a field name you have to translate belongs to penv rather than to the store you are addressing. |
+| `environments.*.keySource` | Where this environment's encryption key comes from: `"env"` (read from `PENV_KEY_<ID>`, which is where a deploy exports the unwrapped KMS-derived key) or `"keychain"` (the OS keychain). An entry that declares none has no key source, which is not the same as having no key: penv reports that it was never told where to look, rather than that the key is missing. A source penv does not recognise is an error, never a fallback to one it does. |
+| `keySource.id` | Names the key, and defaults to the environment's own name — so the bare source string is the whole declaration until a rotation gives the key a name of its own, which is what the `{ source, id }` form is for. The id is written into every value file sealed under it, so it outlives any one machine — and cannot contain `:`. |
 | `defaultEnvironment` | The environment a command uses when `--env` is absent. It must be one of `environments` — a declared decision, never inference from `NODE_ENV`, a branch, or a filename. `init` proposes `development` when it adopted the development cascade. CI names `--env` anyway. |
-| `providers` | Per-environment backend — where an environment's values live, and what `penv pull` reads from. |
-| `providers.*.type` | The provider package's fully-qualified name — `@penvhq/provider-vault`. The name is what `penv add @penvhq/provider-vault` records in the manifest and installs into the launcher's cache — never into your `package.json`. The filesystem tree and the mock ship with the engine; every other provider, including any third-party one, is added this way. Each package brings its own config types along through a committed type-only declaration, so your editor checks the entry against the provider's own definition without the adapter ever being importable from your app. |
-| `providers.*.location` | The place inside the provider that penv maps your tree onto. The format is the provider's own — a Vault KV base path, a Kubernetes `namespace/secretName`, an SSM path prefix — and its package documents it; the field name never changes between providers. This explicit mapping is the translation penv owns on your behalf. |
 | `schemaFile` | Where the *loader* module — the one that calls `load()`, re-exports the schema, and the `@env` alias resolves to — lives, relative to this config. Defaults to `.penv/env.ts`; `src/env.ts` is where most framework projects put it. The schema *shape* lives separately in `penv.schema.ts` at the project root (see [One schema, many consumers](#one-schema-many-consumers)). Both files are yours — penv scaffolds each once and never regenerates it. |
 | `publicPrefixes` | The variable prefixes your framework inlines into its client bundle — `["NEXT_PUBLIC_"]`, `["VITE_"]`. penv does not enforce them; the framework already does. Declaring them is what lets `doctor` catch a secret whose name makes the framework publish it. |
-| `keys` | Per-environment encryption key source. An environment with no entry has no key source, which is not the same as having no key: penv reports that it was never told where to look, rather than that the key is missing. |
-| `keys.*.source` | `env` (read from `PENV_KEY_<ID>`, which is where a deploy exports the unwrapped KMS-derived key) or `keychain` (the OS keychain). A source penv does not recognise is an error, never a fallback to one it does. |
-| `keys.*.id` | Names the key. It is written into every value file sealed under it, so it outlives any one machine — and cannot contain `:`. |
 | `override` | Overrides the generated variable for a parameter, when a consumer demands a name the default transform would not produce (`"workos/redirect-uri": "NEXT_PUBLIC_WORKOS_REDIRECT_URI"`). One override bends the name for every consumer — `generate`, `push`, the ambient mirror. Collision-checked. Keys autocomplete from your schema and a typo is a compile error, because the scaffolded `penv.schema.ts` registers the schema's shape (`declare module "@penvhq/core" { interface PenvSchemaShape { readonly shape: z.infer<typeof schema> } }`) — a type-only line penv writes for you; a project without it keeps plain string keys. |
 
 ## Providers
@@ -562,12 +564,12 @@ It will not invent `environments`. penv cannot observe your deployment topology 
 The filesystem is one provider among several. Switching a provider is a config change — application code does not change:
 
 ```ts
-staging: { type: "@penvhq/provider-filesystem" }
+staging: "@penvhq/provider-filesystem"
 // →
-staging: { type: "@penvhq/provider-vault", location: "secret/staging" }
+staging: { provider: "@penvhq/provider-vault", path: "secret/staging" }
 ```
 
-penv maps its record `(production, redis, password)` onto the provider-side place (for Vault, `secret/production/redis/password`) using the `location` you declare. The mapping is explicit rather than inferred, so what penv sends where is always legible. The `env.stripe.secretKey` line in your code is identical whether that value came from a local file, Vault, or SSM.
+penv maps its record `(production, redis, password)` onto the provider-side place (for Vault, `secret/production/redis/password`) using the fields that provider declares. The mapping is explicit rather than inferred, so what penv sends where is always legible — and each store is addressed in its own words, so the entry reads like the product's own documentation rather than like a translation of it. The `env.stripe.secretKey` line in your code is identical whether that value came from a local file, Vault, or SSM.
 
 ### A provider is where the source of truth lives, not where the runtime reads
 
@@ -597,7 +599,7 @@ This is also how these providers are consumed in practice: the Vault Agent Injec
 
 The consequence, stated rather than hidden: a deploy must materialise before it starts — a `penv pull` in the pipeline, a tree something else mounted, or the sealed artifact of [Deployment](#deployment). penv does not fetch secrets for you at start time, and a tree that was never pulled resolves to whatever is on disk — which is what `penv doctor`'s drift check is for.
 
-Supported providers: Filesystem, HashiCorp Vault, AWS SSM Parameter Store, Kubernetes Secrets, GitHub Actions Secrets, and Vercel project environment variables. The filesystem tree and the rehearsal mock ship with the engine; every other provider arrives as an extension — `penv add @penvhq/provider-vault` — and the `type` in your config is that package's name. See [Provider extensions](#provider-extensions).
+Supported providers: Filesystem, HashiCorp Vault, AWS SSM Parameter Store, Kubernetes Secrets, GitHub Actions Secrets, and Vercel project environment variables. The filesystem tree and the rehearsal mock ship with the engine; every other provider arrives as an extension — `penv add @penvhq/provider-vault` — and the `provider` in your config is that package's name. See [Provider extensions](#provider-extensions).
 
 A provider declares its **capabilities**, and penv reads them rather than guessing. Two axes: what the store *holds* — penv records verbatim, or a resolved projection of them — and whether its values can be *read back*. Vault, SSM, and Kubernetes hold records and read back; they satisfy the full record contract, with the filesystem provider as its reference implementation. GitHub Actions Secrets and Vercel hold a projection and withhold values — see [Projection providers](#projection-providers-github-actions-secrets) and [Vercel projects](#vercel-projects) below.
 
@@ -653,8 +655,8 @@ GitHub Actions Secrets declares both limits, because its API forces them: it cre
 For a team whose CI holds its secrets, the whole flow is local-first: declare the provider —
 
 ```ts
-providers: {
-  production: { type: "@penvhq/provider-github", location: "acme/api" },
+environments: {
+  production: { provider: "@penvhq/provider-github", repository: "acme/api" },
 }
 ```
 
@@ -662,7 +664,7 @@ providers: {
 
 **What `penv pull` brings back.** Everything the store honestly has: the secret *names* come down as parameters with meta stubs, values stay absent — GitHub never returns one — and `penv validate` names every value you still need to fill. Pull the names, fill the values, and push the tree to any provider you like: that loop is also the migration path between stores.
 
-**A one-shot push needs no config change.** `penv push -e production --destination @penvhq/provider-github --location acme/api` pushes once to a provider the config does not name, persisting nothing — the declared provider stays the system of record.
+**A push goes where the environment's entry says, and nowhere else.** There is no flag that redirects one — seeding a new store is the same config edit that ongoing use needs anyway, so what an environment declares and where its values actually went never disagree. `penv push` against an environment whose entry names no provider says exactly that, and prints the entry to write.
 
 **What the push carries, and what it deliberately does not.** `penv push` resolves each parameter as CI would see it, which means **both `.local` scopes are skipped**. A `database-url.production.local` is your machine's override; pushing it would make one developer's laptop the source of production's secret, which is the scope-widening leak penv exists to delete. The rule is the same one the `test` environment already follows.
 
@@ -689,24 +691,28 @@ Against a record-holding provider none of this hedging applies: `doctor` reads b
 Vercel is the [managed-serverless case](#managed-serverless-the-platforms-own-store) with an adapter behind it: `@penvhq/provider-vercel` writes an environment's resolved values into a Vercel project's own environment-variable store, so the production cutover is `penv push --production` rather than forty rows typed into a settings form.
 
 ```ts
-providers: {
+environments: {
   production: {
-    type: "@penvhq/provider-vercel",
-    location: "prj_XLKmu1DyR1eY7zq8UgeRKbA7yVLA",   // the project id, or its name
-    targets: { production: "production", staging: "preview" },
+    provider: "@penvhq/provider-vercel",
+    project: "prj_XLKmu1DyR1eY7zq8UgeRKbA7yVLA",   // the project id, or its name
+  },
+  staging: {
+    provider: "@penvhq/provider-vercel",
+    project: "prj_XLKmu1DyR1eY7zq8UgeRKbA7yVLA",
+    target: "preview",
   },
 }
 ```
 
-**The `targets` mapping is declared, never guessed.** Vercel has three targets — `production`, `preview`, `development` — and no file anywhere says which one your `staging` deploys to. An environment with no entry is refused by name (`providers.staging.targets`) before penv opens a connection, because a guess between production and preview is a guess about which deployment reads the secret. This is invariant 21 applied to a second product's vocabulary.
+**`target` defaults to the environment's own name, and refuses rather than guess.** Vercel has three targets — `production`, `preview`, `development` — so an environment named like one of them lands on it with nothing declared. `staging` is not one of them, and no file anywhere says which target it deploys to, so it names its own. An environment that is neither a Vercel target nor carrying a `target` is refused before penv opens a connection, naming both remedies, because a guess between production and preview is a guess about which deployment reads the secret. This is invariant 21 applied to a second product's vocabulary.
 
-**How penv's two push scopes land on Vercel's one axis.** Your environment scope maps to a variable on the single target that environment declares; the unscoped default maps to a variable covering all three targets — the value every deployment falls back to, expressed as the breadth Vercel actually has. That breadth is also how `penv pull` and `penv doctor` read the store back apart: a variable on all three targets is the shared default, a narrower one belongs to the environment whose target it carries.
+**How penv's two push scopes land on Vercel's one axis.** Your environment scope maps to a variable on the one target that environment resolves to; the unscoped default maps to a variable covering all three targets — the value every deployment falls back to, expressed as the breadth Vercel actually has. That breadth is also how `penv pull` and `penv doctor` read the store back apart: a variable on all three targets is the shared default, a narrower one belongs to the environment whose target it carries.
 
 **The one thing Vercel cannot express, refused rather than fudged.** A Vercel variable is unique per key *and* target, and Vercel has no default that a target overrides — so a parameter that is one environment's own value *and* the shared default for the others has no representation there. penv refuses that push, naming the variable and the targets that collide, rather than silently overwriting one meaning with the other. Give the parameter an environment-scoped value for every environment you push to that project, and each lands on its own target.
 
 **Values cross as Vercel's `encrypted` type.** Vercel's `sensitive` type never returns a value again, which is the stronger posture — but Vercel allows it only on production and preview, so it cannot carry the unscoped default, which must also reach development. One type for every variable beats a store where the security of a value depends on which scope produced it.
 
-**The token is an ambient credential, never config.** penv reads `VERCEL_TOKEN` from the environment; the package declares it in `penv.credentials`, which is what makes `penv run` strip it before your application starts. It is never written into `penv.config.ts` and never recorded in the manifest. Mint one at your Vercel account's token settings; a team- or project-scoped token carries its own team, and only an account-wide token needs `teamId` in the provider entry.
+**The token is an ambient credential, never config.** penv reads `VERCEL_TOKEN` from the environment; the package declares it in `penv.credentials`, which is what makes `penv run` strip it before your application starts. It is never written into `penv.config.ts` and never recorded in the manifest. Mint one at your Vercel account's token settings; a team- or project-scoped token carries its own team, and only an account-wide token needs `teamId` in the environment's entry.
 
 **Names are checked before anything is sent.** Vercel allows only letters, digits, and `_` in a key, and at most 256 characters — so a bad name is refused before the first write rather than forty variables in. Unlike GitHub, Vercel keys are case-sensitive, so two variables differing only in case are two variables.
 
@@ -720,13 +726,14 @@ Each parameter encrypts independently — the `.enc` terminal marker denotes an 
 
 Whether a parameter *must* be encrypted is a **policy** declared in its meta, and the on-disk `.enc` marker is validated against that policy. The filename is not the sole authority on what is secret, which is what lets `penv doctor` catch a secret parameter that has a committed *plaintext* value file for some environment.
 
-Encryption keys are provider-backed: the OS keychain locally, and KMS-derived keys in CI and production. Keys are never stored repo-adjacent. Each environment declares where its key lives:
+Encryption keys are provider-backed: the OS keychain locally, and KMS-derived keys in CI and production. Keys are never stored repo-adjacent. Each environment declares where its key lives, in the same entry that names its provider:
 
 ```ts
 export default defineConfig({
-  environments: ["development", "production"],
-  providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-filesystem" } },
-  keys: { production: { source: "env", id: "prod" } },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: { provider: "@penvhq/provider-filesystem", keySource: { source: "env", id: "prod" } },
+  },
 });
 ```
 
@@ -846,7 +853,7 @@ Reporting is all it does. penv will not materialise a value file from a declarat
 | `penv import <file>` | Import an existing dotenv file; it becomes the source of truth. The filename names the scope the values are written at (`.env.production` → `<name>.production`); `--env` names it for a file that doesn't, and contradicting the filename is an error. |
 | `penv generate` | Write a standard `.env` artifact for deploy targets. |
 | `penv pull` | Materialise the parameter tree for an environment from its provider. Supports `--env`. |
-| `penv push` | Ship an environment's values to its provider. A record-holding destination receives the tree verbatim (sealed values stay sealed); a projection-holding one receives the resolved projection, both `.local` scopes skipped. `--destination`/`-d` and `--location`/`-l` push once elsewhere; `--yes` pre-approves creating a missing destination environment. Takes `--env <name>` or the environment as a bare flag (`--production`). |
+| `penv push` | Ship an environment's values to the provider its entry declares, which is the only destination a push has. A record-holding destination receives the tree verbatim (sealed values stay sealed); a projection-holding one receives the resolved projection, both `.local` scopes skipped. `--yes` pre-approves creating a missing destination environment. Takes `--env <name>` or the environment as a bare flag (`--production`). |
 | `penv get <key>` | Read a parameter. Supports `--env` and `--explain`. |
 | `penv set <key>` | Update a parameter and push to the active provider. |
 | `penv fill` | Prompt for each declared parameter the tree has no value for, deriving the value-file name from the schema so you never translate a camelCase key to its kebab file by hand. Supports `--env`. |

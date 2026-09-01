@@ -84,28 +84,32 @@ export interface Meta extends MetaBlock {
 }
 ```
 
-The provider is told which store to talk to by **`ProviderConfig`** — a `type` that
-is the provider package's fully-qualified name, and an optional `location` the
-provider maps records onto:
+The provider is told which store to talk to by **`ProviderConfig`** — a `provider`
+that is the package's fully-qualified name, and whatever fields that package itself
+declares:
 
 ```ts
 export interface ProviderConfig {
   /** The provider package's fully-qualified name — the import specifier penv resolves. */
-  readonly type: KnownProviderType | (string & {});
-  /** The place inside the provider penv maps the tree onto. Format is the provider's own. */
-  readonly location?: string;
-  /** Fields beyond `location` belong to the provider's own config type. */
+  readonly provider: KnownProviderType | (string & {});
+  /** Everything else is the provider's own vocabulary, declared by its config type. */
   readonly [key: string]: unknown;
 }
 ```
 
-Each provider package augments core's `ProviderConfigMap` with its own config shape
-under its own package name, and exports a `penvProviderFactory(context)` — the entry
-point the CLI calls with a `ProviderFactoryContext` when a `providers.*.type` names
-the package. The factory owns the translation from `location` to the provider's own
-options (the Kubernetes package splits `namespace/secretName` there; Vault and SSM
-default the base path), so the config stays provider-agnostic and the provider never
-parses config.
+Core owns no generic address field. Each provider package augments core's
+`ProviderConfigMap` with its own config shape under its own package name — Vercel's
+`project`, Vault's and SSM's `path`, Kubernetes' `secret` and `namespace` — and
+exports a `penvProviderFactory(context)`, the entry point the CLI calls with a
+`ProviderFactoryContext` when an `environments.*` entry names the package. The
+factory owns the translation from those fields to the provider's own options and
+defaults what it can, so the store is addressed in its own words and the provider
+never parses config.
+
+Four field names are core's inside an entry and no provider's shape may reuse them:
+`provider`, `keySource`, `key`, and `keyId`. The refusal lands where a declaration
+enters the system — `penv add` rejects a `penv.types` file declaring one — so a
+collision is impossible by construction rather than checked on every load.
 
 Everything a provider does is a translation between these types and its own store.
 The Vault adapter turns them into KV v2 paths; the filesystem provider turns them
@@ -140,9 +144,9 @@ export interface Provider {
 Seven required methods over `ValueFile` and `ParameterRef`, plus one optional
 `readPrevious` treated separately [below](#the-optional-capability-readprevious).
 The `type` is a non-empty string naming the provider by its package
-(`"@penvhq/provider-filesystem"`, `"@penvhq/provider-vault"`) — the same string the
-config declares, so a report and the config that produced it use one vocabulary;
-the suite's first assertion is only that it exists and is non-empty.
+(`"@penvhq/provider-filesystem"`, `"@penvhq/provider-vault"`) — the same string an
+entry's `provider` field declares, so a report and the config that produced it use
+one vocabulary; the suite's first assertion is only that it exists and is non-empty.
 
 The invariants below are not advisory. Each is a test the suite runs against every
 provider, and a provider that violates one fails the suite.
