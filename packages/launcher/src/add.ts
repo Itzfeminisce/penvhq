@@ -47,7 +47,7 @@ import {
   serializeLocalExtensions,
   serializeManifest,
 } from "@penvhq/core";
-import { readProviderEntries, setProviderType } from "./config-edit.js";
+import { readEnvironmentProviders, setEnvironmentProvider } from "./config-edit.js";
 import { readExtensionPackage, writeDeclaration } from "./declaration.js";
 import {
   AddFlagError,
@@ -364,6 +364,18 @@ function quoted(environments: readonly string[]): string {
 }
 
 /**
+ * The line for a config that names no environment this add can point — teaching
+ * both entry shapes, because which one to write is the provider's own business.
+ */
+function blindAdvice(name: string): string {
+  const spec = JSON.stringify(name);
+  return (
+    `Point an environment at ${name} in penv.config.ts: \`production: ${spec}\`, or ` +
+    `\`production: { provider: ${spec} }\` plus the provider's own fields and a \`keySource\`.`
+  );
+}
+
+/**
  * The advice line, addressed to what the config already says.
  *
  * Finding 29: it prescribed wiring up a provider an environment had declared for
@@ -376,13 +388,12 @@ function configAdvice(
   pointing: readonly string[],
   unpointed: readonly string[],
 ): string {
-  const add = `Add \`type: ${JSON.stringify(name)}\``;
   if (pointing.length === 0) {
-    return `${add} to an environment in penv.config.ts.`;
+    return blindAdvice(name);
   }
   return (
     `${quoted(pointing)} already ${pointing.length === 1 ? "points" : "point"} at ${name}. ` +
-    `${add} to ${quoted(unpointed)} in penv.config.ts if ` +
+    `Point ${quoted(unpointed)} at it in penv.config.ts if ` +
     `${unpointed.length === 1 ? "it" : "they"} should too.`
   );
 }
@@ -399,7 +410,7 @@ function configAdvice(
 async function offerConfigEdit(options: AddOptions, name: string, ask: boolean): Promise<void> {
   const { io, root } = options;
   const configFile = findConfigFile(root);
-  const blind = `Add \`type: ${JSON.stringify(name)}\` to an environment in penv.config.ts.`;
+  const blind = blindAdvice(name);
   if (configFile === undefined) {
     io.out(blind);
     return;
@@ -407,13 +418,17 @@ async function offerConfigEdit(options: AddOptions, name: string, ask: boolean):
 
   const shown = relative(root, configFile).split(sep).join("/");
   let current = readFileSync(configFile, "utf8");
-  const entries = readProviderEntries(current);
+  const entries = readEnvironmentProviders(current);
   if (entries === undefined || entries.length === 0) {
     io.out(blind);
     return;
   }
-  const pointing = entries.filter((entry) => entry.type === name).map((entry) => entry.environment);
-  const offered = entries.filter((entry) => entry.type !== name).map((entry) => entry.environment);
+  const pointing = entries
+    .filter((entry) => entry.provider === name)
+    .map((entry) => entry.environment);
+  const offered = entries
+    .filter((entry) => entry.provider !== name)
+    .map((entry) => entry.environment);
   if (offered.length === 0) {
     return;
   }
@@ -433,9 +448,9 @@ async function offerConfigEdit(options: AddOptions, name: string, ask: boolean):
     return;
   }
   for (const environment of chosen) {
-    const next = setProviderType(current, environment, name);
+    const next = setEnvironmentProvider(current, environment, name);
     if (next === undefined) {
-      io.out(`Add \`type: ${JSON.stringify(name)}\` to \`${environment}\` in ${shown}.`);
+      io.out(`Add \`provider: ${JSON.stringify(name)}\` to \`${environment}\` in ${shown}.`);
       continue;
     }
     current = next;
