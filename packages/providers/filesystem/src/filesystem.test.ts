@@ -8,8 +8,11 @@ import { afterAll, describe, expect, it } from "vitest";
 import { createFilesystemProvider } from "./filesystem.js";
 
 const config: PenvConfig = {
-  environments: ["development", "staging", "production"],
-  providers: { development: { type: "@penvhq/provider-filesystem" } },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    staging: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
+  },
 };
 
 const roots: string[] = [];
@@ -363,7 +366,7 @@ describe("FilesystemProvider", () => {
     it("reads an environment segment only because the config declares it", async () => {
       const provider = createFilesystemProvider({
         root: makeRoot(),
-        config: { environments: ["qa"], providers: {} },
+        config: { environments: { qa: "@penvhq/provider-filesystem" } },
       });
       writeFileSync(join(provider.root, "database-url.qa"), "value\n", "utf8");
 

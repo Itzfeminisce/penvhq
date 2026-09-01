@@ -14,8 +14,9 @@ export { createFilesystemProvider, FilesystemProvider } from "./filesystem.js";
 declare module "@penvhq/core" {
   interface ProviderConfigMap {
     /**
-     * The local records tree. It is rooted at the project and takes no
-     * `location`: the tree on disk is the place.
+     * The local records tree. It is rooted at the project, so it declares no
+     * fields at all — which is what makes the bare package-specifier shorthand
+     * legal for it: `development: "@penvhq/provider-filesystem"`.
      */
     // biome-ignore lint/complexity/noBannedTypes: no fields is the declaration.
     "@penvhq/provider-filesystem": {};

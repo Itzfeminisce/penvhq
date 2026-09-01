@@ -13,12 +13,14 @@ export {};
 declare module "@penvhq/core" {
   interface ProviderConfigMap {
     "@penvhq/provider-kubernetes": {
+      /** The Secret penv maps the whole tree onto. Defaults to `penv`. */
+      readonly secret?: string;
       /**
-       * The Secret penv maps the tree onto: `<namespace>/<secretName>`, or just
-       * `<secretName>` to use the current `kubectl` context's namespace.
-       * Defaults to a Secret named `penv`.
+       * The cluster namespace that Secret lives in. Defaults to the current
+       * `kubectl` context's namespace, which is the one a config can reach
+       * without naming the cluster it is running against.
        */
-      readonly location?: string;
+      readonly namespace?: string;
     };
   }
 }

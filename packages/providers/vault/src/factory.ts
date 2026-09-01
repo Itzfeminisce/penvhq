@@ -1,8 +1,8 @@
 /**
- * The plugin seam: what the penv CLI calls when a `providers.*.type` names this
- * package. The factory owns the translation from the config's provider-agnostic
- * surface (`location`) to this provider's own options, so the config never
- * learns Vault vocabulary and the provider never parses config.
+ * The plugin seam: what the penv CLI calls when an `environments.*.provider`
+ * names this package. The entry is written in Vault's own vocabulary, so the
+ * factory reads `path` straight through — there is no generic address field left
+ * to translate.
  */
 
 import type { Provider, ProviderFactoryContext } from "@penvhq/core";
@@ -13,5 +13,6 @@ import { createVaultProvider } from "./vault.js";
 
 /** Builds the Vault provider for one environment's declared source of truth. */
 export function penvProviderFactory(context: ProviderFactoryContext): Provider {
-  return createVaultProvider({ path: context.providerConfig?.location ?? "penv" });
+  const path = context.providerConfig?.path;
+  return createVaultProvider({ path: typeof path === "string" ? path : "penv" });
 }

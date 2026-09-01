@@ -1,6 +1,6 @@
 /**
- * The HashiCorp Vault KV v2 provider — the milestone proof that a `providers.*.type`
- * can move off the filesystem with zero application edits.
+ * The HashiCorp Vault KV v2 provider — the milestone proof that an
+ * `environments.*.provider` can move off the filesystem with zero application edits.
  *
  * It satisfies the same `@penvhq/core` contract the filesystem does and never bends
  * it to suit Vault: a value is opaque bytes stored under one fixed data key, meta
@@ -63,8 +63,8 @@ export interface VaultTransport {
 export interface VaultProviderOptions {
   /**
    * The mount-relative base path penv maps records onto. The plugin factory
-   * fills it from `providers.*.location`: the mapping is explicit config, never
-   * inferred.
+   * fills it from the environment entry's `path`: the mapping is explicit config,
+   * never inferred.
    */
   readonly path: string;
   /**

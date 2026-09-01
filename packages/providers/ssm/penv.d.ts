@@ -16,9 +16,9 @@ declare module "@penvhq/core" {
       /**
        * The Parameter Store base path penv maps records under — `/penv/prod`.
        * Defaults to `penv` (stored as `/penv`). Every parameter name becomes
-       * `<location>/<value-filename>`.
+       * `<path>/<value-filename>`.
        */
-      readonly location?: string;
+      readonly path?: string;
     };
   }
 }
