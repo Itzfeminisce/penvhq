@@ -37,8 +37,8 @@ Everything below describes the *finished* design (see docs). This table says whe
 | Embedded snapshot — `penv snapshot`, `penv.snapshot.ts`, `source` pinning, digest staleness | No longer | shipped v0.8 (npm 0.8.0); **retired v0.9** |
 | Fully-qualified provider package names, declaration-merged config types | Yes | v0.7 (npm 0.5.0), under `providers.*.type`; the field becomes `environments.*.provider` at v0.14 |
 | Generic `location` address field | No longer | shipped v0.7 (npm 0.5.0); **retired v0.14** — each provider declares its own field names |
-| One `environments` record — the provider, its own fields, and `keySource` in one entry per environment | Yes | v0.14 (npm 0.14.0) |
-| Singular `target` on a Vercel entry, defaulting to the environment's name | Yes | v0.14 (npm 0.14.0) |
+| One `environments` record — the provider, its own fields, and `keySource` in one entry per environment | Yes | v0.14 (npm 0.15.0) |
+| Singular `target` on a Vercel entry, defaulting to the environment's name | Yes | v0.14 (npm 0.15.0) |
 | Install-what-you-use providers — Vault, SSM, Kubernetes, GitHub external to the CLI | Yes | v0.7 (npm 0.5.0) |
 | Environment shorthand flags, `ensureTarget` create-on-approval | Yes | v0.7 (npm 0.5.0) |
 | `--destination` / `--location` one-shot push | No longer | shipped v0.7 (npm 0.5.0); **retired v0.14** — a push goes where the environment's entry says |
@@ -230,7 +230,7 @@ Decided 2026-09-01; the [v0.14 plan](./v0.14-plan.md) owns *how*, and the RFC's 
 - `keys.<env>` becomes the entry's own `keySource`, whose id defaults to the environment name — so a config migrated one-for-one seals under the same key and stamps artifacts with the same `env:production` identifier it did before.
 - One breaking release, no compat shim: an `environments` array or a top-level `providers` or `keys` key fails at load with `CONFIG_ENVIRONMENTS_MERGED`, naming each move and printing the rewritten entry.
 
-Ships on npm as **0.14.0** across the whole `@penvhq/*` group.
+Ships on npm as **0.15.0** across the whole `@penvhq/*` group — 0.14.0 was taken by the release train already rolling when the milestone was decided.
 
 **Gate:** penv-cloud — the project whose config made the case — migrates to one `environments` record, pushes to Vercel with `target` defaulted rather than mapped, and its sealed artifacts come out byte-identical to the ones the old config produced. Every provider passes the contract suite unchanged: field names are config surface, and this milestone does not touch the contract.
 
