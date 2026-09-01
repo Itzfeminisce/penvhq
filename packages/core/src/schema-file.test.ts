@@ -17,10 +17,9 @@ import {
 import type { PenvConfig } from "./types.js";
 
 const base: PenvConfig = {
-  environments: ["development", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-filesystem" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
   },
 };
 

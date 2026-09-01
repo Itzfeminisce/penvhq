@@ -21,10 +21,9 @@ import { runPull } from "./pull.js";
 const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", import.meta.url));
 
 const CONFIG = {
-  environments: ["development", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-mock" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-mock",
   },
 };
 
@@ -99,9 +98,9 @@ describe("runPull from a value-withholding provider", () => {
 
   it("materialises names as flat parameters with meta stubs and no values", async () => {
     const root = makeProject({
-      providers: {
-        development: { type: "@penvhq/provider-filesystem" },
-        production: { type: "@penvhq/provider-github" },
+      environments: {
+        development: "@penvhq/provider-filesystem",
+        production: "@penvhq/provider-github",
       },
     });
     const source = fakeProjection({ repo: ["API_KEY"], env: ["DB_URL"] });
@@ -128,9 +127,9 @@ describe("runPull from a value-withholding provider", () => {
 
   it("never overwrites meta the user already wrote with an empty stub", async () => {
     const root = makeProject({
-      providers: {
-        development: { type: "@penvhq/provider-filesystem" },
-        production: { type: "@penvhq/provider-github" },
+      environments: {
+        development: "@penvhq/provider-filesystem",
+        production: "@penvhq/provider-github",
       },
     });
     const tree = localTree(root);

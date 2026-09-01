@@ -3,8 +3,7 @@ import { describe, expect, it } from "vitest";
 import { checkGithubNames } from "./names.js";
 
 const base: PenvConfig = {
-  environments: ["production"],
-  providers: { production: { type: "@penvhq/provider-filesystem" } },
+  environments: { production: "@penvhq/provider-filesystem" },
 };
 
 function withNames(names: Record<string, string>): PenvConfig {

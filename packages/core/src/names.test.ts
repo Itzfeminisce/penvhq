@@ -12,12 +12,11 @@ import {
 import type { ParameterRef, PenvConfig } from "./types.js";
 
 const config: PenvConfig = {
-  environments: ["development", "staging", "production", "test"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    staging: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-filesystem" },
-    test: { type: "@penvhq/provider-filesystem" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    staging: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
+    test: "@penvhq/provider-filesystem",
   },
 };
 

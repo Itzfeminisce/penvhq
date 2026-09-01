@@ -27,10 +27,9 @@ import { loadSchema, runValidate, validateCommand } from "./validate.js";
 const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", import.meta.url));
 
 const CONFIG = {
-  environments: ["development", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-filesystem" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
   },
 };
 

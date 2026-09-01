@@ -41,14 +41,14 @@ function remedyFor(failure: DecryptFailure, location: string): string {
   switch (failure.reason) {
     case "key-source-unavailable":
       // Two causes reach here and they have different fixes: a source that was
-      // never declared (add a `keys` block) and a declared source that could not
+      // never declared (add a `keySource`) and a declared source that could not
       // be consulted (a locked OS keychain — unlock it). The detail says which,
       // so the remedy names both rather than sending a correctly-configured
       // keychain user to edit config that is already right.
       return (
         `penv could not consult a key source: ${failure.detail}. Make the key available where this ` +
         "environment expects it — if the source is your OS keychain, unlock it; if no key source is " +
-        "declared, add a `keys` block to penv.config.ts."
+        "declared, add a `keySource` to this environment's entry in penv.config.ts."
       );
     case "key-absent":
       return (
@@ -103,8 +103,8 @@ export class KeyUnavailableError extends PenvError {
     super(
       "KEY_UNAVAILABLE",
       `Parameter ${parameter} is a secret for environment ${environment}, and penv has no key to seal it with: ${detail}`,
-      "penv will not write a secret in plaintext, and will not invent a key. Declare the key " +
-        "source in the `keys` block of penv.config.ts and make the key available, then run the " +
+      "penv will not write a secret in plaintext, and will not invent a key. Declare this " +
+        "environment's `keySource` in penv.config.ts and make the key available, then run the " +
         "command again.",
     );
     this.parameter = parameter;

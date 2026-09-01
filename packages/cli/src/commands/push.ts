@@ -1,10 +1,10 @@
 /**
  * `penv push` — ship an environment's values to a provider.
  *
- * The destination is the environment's declared provider, or a one-shot
- * `--destination` override that persists nothing — the declared provider stays
- * the system of record either way. What crosses depends on what the destination
- * declares it holds:
+ * The destination is the environment's declared entry, always. A push that could
+ * go somewhere the config never declared would be a seam penv cannot see, and an
+ * entry is addressed in its provider's own words, so there is no generic place to
+ * point one at. What crosses depends on what the destination declares it holds:
  *
  * - **Records** (Vault, SSM, Kubernetes): the local tree is mirrored verbatim —
  *   unscoped and target-environment value files byte-for-byte (a sealed value
@@ -36,6 +36,7 @@ import type {
 } from "@penvhq/core";
 import {
   checkNameCollisions,
+  environmentEntry,
   holdsProjection,
   PenvError,
   recordPath,
@@ -68,13 +69,9 @@ export interface PushOptions {
   readonly envFlags?: readonly string[];
   /** Permits sealed values to be decrypted locally and pushed as plaintext for the destination to re-seal. */
   readonly allowDecrypt?: boolean;
-  /** One-shot destination override: a provider package name. Nothing is persisted. */
-  readonly destination?: string;
-  /** The destination-side place, when `destination` needs one — `--location`. */
-  readonly location?: string;
   /** Pre-approves creating a missing destination-side target (`--yes`). */
   readonly yes?: boolean;
-  /** Injected in tests: the destination provider. Defaults to the one the config (or `--destination`) declares. */
+  /** Injected in tests: the destination provider. Defaults to the one the environment's entry declares. */
   readonly provider?: AnyProvider;
   /** Injected in tests: answers the create-target question. Defaults to a terminal prompt. */
   readonly confirm?: (question: string) => Promise<boolean>;
@@ -88,8 +85,6 @@ export interface PushResult {
   readonly destination: string;
   /** What the destination holds, which decided what crossed. */
   readonly mode: "records" | "projection";
-  /** The `location` targeted, when one was declared. */
-  readonly location: string | undefined;
   /** Values sent — resolved secrets for a projection, value files for records. */
   readonly pushed: number;
   /** Meta records mirrored. Records mode only. */
@@ -112,51 +107,33 @@ interface Outbound {
 }
 
 /**
- * The destination provider: the `--destination` override when given, otherwise
- * the environment's declared provider. An environment whose provider is the
- * local tree itself has nowhere to push, and says so.
+ * The destination provider: the environment's declared entry, and nothing else.
+ * An environment whose provider is the local tree itself has nowhere to push, and
+ * says so.
  */
 async function destinationFor(
   project: Project,
   environment: string,
   options: PushOptions,
-): Promise<{ provider: AnyProvider; location: string | undefined }> {
-  if (options.destination !== undefined) {
-    const providerConfig = {
-      type: options.destination,
-      ...(options.location === undefined ? {} : { location: options.location }),
-    };
-    const provider =
-      options.provider ??
-      (await createSourceProvider(options.destination, {
-        root: project.root,
-        config: project.config,
-        providerConfig,
-        environment,
-      }));
-    return { provider, location: options.location };
-  }
-
-  const declared = project.config.providers[environment];
-  const location = declared?.location;
-  if (declared === undefined || declared.type === LOCAL_TREE_TYPE) {
+): Promise<AnyProvider> {
+  const declared = environmentEntry(project.config, environment);
+  if (declared === undefined || declared.provider === LOCAL_TREE_TYPE) {
     throw new PenvError(
       "NO_DESTINATION",
       `Environment ${environment}'s provider is the local records tree itself, so penv has nowhere to push`,
-      `Declare a provider for it in penv.config.ts — e.g. \`${environment}: { type: "@penvhq/provider-github", location: "owner/repo" }\` — ` +
-        `or push somewhere once with \`penv push --env ${environment} --destination <package> --location <place>\`.`,
+      `Declare the backend that holds it in penv.config.ts — e.g. \`${environment}: { provider: "@penvhq/provider-github", repository: "owner/repo" }\` — ` +
+        "and run this again. A push only ever goes where the config says this environment lives.",
     );
   }
   if (options.provider !== undefined) {
-    return { provider: options.provider, location };
+    return options.provider;
   }
-  const provider = await createSourceProvider(declared.type, {
+  return createSourceProvider(declared.provider, {
     root: project.root,
     config: project.config,
     providerConfig: declared,
     environment,
   });
-  return { provider, location };
 }
 
 /**
@@ -287,7 +264,6 @@ async function pushProjection(
   project: Project,
   provider: ProjectionProvider,
   environment: string,
-  location: string | undefined,
   options: PushOptions,
 ): Promise<PushResult> {
   const tree = localTree(project);
@@ -338,7 +314,6 @@ async function pushProjection(
     environment,
     destination: provider.type,
     mode: "projection",
-    location,
     pushed: outbound.length,
     meta: 0,
     repositorySecrets,
@@ -369,7 +344,6 @@ async function pushRecords(
   project: Project,
   provider: Provider,
   environment: string,
-  location: string | undefined,
 ): Promise<PushResult> {
   const tree = localTree(project);
   const files = tree.listSync().filter((file) => crossesToRecords(file, environment));
@@ -399,7 +373,6 @@ async function pushRecords(
     environment,
     destination: provider.type,
     mode: "records",
-    location,
     pushed,
     meta,
     repositorySecrets: 0,
@@ -412,12 +385,12 @@ async function pushRecords(
 export async function runPush(options: PushOptions): Promise<PushResult> {
   const project = openProject(options.cwd);
   const environment = targetEnvironment(project, options.environment, options.envFlags);
-  const { provider, location } = await destinationFor(project, environment, options);
+  const provider = await destinationFor(project, environment, options);
 
   if (holdsProjection(provider)) {
-    return pushProjection(project, provider, environment, location, options);
+    return pushProjection(project, provider, environment, options);
   }
-  return pushRecords(project, provider, environment, location);
+  return pushRecords(project, provider, environment);
 }
 
 export function renderPush(result: PushResult): string[] {
@@ -431,9 +404,7 @@ export function renderPush(result: PushResult): string[] {
     ]);
   }
 
-  const target = `${result.destination} for environment ${result.environment}${
-    result.location === undefined ? "" : ` (${result.location})`
-  }`;
+  const target = `${result.destination} for environment ${result.environment}`;
 
   if (result.mode === "records") {
     return formatRows([
@@ -486,6 +457,29 @@ export function renderPush(result: PushResult): string[] {
   return formatRows(rows);
 }
 
+/**
+ * The flags that used to redirect a push, and the one case that must not fall
+ * through. citty rejects no unknown flag, and a flag carrying a value is not a
+ * shorthand candidate either — so `--destination @penvhq/provider-github` would be
+ * dropped in silence and the secrets would land at the declared entry instead.
+ */
+const REDIRECT_FLAGS = ["destination", "dest", "d", "location", "l"] as const;
+
+export function assertNoRedirect(args: Readonly<Record<string, unknown>>): void {
+  const given = REDIRECT_FLAGS.filter((flag) => args[flag] !== undefined);
+  const named = given[0];
+  if (named === undefined) {
+    return;
+  }
+  throw new PenvError(
+    "REMOVED_FLAG",
+    `\`--${named}\` is not a flag \`penv push\` takes`,
+    "A push only ever goes where the config says this environment lives. Declare the " +
+      "destination in `environments.<env>` — the provider package, addressed in that provider's " +
+      "own words — and push with `--env <name>`.",
+  );
+}
+
 export const pushCommand = defineCommand({
   meta: {
     name: "push",
@@ -498,16 +492,6 @@ export const pushCommand = defineCommand({
       description:
         "Decrypt sealed values locally and push them as plaintext for the destination to re-seal",
     },
-    destination: {
-      type: "string",
-      alias: ["dest", "d"],
-      description: "Push once to this provider package instead of the declared one",
-    },
-    location: {
-      type: "string",
-      alias: "l",
-      description: "The destination-side place, when --destination needs one",
-    },
     yes: {
       type: "boolean",
       alias: "y",
@@ -516,25 +500,13 @@ export const pushCommand = defineCommand({
   },
   run({ args }) {
     return guard(async () => {
+      assertNoRedirect(args);
       const result = await runPush({
         cwd: process.cwd(),
         ...(args.env === undefined ? {} : { environment: args.env }),
         ...(args["allow-decrypt"] === undefined ? {} : { allowDecrypt: args["allow-decrypt"] }),
-        ...(args.destination === undefined ? {} : { destination: args.destination }),
-        ...(args.location === undefined ? {} : { location: args.location }),
         ...(args.yes === undefined ? {} : { yes: args.yes }),
-        envFlags: shorthandCandidates(args, [
-          "env",
-          "allow-decrypt",
-          "allowDecrypt",
-          "destination",
-          "dest",
-          "d",
-          "location",
-          "l",
-          "yes",
-          "y",
-        ]),
+        envFlags: shorthandCandidates(args, ["env", "allow-decrypt", "allowDecrypt", "yes", "y"]),
       });
       write(renderPush(result));
     });

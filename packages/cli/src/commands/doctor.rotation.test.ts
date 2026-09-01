@@ -19,10 +19,9 @@ import { runDoctor } from "./doctor.js";
 const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", import.meta.url));
 
 const CONFIG = {
-  environments: ["development", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-filesystem" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
   },
 };
 
@@ -112,11 +111,10 @@ const ENC_KEY = Buffer.alloc(32, 7).toString("base64");
 
 /** The config that points production at a mock backend and reads its key from `PENV_KEY_PROD`. */
 const ENC_CONFIG = {
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-mock" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: { provider: "@penvhq/provider-mock", keySource: { source: "env", id: "prod" } },
   },
-  keys: { production: { source: "env", id: "prod" } },
 };
 
 /** Seals `value` for `api-key`'s production scope under `ENC_KEY`, the way `penv set` would. */
@@ -234,9 +232,9 @@ describe("rotation-overdue", () => {
       schema: "apiKey: z.string()",
       tree: { "api-key.production": "v" },
       config: {
-        providers: {
-          development: { type: "@penvhq/provider-filesystem" },
-          production: { type: "@penvhq/provider-mock" },
+        environments: {
+          development: "@penvhq/provider-filesystem",
+          production: "@penvhq/provider-mock",
         },
       },
     });
@@ -333,9 +331,9 @@ describe("provider-value-drift", () => {
       schema: "apiKey: z.string()",
       tree: { "api-key.production": "local-value" },
       config: {
-        providers: {
-          development: { type: "@penvhq/provider-filesystem" },
-          production: { type: "@penvhq/provider-mock" },
+        environments: {
+          development: "@penvhq/provider-filesystem",
+          production: "@penvhq/provider-mock",
         },
       },
     });
@@ -355,9 +353,9 @@ describe("provider-value-drift", () => {
       schema: "apiKey: z.string()",
       tree: { "api-key.production": "same-value" },
       config: {
-        providers: {
-          development: { type: "@penvhq/provider-filesystem" },
-          production: { type: "@penvhq/provider-mock" },
+        environments: {
+          development: "@penvhq/provider-filesystem",
+          production: "@penvhq/provider-mock",
         },
       },
     });
@@ -375,9 +373,9 @@ describe("provider-value-drift", () => {
       schema: "apiKey: z.string()",
       tree: { "api-key.production": "local-only" },
       config: {
-        providers: {
-          development: { type: "@penvhq/provider-filesystem" },
-          production: { type: "@penvhq/provider-mock" },
+        environments: {
+          development: "@penvhq/provider-filesystem",
+          production: "@penvhq/provider-mock",
         },
       },
     });
@@ -419,9 +417,9 @@ describe("provider-value-drift", () => {
       schema: "apiKey: z.string()",
       tree: { "api-key.production": "v" },
       config: {
-        providers: {
-          development: { type: "@penvhq/provider-filesystem" },
-          production: { type: "@penvhq/provider-mock" },
+        environments: {
+          development: "@penvhq/provider-filesystem",
+          production: "@penvhq/provider-mock",
         },
       },
     });
@@ -462,9 +460,9 @@ describe("provider-value-drift", () => {
         "api-key.development": "dev-only",
       },
       config: {
-        providers: {
-          development: { type: "@penvhq/provider-filesystem" },
-          production: { type: "@penvhq/provider-mock" },
+        environments: {
+          development: "@penvhq/provider-filesystem",
+          production: "@penvhq/provider-mock",
         },
       },
     });

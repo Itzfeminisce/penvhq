@@ -39,13 +39,14 @@ export class VercelNameError extends PenvError {
 }
 
 /** Why penv will not write to a Vercel target. */
-export type VercelTargetReason = "unmapped" | "invalid" | "conflict" | "undeclared";
+export type VercelTargetReason = "unmapped" | "invalid" | "conflict";
 
 /**
  * The environment could not be placed on a Vercel target. Which target an
- * environment deploys to is declared in `providers.<env>.targets` and never
- * inferred: penv guessing between production, preview, and development is penv
- * choosing which deployment reads a secret.
+ * environment deploys to is `environments.<env>.target`, defaulting to the
+ * environment's own name and never inferred past that: penv guessing between
+ * production, preview, and development is penv choosing which deployment reads a
+ * secret.
  */
 export class VercelTargetError extends PenvError {
   override readonly name = "VercelTargetError";

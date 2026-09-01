@@ -14,8 +14,7 @@ import { z } from "zod";
 import { declaredRefs, inject } from "./inject.js";
 
 const CONFIG: PenvConfig = {
-  environments: ["production"],
-  providers: { production: { type: "@penvhq/provider-filesystem" } },
+  environments: { production: "@penvhq/provider-filesystem" },
 };
 
 const SCHEMA = z.object({

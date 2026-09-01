@@ -46,7 +46,7 @@ export class VaultKvVersionError extends PenvError {
       `The Vault mount \`${mount}\` is KV version ${version}, not 2`,
       "penv requires a KV v2 mount because v1 keeps no version history, so a rotation could never " +
         "read the value it is replacing. Enable versioning on this mount (`vault kv enable-versioning " +
-        `${mount}\`) or point \`providers.*.mount\` at a v2 mount.`,
+        `${mount}\`) or point \`VAULT_MOUNT\` at a v2 mount.`,
     );
     this.mount = mount;
     this.version = version;

@@ -20,7 +20,7 @@
 
 import { readdirSync } from "node:fs";
 import type { PenvConfig } from "@penvhq/core";
-import { isLegalEnvironmentName, RESERVED_TOKENS } from "@penvhq/core";
+import { environmentNames, isLegalEnvironmentName, RESERVED_TOKENS } from "@penvhq/core";
 
 /** The prefix every dotenv filename carries, and the bare shared-default name. */
 const SHARED = ".env";
@@ -143,8 +143,9 @@ export function discoverDotenvFiles(root: string): DotenvFile[] {
  * environment invariant 10 forbids it from inferring.
  */
 export function activeDotenvFiles(root: string, config: PenvConfig): DotenvFile[] {
+  const declared = environmentNames(config);
   return discoverDotenvFiles(root).filter(
-    (file) => file.environment === undefined || config.environments.includes(file.environment),
+    (file) => file.environment === undefined || declared.includes(file.environment),
   );
 }
 

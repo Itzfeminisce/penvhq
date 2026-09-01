@@ -22,7 +22,7 @@
 
 import { ConfigError, PenvError } from "./errors.js";
 import type { KeyConfig, PenvConfig } from "./types.js";
-import { own } from "./types.js";
+import { environmentEntry } from "./types.js";
 
 /** The one algorithm's key length. A key of any other size is not a key penv can use. */
 export const KEY_BYTES = 32;
@@ -223,7 +223,7 @@ export function createKeychainKeySource(config: KeyConfig, keychain?: Keychain):
 }
 
 /**
- * The source for an environment that declares no `keys` block.
+ * The source for an environment that declares no `keySource`.
  *
  * Every lookup is `unavailable`, never `absent`. penv was never told where to
  * look, so it has not looked — and reporting "no such key" would send the user
@@ -231,7 +231,7 @@ export function createKeychainKeySource(config: KeyConfig, keychain?: Keychain):
  */
 export function nullKeySource(environment: string): KeySource {
   const detail =
-    `environment ${environment} declares no \`keys\` block in penv.config.ts, ` +
+    `environment ${environment} declares no \`keySource\` in penv.config.ts, ` +
     "so penv was never told where its keys live";
   return {
     type: "none",
@@ -241,13 +241,31 @@ export function nullKeySource(environment: string): KeySource {
 }
 
 /**
+ * The environment's declared key, with the shorthand expanded: `keySource: "env"`
+ * is the key named after the environment itself, and rotation to a
+ * differently-named key is what the object form says. The defaulted id *is* the
+ * environment name, so the identifier an artifact carries is unchanged by the
+ * shorthand.
+ */
+export function keyConfigFor(config: PenvConfig, environment: string): KeyConfig | undefined {
+  const declared = environmentEntry(config, environment)?.keySource;
+  if (declared === undefined) {
+    return undefined;
+  }
+  if (typeof declared === "string") {
+    return { source: declared, id: environment };
+  }
+  return { source: declared.source, id: declared.id ?? environment };
+}
+
+/**
  * The key source for one environment. The single authority both the CLI and the
  * runtime call, so neither chooses — two choosers would be two answers to one
  * question, and one of them would eventually seal under a key the other cannot
  * find.
  */
 export function resolveKeySource(config: PenvConfig, environment: string): KeySource {
-  const declared = own(config.keys, environment);
+  const declared = keyConfigFor(config, environment);
   if (declared === undefined) {
     return nullKeySource(environment);
   }
@@ -272,11 +290,11 @@ export function resolveKeySource(config: PenvConfig, environment: string): KeySo
   throw new PenvError(
     "KEY_SOURCE_UNSUPPORTED",
     `Environment ${environment} declares key source \`${String(declared.source)}\`, which penv cannot read`,
-    `\`${String(declared.source)}\` is not a key source penv knows. Declare \`source: "env"\` (exported as \`${envVarFor(declared.id)}\`) or \`source: "keychain"\`.`,
+    `\`${String(declared.source)}\` is not a key source penv knows. Declare \`keySource: "env"\` (exported as \`${envVarFor(declared.id)}\`) or \`keySource: "keychain"\`.`,
   );
 }
 
-/** What an artifact's `keySource` says when the environment declares no `keys` block. */
+/** What an artifact's `keySource` says when the environment declares none. */
 export const NO_KEY_SOURCE = "none";
 
 /**
@@ -284,7 +302,7 @@ export const NO_KEY_SOURCE = "none";
  * artifact carries — `env:prod`, `keychain:prod`, or `none`.
  *
  * It names *where the key lives*, never the key. That is what lets an artifact
- * be read in a container with no `penv.config.ts`: the `keys` block does not
+ * be read in a container with no `penv.config.ts`: the declaration does not
  * travel, so the artifact says which door to knock on and nothing else.
  * {@link resolveKeySource} decides, here as everywhere, so an unrecognised
  * source refuses at build time instead of producing an artifact that names a
@@ -292,7 +310,7 @@ export const NO_KEY_SOURCE = "none";
  */
 export function keySourceIdentifier(config: PenvConfig, environment: string): string {
   const source = resolveKeySource(config, environment);
-  const declared = own(config.keys, environment);
+  const declared = keyConfigFor(config, environment);
   if (declared === undefined) {
     return NO_KEY_SOURCE;
   }
@@ -335,68 +353,62 @@ const KEY_ID = /^[A-Za-z0-9._-]+$/;
 const SOURCES: readonly string[] = ["env", "keychain"];
 
 /**
- * Every problem in the `keys` block, collected rather than thrown so `penv
- * validate` reports the whole config. Mirrors the `providers` validation
- * deliberately: `keys` is the same shape of fact — one entry per environment —
- * and a second style of check for the same shape is a second thing to learn.
+ * Every problem in a declared `keySource`, collected rather than thrown so `penv
+ * validate` reports the whole config. `declared` is the whitelist validation
+ * already judged, so a blank or unwritable environment name is reported once,
+ * where it is wrong, rather than again here.
  */
 export function validateKeys(config: PenvConfig, declared: ReadonlySet<string>): PenvError[] {
   const errors: PenvError[] = [];
-  const keys: unknown = config.keys;
-  if (keys === undefined) {
-    return errors;
-  }
-  if (keys === null || typeof keys !== "object" || Array.isArray(keys)) {
-    errors.push(
-      new ConfigError(
-        "`keys` in penv.config.ts is not an object",
-        'Declare one key source per environment, e.g. `keys: { production: { source: "env", id: "prod" } }`, or remove the block.',
-      ),
-    );
-    return errors;
-  }
 
-  const entries = keys as Readonly<Record<string, unknown>>;
-  for (const environment of Object.keys(entries)) {
-    if (!declared.has(environment)) {
+  for (const environment of declared) {
+    const keySource: unknown = environmentEntry(config, environment)?.keySource;
+    if (keySource === undefined) {
+      continue;
+    }
+
+    // The shorthand carries no id of its own: it is the environment's name, which
+    // the whitelist checks already hold to a stricter charset than a key id.
+    if (typeof keySource === "string") {
+      if (!SOURCES.includes(keySource)) {
+        errors.push(unknownSource(environment, keySource));
+      }
+      continue;
+    }
+
+    if (keySource === null || typeof keySource !== "object" || Array.isArray(keySource)) {
       errors.push(
         new ConfigError(
-          `The \`keys\` block in penv.config.ts names environment ${environment}, which is not declared`,
-          `Add \`${environment}\` to the \`environments\` list, or remove its \`keys\` entry. ` +
-            "Environments are a whitelist — penv never infers one.",
+          `The \`keySource\` for environment ${environment} is not a key source`,
+          `Declare it as \`keySource: "env"\` — the key named after the environment — or as ` +
+            `\`keySource: { source: "env", id: "prod" }\` to name a different key.`,
         ),
       );
       continue;
     }
-    const entry = own(entries, environment);
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-      errors.push(
-        new ConfigError(
-          `The \`keys\` entry for environment ${environment} is not a key-source object`,
-          `Declare it as \`${environment}: { source: "env", id: "prod" }\`.`,
-        ),
-      );
-      continue;
-    }
-    const { source, id } = entry as Readonly<Record<string, unknown>>;
+
+    const { source, id } = keySource as Readonly<Record<string, unknown>>;
     if (typeof source !== "string" || !SOURCES.includes(source)) {
-      errors.push(
-        new ConfigError(
-          `The \`keys\` entry for environment ${environment} declares source \`${String(source)}\``,
-          `A key source is ${SOURCES.map((s) => `\`${s}\``).join(" or ")}.`,
-        ),
-      );
+      errors.push(unknownSource(environment, String(source)));
     }
-    if (typeof id !== "string" || !KEY_ID.test(id)) {
+    if (id !== undefined && (typeof id !== "string" || !KEY_ID.test(id))) {
       errors.push(
         new ConfigError(
-          `The \`keys\` entry for environment ${environment} declares id \`${String(id)}\``,
+          `The \`keySource\` for environment ${environment} declares id \`${String(id)}\``,
           "A key id is one or more of `A-Za-z0-9._-`. It is written into every value file " +
-            "sealed under it, where `:` separates the fields, so `:` cannot appear in one.",
+            "sealed under it, where `:` separates the fields, so `:` cannot appear in one. " +
+            "Omit `id` to use the environment's own name.",
         ),
       );
     }
   }
 
   return errors;
+}
+
+function unknownSource(environment: string, source: string): ConfigError {
+  return new ConfigError(
+    `The \`keySource\` for environment ${environment} declares source \`${source}\``,
+    `A key source is ${SOURCES.map((s) => `\`${s}\``).join(" or ")}.`,
+  );
 }

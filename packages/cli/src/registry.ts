@@ -1,6 +1,6 @@
 /**
- * The provider registry: the one place the CLI turns a `providers.*.type` into a
- * concrete provider.
+ * The provider registry: the one place the CLI turns an environment entry's
+ * `provider` into a concrete provider.
  *
  * It lives in the CLI, not in `@penvhq/core` and not in `@penvhq/runtime`. Core owns
  * the `Provider` *contract* and must not know which implementations exist —
@@ -9,7 +9,7 @@
  * environment declares (see `runtime/src/resolve.ts`), so a registry there would
  * be the ability to dial a network provider at boot, which the design forbids.
  *
- * A `type` is the provider package's fully-qualified name, and the name is the
+ * A provider is the package's fully-qualified name, and the name is the
  * import specifier. The registry pre-installs just two providers — the
  * filesystem tree every command edits and the mock used to rehearse rotation —
  * so "built-in" means only "already installed", not a different kind of
@@ -32,6 +32,8 @@ import type {
   ProviderFactoryContext,
 } from "@penvhq/core";
 import {
+  environmentEntry,
+  environmentNames,
   holdsProjection,
   LOCAL_EXTENSIONS_PATH,
   localExtensionsFile,
@@ -43,6 +45,7 @@ import {
   parseLocalExtensions,
   parseManifest,
   penvHome,
+  providerMissing,
   recordsDir,
 } from "@penvhq/core";
 import { createFilesystemProvider } from "@penvhq/provider-filesystem";
@@ -108,7 +111,7 @@ const PROJECTION_CONTRACT_METHODS = ["verify", "push", "list"] as const;
  */
 const pluginModuleCache = new Map<string, Promise<Record<string, unknown>>>();
 
-/** Whether a `providers.*.type` names a provider the CLI ships pre-installed. */
+/** Whether a package name is one the CLI ships pre-installed. */
 export function isProviderRegistered(type: string): boolean {
   return REGISTRY.has(type);
 }
@@ -170,10 +173,15 @@ async function loadPluginProvider(type: string, context: ProviderContext): Promi
 }
 
 /**
- * Refuses at open time every environment whose `providers.*.type` names a backend
+ * Refuses at open time every environment whose `provider` names a backend
  * this project cannot construct — the whole config in one pass, so a user with two
  * unknown providers hears about both, and never as a crash from the later command
  * that would have been the first to reach one.
+ *
+ * An entry naming no provider at all is refused here too, rather than skipped. A
+ * half-migrated entry — one that kept `type:` — otherwise opens cleanly, and the
+ * credential strip in `child-env.ts` cannot name the credentials of a provider
+ * penv was never told about: `penv run` would hand the child `VAULT_TOKEN`.
  *
  * A pre-installed type passes on the map; any other passes only if
  * {@link resolveExtension} finds it — a *synchronous* existence check that runs
@@ -188,14 +196,18 @@ export function assertProvidersRegistered(
 ): void {
   const local = localExtensions(projectRoot);
   const ci = options?.ci ?? isCi(process.env.CI);
-  for (const [environment, provider] of Object.entries(config.providers)) {
-    if (isProviderRegistered(provider.type)) {
+  for (const environment of environmentNames(config)) {
+    const provider = environmentEntry(config, environment)?.provider;
+    if (typeof provider !== "string" || provider.trim().length === 0) {
+      throw providerMissing(environment);
+    }
+    if (isProviderRegistered(provider)) {
       continue;
     }
-    if (ci && local.includes(provider.type)) {
-      throw localExtensionInCi(provider.type, environment);
+    if (ci && local.includes(provider)) {
+      throw localExtensionInCi(provider, environment);
     }
-    resolveExtension(provider.type, projectRoot, environment, local);
+    resolveExtension(provider, projectRoot, environment, local);
   }
 }
 

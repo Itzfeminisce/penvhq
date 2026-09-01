@@ -36,6 +36,8 @@ import type { Artifact, ParameterRef, PenvConfig, Resolution } from "@penvhq/cor
 import {
   ARTIFACT_BUILD_COMMAND,
   assertArtifactFor,
+  environmentEntry,
+  environmentNames,
   isPublicVariable,
   isSecret,
   keySourceFrom,
@@ -331,11 +333,12 @@ function packageManifest(specifier: string, root: string): Record<string, unknow
  */
 export function declaredCredentials(config: PenvConfig, root: string): DeclaredCredentials {
   const declared: Record<string, readonly string[]> = {};
-  for (const provider of Object.values(config.providers)) {
-    if (own(declared, provider.type) !== undefined) {
+  for (const environment of environmentNames(config)) {
+    const provider = environmentEntry(config, environment)?.provider;
+    if (provider === undefined || own(declared, provider) !== undefined) {
       continue;
     }
-    const penv = packageManifest(provider.type, root)?.penv;
+    const penv = packageManifest(provider, root)?.penv;
     const credentials = isPlainObject(penv) ? penv.credentials : undefined;
     if (credentials === undefined) {
       continue;
@@ -346,12 +349,12 @@ export function declaredCredentials(config: PenvConfig, root: string): DeclaredC
     ) {
       throw new PenvError(
         "PROVIDER_CREDENTIALS_INVALID",
-        `\`${provider.type}\` declares \`penv.credentials\`, and it is not a list of variable names`,
+        `\`${provider}\` declares \`penv.credentials\`, and it is not a list of variable names`,
         `Its package.json should read \`"penv": { "credentials": ["ACME_TOKEN"] }\` — penv strips ` +
           "exactly what an extension declares, so it will not guess at a declaration it cannot read.",
       );
     }
-    declared[provider.type] = credentials;
+    declared[provider] = credentials;
   }
   return declared;
 }
@@ -431,8 +434,8 @@ function readSnapshot(path: string): string {
  * The artifact's values, opened in memory.
  *
  * The key source is the identifier the artifact carries and nothing else — the
- * `keys` block never travelled, because provider and key *configuration* is
- * exactly what an artifact must not hold. A ciphertext that will not open is a
+ * environment's entry never travelled, because provider and key *configuration*
+ * is exactly what an artifact must not hold. A ciphertext that will not open is a
  * refusal here, before the child exists: the alternative is starting an
  * application with a variable silently missing.
  */

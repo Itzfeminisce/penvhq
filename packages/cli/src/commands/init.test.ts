@@ -561,8 +561,7 @@ describe("environments", () => {
     const config = read(root, "penv.config.ts");
 
     expect(result.decisions.environments).toEqual([]);
-    expect(config).toContain("environments: [],");
-    expect(config).toContain("providers: {},");
+    expect(config).toContain("environments: {},");
     expect(config).not.toContain("staging");
   });
 
@@ -591,12 +590,12 @@ describe("environments", () => {
       alias: "@env",
     });
 
-    expect(config).toContain("never infers one");
-    expect(config).toContain('environments: ["development", "production"],');
-    expect(config).toContain("environments: [],");
+    expect(config).toContain("only if it is named here");
+    expect(config).toContain('production: { provider: "@penvhq/provider-vault"');
+    expect(config).toContain("environments: {},");
   });
 
-  it("gives every declared environment a provider to read from", () => {
+  it("gives every declared environment an entry naming its provider", () => {
     const config = renderConfigModule({
       environments: ["development", "production"],
       inject: false,
@@ -605,9 +604,8 @@ describe("environments", () => {
       alias: "@env",
     });
 
-    expect(config).toContain('environments: ["development", "production"],');
-    expect(config).toContain('"development": { type: "@penvhq/provider-filesystem" },');
-    expect(config).toContain('"production": { type: "@penvhq/provider-filesystem" },');
+    expect(config).toContain('development: "@penvhq/provider-filesystem",');
+    expect(config).toContain('production: "@penvhq/provider-filesystem",');
   });
 
   it("declares what --env names, however it was written", () => {
@@ -646,8 +644,7 @@ describe("`penv init --yes` on a project with nothing to adopt", () => {
     await initWithYes(root);
     const config = read(root, "penv.config.ts");
 
-    expect(config).toContain('environments: ["development"],');
-    expect(config).toContain('"development": { type: "@penvhq/provider-filesystem" },');
+    expect(config).toContain('development: "@penvhq/provider-filesystem",');
     expect(config).toContain('defaultEnvironment: "development",');
   });
 
@@ -1036,7 +1033,7 @@ describe("the alias note", () => {
  * outranked a recorded decision would make `penv init` unsafe to re-run: on a
  * project declaring `src/lib/env.ts` it scaffolded a *second* schema at the
  * detected path, warned that its own correct alias pointed at the wrong file,
- * and told a project with `environments: ["production"]` that it had declared
+ * and told a project with a declared `production` that it had declared
  * none. Three failures, one cause — the plan never read the config.
  */
 describe("re-running init on a project that already decided", () => {
@@ -1047,7 +1044,7 @@ describe("re-running init on a project that already decided", () => {
 
   it("keeps the declared schema instead of the detected one", () => {
     const root = makeProject(NEXT, { src: true });
-    configured(root, '{ environments: [], providers: {}, schemaFile: "src/lib/env.ts" }');
+    configured(root, '{ environments: {}, schemaFile: "src/lib/env.ts" }');
 
     expect(planInit(root).decisions.schemaFile).toBe("src/lib/env.ts");
   });
@@ -1059,14 +1056,14 @@ describe("re-running init on a project that already decided", () => {
    */
   it("keeps the default a config implies, rather than re-detecting over it", () => {
     const root = makeProject(NEXT, { src: true });
-    configured(root, "{ environments: [], providers: {} }");
+    configured(root, "{ environments: {} }");
 
     expect(planInit(root).decisions.schemaFile).toBe(".penv/env.ts");
   });
 
   it("does not scaffold a second schema", () => {
     const root = makeProject(NEXT, { src: true });
-    configured(root, '{ environments: [], providers: {}, schemaFile: "src/lib/env.ts" }');
+    configured(root, '{ environments: {}, schemaFile: "src/lib/env.ts" }');
 
     runInit({ cwd: root, decisions: planInit(root).decisions });
     runInit({ cwd: root, decisions: planInit(root).decisions });
@@ -1077,10 +1074,7 @@ describe("re-running init on a project that already decided", () => {
 
   it("stops announcing that a project with environments has none", () => {
     const root = makeProject(NEXT, { src: true });
-    configured(
-      root,
-      '{ environments: ["production"], providers: { production: { type: "@penvhq/provider-filesystem" } } }',
-    );
+    configured(root, '{ environments: { production: "@penvhq/provider-filesystem" } }');
 
     const plan = planInit(root);
 
@@ -1090,7 +1084,7 @@ describe("re-running init on a project that already decided", () => {
 
   it("keeps the declared publicPrefixes over the detected ones", () => {
     const root = makeProject(NEXT, { src: true });
-    configured(root, '{ environments: [], providers: {}, publicPrefixes: ["VITE_"] }');
+    configured(root, '{ environments: {}, publicPrefixes: ["VITE_"] }');
 
     expect(planInit(root).decisions.publicPrefixes).toEqual(["VITE_"]);
   });
@@ -1098,7 +1092,7 @@ describe("re-running init on a project that already decided", () => {
   /** A flag is the human deciding now, which outranks the human having decided before. */
   it("lets --schema override what the config declares", () => {
     const root = makeProject(NEXT, { src: true });
-    configured(root, '{ environments: [], providers: {}, schemaFile: "src/lib/env.ts" }');
+    configured(root, '{ environments: {}, schemaFile: "src/lib/env.ts" }');
 
     expect(planInit(root, { schema: "src/other.ts" }).decisions.schemaFile).toBe("src/other.ts");
   });
@@ -1109,7 +1103,7 @@ describe("re-running init on a project that already decided", () => {
    */
   it("ignores a config belonging to a parent directory", () => {
     const parent = makeDir();
-    configured(parent, '{ environments: [], providers: {}, schemaFile: "src/parent.ts" }');
+    configured(parent, '{ environments: {}, schemaFile: "src/parent.ts" }');
     const root = join(parent, "packages", "app");
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, "package.json"), JSON.stringify(NEXT), "utf8");

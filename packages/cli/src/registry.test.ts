@@ -1,7 +1,7 @@
 /**
- * The provider registry is the CLI's portability seam: it turns a
- * `providers.*.type` into a concrete provider, and it is the one place that
- * refuses a type this build does not carry.
+ * The provider registry is the CLI's portability seam: it turns an entry's
+ * `provider` into a concrete provider, and it is the one place that refuses a
+ * package this build does not carry.
  *
  * The refusal must land at `openProject` — config-open time — not at whichever
  * command first reaches the provider. A config naming a provider this project
@@ -105,7 +105,7 @@ describe("the provider registry", () => {
   it("builds the filesystem provider through the registry", () => {
     const provider = createProvider("@penvhq/provider-filesystem", {
       root: FIXTURE_PARENT,
-      config: { environments: [], providers: {} },
+      config: { environments: {} },
     });
     expect(provider).toBeInstanceOf(FilesystemProvider);
     expect(provider.type).toBe("@penvhq/provider-filesystem");
@@ -116,7 +116,7 @@ describe("the provider registry", () => {
     try {
       createProvider("consul", {
         root: FIXTURE_PARENT,
-        config: { environments: [], providers: {} },
+        config: { environments: {} },
       });
     } catch (error) {
       thrown = error;
@@ -129,14 +129,13 @@ describe("the provider registry", () => {
   });
 
   it("accepts a config naming the registered providers", () => {
-    const root = makeProject({ environments: [], providers: {} });
+    const root = makeProject({ environments: {} });
     expect(() =>
       assertProvidersRegistered(
         {
-          environments: ["development", "production"],
-          providers: {
-            development: { type: "@penvhq/provider-mock" },
-            production: { type: "@penvhq/provider-vault", location: "secret/app" },
+          environments: {
+            development: "@penvhq/provider-mock",
+            production: { provider: "@penvhq/provider-vault", path: "secret/app" },
           },
         },
         root,
@@ -145,13 +144,14 @@ describe("the provider registry", () => {
   });
 
   it("refuses a config whose provider type is unregistered, naming the environment", () => {
-    const root = makeProject({ environments: [], providers: {} });
+    const root = makeProject({ environments: {} });
     let thrown: unknown;
     try {
       assertProvidersRegistered(
         {
-          environments: ["production"],
-          providers: { production: { type: "consul", location: "secret/app" } },
+          environments: {
+            production: { provider: "consul", path: "secret/app" },
+          },
         },
         root,
       );
@@ -164,6 +164,28 @@ describe("the provider registry", () => {
     expect(error.message).toContain("production");
     expect(error.message).toContain("consul");
   });
+
+  /**
+   * A half-migrated entry — one that kept `type:` — names no provider at all.
+   * Skipped, it opens the project cleanly and `penv run` hands the child every
+   * credential the strip in `child-env.ts` can only name a provider for.
+   */
+  it("refuses an entry that names no provider, naming the environment", () => {
+    const root = makeProject({ environments: {} });
+    const halfMigrated = {
+      environments: { production: { type: "@penvhq/provider-vault", path: "secret/app" } },
+    } as unknown as PenvConfig;
+    let thrown: unknown;
+    try {
+      assertProvidersRegistered(halfMigrated, root);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(PenvError);
+    const error = thrown as PenvError;
+    expect(error.code).toBe("PROVIDER_MISSING");
+    expect(error.message).toContain("production");
+  });
 });
 
 /**
@@ -172,12 +194,13 @@ describe("the provider registry", () => {
  */
 describe("a locally added extension", () => {
   const CONFIG: PenvConfig = {
-    environments: ["production"],
-    providers: { production: { type: "@acme/provider-consul" } },
+    environments: {
+      production: "@acme/provider-consul",
+    },
   };
 
   function projectWithLocal(): string {
-    const root = makeProject({ environments: [], providers: {} });
+    const root = makeProject({ environments: {} });
     installFakeProvider(root, "@acme/provider-consul", VALID_PLUGIN);
     writeFileSync(
       localExtensionsFile(root),
@@ -209,7 +232,7 @@ describe("a locally added extension", () => {
 
   /** The quiet half: a project that records none is unaffected, in CI like anywhere. */
   it("leaves a project with no local list alone", () => {
-    const root = makeProject({ environments: [], providers: {} });
+    const root = makeProject({ environments: {} });
     installFakeProvider(root, "@acme/provider-consul", VALID_PLUGIN);
 
     expect(() => assertProvidersRegistered(CONFIG, root, { ci: true })).not.toThrow();
@@ -219,10 +242,9 @@ describe("a locally added extension", () => {
 
 describe("openProject and the registry", () => {
   const FILESYSTEM_CONFIG: PenvConfig = {
-    environments: ["development", "production"],
-    providers: {
-      development: { type: "@penvhq/provider-filesystem" },
-      production: { type: "@penvhq/provider-filesystem" },
+    environments: {
+      development: "@penvhq/provider-filesystem",
+      production: "@penvhq/provider-filesystem",
     },
   };
 
@@ -237,10 +259,9 @@ describe("openProject and the registry", () => {
 
   it("refuses at open time a config naming an unregistered provider", () => {
     const root = makeProject({
-      environments: ["development", "production"],
-      providers: {
-        development: { type: "@penvhq/provider-filesystem" },
-        production: { type: "consul", location: "secret/app" },
+      environments: {
+        development: "@penvhq/provider-filesystem",
+        production: { provider: "consul", path: "secret/app" },
       },
     });
     expect(() => openProject(root)).toThrow(PenvError);
@@ -262,8 +283,9 @@ describe("openProject and the registry", () => {
 describe("package-resolved providers", () => {
   it("accepts, at open time, a type whose package resolves from the project", () => {
     const root = makeProject({
-      environments: ["production"],
-      providers: { production: { type: "@penvhq/provider-faketype" } },
+      environments: {
+        production: "@penvhq/provider-faketype",
+      },
     });
     installFakeProvider(root, "@penvhq/provider-faketype", VALID_PLUGIN);
 
@@ -272,8 +294,9 @@ describe("package-resolved providers", () => {
 
   it("refuses at open time a type whose package is not installed, with an install hint", () => {
     const root = makeProject({
-      environments: ["production"],
-      providers: { production: { type: "@penvhq/provider-penv-cloud" } },
+      environments: {
+        production: "@penvhq/provider-penv-cloud",
+      },
     });
 
     let thrown: unknown;
@@ -292,8 +315,9 @@ describe("package-resolved providers", () => {
 
   it("builds a package provider through the source-of-truth path", async () => {
     const root = makeProject({
-      environments: ["production"],
-      providers: { production: { type: "@penvhq/provider-faketype" } },
+      environments: {
+        production: "@penvhq/provider-faketype",
+      },
     });
     installFakeProvider(root, "@penvhq/provider-faketype", VALID_PLUGIN);
     const project = openProject(root);
@@ -305,8 +329,9 @@ describe("package-resolved providers", () => {
 
   it("imports a provider from any package name the config declares", async () => {
     const root = makeProject({
-      environments: ["production"],
-      providers: { production: { type: "@acme/custom-provider" } },
+      environments: {
+        production: "@acme/custom-provider",
+      },
     });
     installFakeProvider(root, "@acme/custom-provider", VALID_PLUGIN);
     const project = openProject(root);
@@ -318,8 +343,9 @@ describe("package-resolved providers", () => {
 
   it("refuses a resolved package that does not export penvProviderFactory", async () => {
     const root = makeProject({
-      environments: ["production"],
-      providers: { production: { type: "@penvhq/provider-faketype" } },
+      environments: {
+        production: "@penvhq/provider-faketype",
+      },
     });
     installFakeProvider(root, "@penvhq/provider-faketype", "export const notTheFactory = 1;\n");
     const project = openProject(root);
@@ -336,8 +362,9 @@ describe("package-resolved providers", () => {
    */
   it("carries the underlying failure and the file it tried", async () => {
     const root = makeProject({
-      environments: ["production"],
-      providers: { production: { type: "@penvhq/provider-faketype" } },
+      environments: {
+        production: "@penvhq/provider-faketype",
+      },
     });
     installFakeProvider(
       root,
@@ -368,8 +395,9 @@ describe("package-resolved providers", () => {
 describe("an extension the manifest pins", () => {
   const CONSUL = "@penvhq/provider-consul";
   const CONFIG: PenvConfig = {
-    environments: ["production"],
-    providers: { production: { type: CONSUL } },
+    environments: {
+      production: CONSUL,
+    },
   };
 
   const INTEGRITY = `sha512-${"a".repeat(86)}==`;
@@ -464,8 +492,9 @@ describe("an extension the manifest pins", () => {
   /** The quiet half: a provider the manifest does not pin is refused as before. */
   it("leaves a provider it does not pin unaffected", () => {
     const root = makeProject({
-      environments: ["production"],
-      providers: { production: { type: "@acme/provider-consul" } },
+      environments: {
+        production: "@acme/provider-consul",
+      },
     });
     pin(root, "0.9.5");
     installInStore(store(), "0.9.5", pluginWithType("fromstore"));

@@ -10,7 +10,7 @@
 
 import { PenvError, UnknownEnvironmentError } from "./errors.js";
 import type { Meta, MetaBlock, PenvConfig } from "./types.js";
-import { own } from "./types.js";
+import { environmentNames, own } from "./types.js";
 
 /** The container key. It is not a policy field and never reaches effective meta. */
 const ENVIRONMENTS_KEY = "environments";
@@ -135,10 +135,11 @@ export function validateMetaEnvironments(
   const environments = meta?.environments;
   if (!environments) return [];
 
+  const declared = environmentNames(config);
   const errors: PenvError[] = [];
   for (const name of Object.keys(environments)) {
-    if (!config.environments.includes(name)) {
-      errors.push(new UnknownEnvironmentError(name, config.environments));
+    if (!declared.includes(name)) {
+      errors.push(new UnknownEnvironmentError(name, declared));
     }
   }
 

@@ -60,13 +60,13 @@ const { PenvError, isPenvErrorLike } = await import(pathToFileURL(core).href);
 
 const built = provider.penvProviderFactory({
   root: process.cwd(),
-  config: { environments: ["production"], providers: {} },
-  environment: "production",
-  providerConfig: {
-    type: "@penvhq/provider-vercel",
-    location: "prj_smoke",
-    targets: { production: "production" },
+  config: {
+    environments: {
+      production: { provider: "@penvhq/provider-vercel", project: "prj_smoke" },
+    },
   },
+  environment: "production",
+  providerConfig: { provider: "@penvhq/provider-vercel", project: "prj_smoke" },
 });
 
 let thrown;
@@ -162,7 +162,7 @@ describe("the provider tarball penv installs into $PENV_HOME", () => {
 
   /**
    * Finding 24: the package shipped no `penv.types`, so what `penv add`
-   * committed was the open fallback and `targets` went unchecked.
+   * committed was the open fallback and `target` went unchecked.
    */
   it("ships the declaration `penv.types` names, and add commits that rather than the fallback", async () => {
     const { readExtensionPackage, renderDeclaration } = await import(

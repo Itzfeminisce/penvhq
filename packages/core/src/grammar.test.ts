@@ -25,12 +25,11 @@ function tokensOf(errors: readonly PenvError[]): string[] {
 }
 
 const config: PenvConfig = {
-  environments: ["development", "staging", "production", "test"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    staging: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-filesystem" },
-    test: { type: "@penvhq/provider-filesystem" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    staging: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
+    test: "@penvhq/provider-filesystem",
   },
 };
 
@@ -428,8 +427,10 @@ describe("parseFilename — stray code files", () => {
   // environment literally named `ts` keeps `<key>.ts` a legal value file.
   it("treats a declared environment named `ts` as a normal scope, not a code file", () => {
     const withTs: PenvConfig = {
-      environments: ["development", "ts"],
-      providers: {},
+      environments: {
+        development: "@penvhq/provider-filesystem",
+        ts: "@penvhq/provider-filesystem",
+      },
     };
     expect(parseFilename("api-key.ts", withTs)).toEqual({
       kind: "value",
@@ -512,7 +513,7 @@ describe("parseFilename — reserved parameter names", () => {
   // The negative case: reservation is config-driven (invariant 10), never
   // inferred. `production` is only reserved because this config declares it.
   it("accepts a parameter named `production` when production is not a declared environment", () => {
-    const bare: PenvConfig = { environments: ["development"], providers: {} };
+    const bare: PenvConfig = { environments: { development: "@penvhq/provider-filesystem" } };
     expect(parseFilename("redis/production", bare)).toEqual({
       kind: "value",
       namespace: ["redis"],
@@ -548,7 +549,7 @@ describe("parseFilename — reserved parameter names", () => {
   // The negative case for the `<env>.local` position: the environment is an
   // environment because it was declared, never because it precedes `local`.
   it("rejects `<name>.production.local` when production is not a declared environment", () => {
-    const bare: PenvConfig = { environments: ["development"], providers: {} };
+    const bare: PenvConfig = { environments: { development: "@penvhq/provider-filesystem" } };
     expect(() => parseFilename("redis/password.production.local", bare)).toThrow(
       UnknownEnvironmentError,
     );
@@ -740,7 +741,7 @@ describe("isReservedToken", () => {
   });
 
   it("reserves nothing but the static tokens when no environment is declared", () => {
-    const bare: PenvConfig = { environments: [], providers: {} };
+    const bare: PenvConfig = { environments: {} };
     expect(isReservedToken("production", bare)).toBe(false);
     expect(isReservedToken("enc", bare)).toBe(true);
   });
@@ -764,7 +765,7 @@ describe("reservedTokensFor", () => {
   });
 
   it("returns only the static tokens when no environment is declared", () => {
-    expect(reservedTokensFor({ environments: [], providers: {} })).toEqual([
+    expect(reservedTokensFor({ environments: {} })).toEqual([
       "enc",
       "json",
       "toml",
@@ -774,7 +775,12 @@ describe("reservedTokensFor", () => {
   });
 
   it("does not repeat an environment that is already a static token", () => {
-    const tokens = reservedTokensFor({ environments: ["local", "production"], providers: {} });
+    const tokens = reservedTokensFor({
+      environments: {
+        local: "@penvhq/provider-filesystem",
+        production: "@penvhq/provider-filesystem",
+      },
+    });
     expect(tokens.filter((t) => t === "local")).toHaveLength(1);
   });
 });
@@ -786,8 +792,10 @@ describe("validateEnvironmentNames", () => {
 
   it("rejects an environment named `local`", () => {
     const errors = validateEnvironmentNames({
-      environments: ["development", "local"],
-      providers: {},
+      environments: {
+        development: "@penvhq/provider-filesystem",
+        local: "@penvhq/provider-filesystem",
+      },
     });
     expect(errors).toHaveLength(1);
     expect(errors[0]).toBeInstanceOf(ReservedTokenError);
@@ -797,8 +805,14 @@ describe("validateEnvironmentNames", () => {
 
   it("collects every collision rather than throwing on the first", () => {
     const errors = validateEnvironmentNames({
-      environments: ["local", "enc", "json", "toml", "yml", "production"],
-      providers: {},
+      environments: {
+        local: "@penvhq/provider-filesystem",
+        enc: "@penvhq/provider-filesystem",
+        json: "@penvhq/provider-filesystem",
+        toml: "@penvhq/provider-filesystem",
+        yml: "@penvhq/provider-filesystem",
+        production: "@penvhq/provider-filesystem",
+      },
     });
     expect(tokensOf(errors)).toEqual(["local", "enc", "json", "toml", "yml"]);
   });
@@ -815,8 +829,10 @@ describe("validateEnvironmentNames", () => {
 describe("environment names that cannot be written", () => {
   it("rejects a name containing a dot", () => {
     const errors = validateEnvironmentNames({
-      environments: ["development", ".env.development.local"],
-      providers: {},
+      environments: {
+        development: "@penvhq/provider-filesystem",
+        ".env.development.local": "@penvhq/provider-filesystem",
+      },
     });
 
     expect(errors).toHaveLength(1);
@@ -826,8 +842,11 @@ describe("environment names that cannot be written", () => {
 
   it("rejects a name with a space or a path separator", () => {
     const errors = validateEnvironmentNames({
-      environments: ["pro duction", "a/b", "c\\d"],
-      providers: {},
+      environments: {
+        "pro duction": "@penvhq/provider-filesystem",
+        "a/b": "@penvhq/provider-filesystem",
+        "c\\d": "@penvhq/provider-filesystem",
+      },
     });
 
     expect(errors).toHaveLength(3);
@@ -837,8 +856,13 @@ describe("environment names that cannot be written", () => {
   /** The negative: the names real projects actually use must all survive. */
   it("accepts letters, digits, underscores and hyphens", () => {
     const errors = validateEnvironmentNames({
-      environments: ["development", "production", "staging_2", "pre-prod", "e2e"],
-      providers: {},
+      environments: {
+        development: "@penvhq/provider-filesystem",
+        production: "@penvhq/provider-filesystem",
+        staging_2: "@penvhq/provider-filesystem",
+        "pre-prod": "@penvhq/provider-filesystem",
+        e2e: "@penvhq/provider-filesystem",
+      },
     });
 
     expect(errors).toEqual([]);
@@ -846,7 +870,9 @@ describe("environment names that cannot be written", () => {
 
   /** A reserved token is reported as reserved, not as unspellable — one reason, the true one. */
   it("reports a reserved name as reserved rather than as illegal", () => {
-    const errors = validateEnvironmentNames({ environments: ["local"], providers: {} });
+    const errors = validateEnvironmentNames({
+      environments: { local: "@penvhq/provider-filesystem" },
+    });
 
     expect(errors[0]).toBeInstanceOf(ReservedTokenError);
     expect(errors).toHaveLength(1);

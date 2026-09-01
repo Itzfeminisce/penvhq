@@ -40,20 +40,25 @@ function setEnv(name: string, value: string | undefined): void {
 }
 
 const CONFIG = {
-  environments: ["development", "test", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    test: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-filesystem" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    test: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
   },
 };
 
 const KEY_ID = "dev";
 const KEY_CONFIG = {
-  ...CONFIG,
-  keys: {
-    development: { source: "env", id: KEY_ID },
-    production: { source: "env", id: KEY_ID },
+  environments: {
+    ...CONFIG.environments,
+    development: {
+      provider: "@penvhq/provider-filesystem",
+      keySource: { source: "env", id: KEY_ID },
+    },
+    production: {
+      provider: "@penvhq/provider-filesystem",
+      keySource: { source: "env", id: KEY_ID },
+    },
   },
 };
 

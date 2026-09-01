@@ -68,15 +68,19 @@ function engine(entry: string, args: string[], cwd: string): Run {
 }
 
 /** A project the engine can open: a config it evaluates through jiti, and a records tree. */
-function project(parent: string, name: string, keys?: string): string {
+function project(parent: string, name: string, keySource?: string): string {
   const root = join(parent, name);
   mkdirSync(join(root, ".penv", "state", "records"), { recursive: true });
   writeFileSync(
     join(root, "penv.config.ts"),
     "export default {\n" +
-      '  environments: ["production"],\n' +
-      '  providers: { production: { type: "@penvhq/provider-filesystem" } },\n' +
-      (keys === undefined ? "" : `  keys: { production: ${keys} },\n`) +
+      "  environments: {\n" +
+      `    production: ${
+        keySource === undefined
+          ? '"@penvhq/provider-filesystem"'
+          : `{ provider: "@penvhq/provider-filesystem", keySource: ${keySource} }`
+      },\n` +
+      "  },\n" +
       "};\n",
     "utf8",
   );

@@ -202,8 +202,10 @@ describe("parseMeta", () => {
 
 describe("validateMetaEnvironments", () => {
   const config: PenvConfig = {
-    environments: ["development", "production"],
-    providers: { filesystem: { type: "@penvhq/provider-filesystem" } },
+    environments: {
+      development: "@penvhq/provider-filesystem",
+      production: "@penvhq/provider-filesystem",
+    },
   };
 
   // The finding: a typo'd key was silently inert policy. `effectiveMeta` found no

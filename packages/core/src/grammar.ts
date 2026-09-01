@@ -24,7 +24,7 @@ import type {
   Scope,
   ValueFile,
 } from "./types.js";
-import { assertNever, META_FORMATS, RESERVED_TOKENS } from "./types.js";
+import { assertNever, environmentNames, META_FORMATS, RESERVED_TOKENS } from "./types.js";
 
 /** A segment penv can plausibly read as an environment name, for the better error. */
 const BARE_WORD = /^[A-Za-z][A-Za-z0-9_-]*$/;
@@ -52,7 +52,7 @@ export function isCodeModule(filename: string, config: PenvConfig): boolean {
   return (
     extension !== undefined &&
     CODE_FILE_EXTENSIONS.has(extension) &&
-    !config.environments.includes(extension)
+    !environmentNames(config).includes(extension)
   );
 }
 
@@ -66,7 +66,7 @@ const SUPPORTED_META_FORMAT: MetaFormat = "json";
  * `penv.config.ts` declares it.
  */
 export function reservedTokensFor(config: PenvConfig): string[] {
-  return [...new Set<string>([...RESERVED_TOKENS, ...config.environments])];
+  return [...new Set<string>([...RESERVED_TOKENS, ...environmentNames(config)])];
 }
 
 /**
@@ -121,10 +121,11 @@ export function formatMetaFile(ref: MetaFileRef): string {
 }
 
 function declaredList(config: PenvConfig): string {
-  if (config.environments.length === 0) {
+  const names = environmentNames(config);
+  if (names.length === 0) {
     return "no environments are declared in penv.config.ts";
   }
-  return `declared environments are ${config.environments.map((e) => `\`${e}\``).join(", ")}`;
+  return `declared environments are ${names.map((e) => `\`${e}\``).join(", ")}`;
 }
 
 /**
@@ -134,11 +135,12 @@ function declaredList(config: PenvConfig): string {
  * before `local`.
  */
 function asEnvironment(segment: string, relativePath: string, config: PenvConfig): string {
-  if (config.environments.includes(segment)) {
+  const names = environmentNames(config);
+  if (names.includes(segment)) {
     return segment;
   }
   if (BARE_WORD.test(segment)) {
-    throw new UnknownEnvironmentError(segment, config.environments);
+    throw new UnknownEnvironmentError(segment, names);
   }
   throw new FilenameGrammarError(
     relativePath,
@@ -389,14 +391,14 @@ export function isLegalEnvironmentName(name: string): boolean {
  */
 export function validateEnvironmentNames(config: PenvConfig): PenvError[] {
   const errors: PenvError[] = [];
-  for (const environment of config.environments) {
+  for (const environment of environmentNames(config)) {
     // Deliberately the static tokens, not `isReservedToken` — that reserves the
     // declared environments too, so every name here would collide with itself.
     if ((RESERVED_TOKENS as readonly string[]).includes(environment)) {
       errors.push(new ReservedTokenError("environment", environment, "penv.config.ts"));
       continue;
     }
-    if (typeof environment === "string" && !isLegalEnvironmentName(environment)) {
+    if (!isLegalEnvironmentName(environment)) {
       errors.push(new IllegalEnvironmentNameError(environment));
     }
   }

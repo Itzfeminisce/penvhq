@@ -19,7 +19,7 @@ declare module "@penvhq/core" {
        * `VAULT_MOUNT` (default `secret`), because which mount to talk to is a
        * property of the Vault deployment, not of one project's config.
        */
-      readonly location?: string;
+      readonly path?: string;
     };
   }
 }

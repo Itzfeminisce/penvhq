@@ -9,8 +9,8 @@
 
 export type { AddOptions, AddResult } from "./add.js";
 export { add } from "./add.js";
-export type { ProviderEntry } from "./config-edit.js";
-export { readProviderEntries, setProviderType } from "./config-edit.js";
+export type { EnvironmentProvider } from "./config-edit.js";
+export { readEnvironmentProviders, setEnvironmentProvider } from "./config-edit.js";
 export type { DeclarationSubject, ExtensionPackage } from "./declaration.js";
 export {
   declarationPath,
@@ -34,6 +34,7 @@ export {
   ArchiveError,
   DeclarationMissingError,
   DeclarationNotSelfContainedError,
+  DeclarationReservedFieldError,
   DownloadFailedError,
   DownloadIntegrityError,
   EngineEntryError,

@@ -39,6 +39,7 @@ import type { DotenvDiagnostic, DotenvEntry, ParameterRef, Scope } from "@penvhq
 import {
   CUTOVER_PATH,
   DEFAULT_SCHEMA_FILE,
+  environmentNames,
   isLegalEnvironmentName,
   loadConfigFrom,
   PENV_DIR,
@@ -336,9 +337,22 @@ export function environmentsFromFlag(flag: unknown): readonly string[] | undefin
   return [...new Set(names)];
 }
 
+/**
+ * The names init collected, as the record the config declares them in. Init only
+ * ever scaffolds the local tree, so every entry is the string shorthand — a
+ * remote backend is a decision the developer makes in the config, not one penv
+ * invents from a name it was handed.
+ */
+function environmentsRecord(names: readonly string[]): Record<string, string> {
+  return Object.fromEntries(names.map((environment) => [environment, LOCAL_PROVIDER]));
+}
+
 /** The config the decisions describe, so core answers questions about it, not init. */
 function configOf(decisions: InitDecisions): PenvConfig {
-  return { environments: decisions.environments, providers: {}, schemaFile: decisions.schemaFile };
+  return {
+    environments: environmentsRecord(decisions.environments),
+    schemaFile: decisions.schemaFile,
+  };
 }
 
 /**
@@ -374,7 +388,7 @@ function declaredIn(root: string): PenvConfig | undefined {
  * re-detection cannot move what it says. Re-running init on a project that
  * declared `src/lib/env.ts` used to scaffold a *second* schema at the detected
  * path, warn that its own correct alias pointed at the wrong file, and announce
- * that a project with `environments: ["production"]` had declared none.
+ * that a project with a declared `production` had declared none.
  */
 export function planInit(root: string, flags: InitFlags = {}): InitPlan {
   const declared = declaredIn(root);
@@ -416,7 +430,7 @@ export function planInit(root: string, flags: InitFlags = {}): InitPlan {
     // is judged by the same validator `penv validate` will judge the config by.
     // Refusing here is refusing before a file is written; refusing there is
     // refusing after the project already has one in the wrong place.
-    const error = validateSchemaFile({ environments: [], providers: {}, schemaFile })[0];
+    const error = validateSchemaFile({ environments: {}, schemaFile })[0];
     if (error !== undefined) {
       throw error;
     }
@@ -451,7 +465,9 @@ export function planInit(root: string, flags: InitFlags = {}): InitPlan {
   // what separates it from the production/staging/preview it still never invents.
   const safeDefault = flags.yes === true && declared === undefined;
   const environments =
-    flags.environments ?? declared?.environments ?? (safeDefault ? [DEVELOPMENT] : []);
+    flags.environments ??
+    (declared === undefined ? undefined : environmentNames(declared)) ??
+    (safeDefault ? [DEVELOPMENT] : []);
   const defaultEnvironment =
     declared?.defaultEnvironment ?? (safeDefault ? DEVELOPMENT : undefined);
   if (safeDefault) {
@@ -723,37 +739,40 @@ export function renderEnvModule(schemaFile: string, inject = false): string {
   );
 }
 
+/** An environment name as an object key: bare where it is a legal identifier. */
+function entryKey(name: string): string {
+  return /^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name);
+}
+
 /**
  * The whitelist block. Empty is the honest answer to a question nothing on disk
  * can settle, so the comment carries what an empty file cannot: that penv left
- * it empty on purpose, and the exact shape of the two lines that fill it in.
+ * it empty on purpose, and the exact shape of the entry that fills it in.
  */
 function renderEnvironments(decisions: InitDecisions): string {
   const shared =
-    "  // Environments are a whitelist. A filename segment is an environment only if\n" +
-    "  // it is declared here — penv never infers one from a folder or a filename.\n";
+    "  // Environments are a whitelist, and each entry is that environment's whole\n" +
+    "  // declaration: which provider holds it, in that provider's own words, and\n" +
+    "  // which key seals it. A segment is an environment only if it is named here.\n";
   if (decisions.environments.length === 0) {
     return (
       `${shared}` +
       "  // It starts empty because which environments you deploy is not something penv\n" +
       "  // can read off your codebase, and an environment you do not have is worse\n" +
-      "  // than one you have not declared yet. Name yours, and give each a provider:\n" +
-      '  //   environments: ["development", "production"],\n' +
-      '  //   providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-vault" } },\n' +
-      "  environments: [],\n" +
-      "\n" +
-      "  providers: {},\n"
+      "  // than one you have not declared yet. Name yours:\n" +
+      "  //   environments: {\n" +
+      '  //     development: "@penvhq/provider-filesystem",\n' +
+      '  //     production: { provider: "@penvhq/provider-vault", path: "penv", keySource: "env" },\n' +
+      "  //   },\n" +
+      "  environments: {},\n"
     );
   }
-  const names = decisions.environments.map((name) => JSON.stringify(name)).join(", ");
-  const providers = decisions.environments
-    .map((name) => `    ${JSON.stringify(name)}: { type: "@penvhq/provider-filesystem" },\n`)
+  const entries = decisions.environments
+    .map((name) => `    ${entryKey(name)}: ${JSON.stringify(LOCAL_PROVIDER)},\n`)
     .join("");
   return (
-    `${shared}  environments: [${names}],\n` +
-    "\n" +
-    "  // One entry per environment: where that environment's values are read from.\n" +
-    `  providers: {\n${providers}  },\n`
+    `${shared}  // A provider that needs no fields is just its package name.\n` +
+    `  environments: {\n${entries}  },\n`
   );
 }
 
@@ -1564,13 +1583,13 @@ export function planCutover(input: CutoverInput): CutoverPlan {
   const declared = declaredIn(root);
   const named = environmentsDeclaredBy(selected);
   const chosen = named.length > 0 ? named : [requireEnvironment(input)];
-  const environments = declared === undefined ? chosen : declared.environments;
+  const environments = declared === undefined ? chosen : environmentNames(declared);
   for (const environment of chosen) {
     if (!environments.includes(environment)) {
       throw new PenvError(
         "INIT_ENVIRONMENT_UNDECLARED",
         `${CONFIG_FILE} declares ${describeList(environments)}, and adopting these files needs \`${environment}\` declared too`,
-        `Add \`${environment}\` to \`environments\` in ${CONFIG_FILE}, with a provider for it, then run \`penv init\` again. Nothing was changed.`,
+        `Add \`${environment}: "${LOCAL_PROVIDER}"\` to \`environments\` in ${CONFIG_FILE}, or name the backend that holds it, then run \`penv init\` again. Nothing was changed.`,
       );
     }
   }
@@ -1661,10 +1680,7 @@ function distinct(refs: readonly ParameterRef[]): ParameterRef[] {
 
 function configFor(decisions: InitDecisions): PenvConfig {
   return {
-    environments: decisions.environments,
-    providers: Object.fromEntries(
-      decisions.environments.map((environment) => [environment, { type: LOCAL_PROVIDER }]),
-    ),
+    environments: environmentsRecord(decisions.environments),
     schemaFile: decisions.schemaFile,
     ...(decisions.defaultEnvironment === undefined
       ? {}
@@ -2190,11 +2206,10 @@ function offeredEnvironment(root: string): string {
   if (declared === undefined) {
     return DEVELOPMENT;
   }
+  const names = environmentNames(declared);
   return (
     declared.defaultEnvironment ??
-    (declared.environments.includes(DEVELOPMENT)
-      ? DEVELOPMENT
-      : (declared.environments[0] ?? DEVELOPMENT))
+    (names.includes(DEVELOPMENT) ? DEVELOPMENT : (names[0] ?? DEVELOPMENT))
   );
 }
 

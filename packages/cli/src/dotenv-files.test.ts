@@ -32,8 +32,10 @@ function makeDir(names: readonly string[]): string {
 }
 
 const CONFIG: PenvConfig = {
-  environments: ["development", "production"],
-  providers: {},
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
+  },
 };
 
 afterEach(() => {
@@ -117,9 +119,9 @@ describe("what a framework actually loads", () => {
   it("counts nothing scoped when the whitelist is empty", () => {
     const root = makeDir([".env", ".env.production"]);
 
-    expect(
-      activeDotenvFiles(root, { environments: [], providers: {} }).map((file) => file.name),
-    ).toEqual([".env"]);
+    expect(activeDotenvFiles(root, { environments: {} }).map((file) => file.name)).toEqual([
+      ".env",
+    ]);
   });
 });
 

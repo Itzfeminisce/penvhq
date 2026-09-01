@@ -8,8 +8,12 @@ import { candidatesFor, requireValue, resolveAll, resolveParameter } from "./res
 import type { Meta, ParameterRef, PenvConfig, Provider, Scope, ValueFile } from "./types.js";
 
 const config: PenvConfig = {
-  environments: ["development", "test", "staging", "production"],
-  providers: { development: { type: "@penvhq/provider-filesystem" } },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    test: "@penvhq/provider-filesystem",
+    staging: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
+  },
 };
 
 /** An in-memory provider keyed by `formatValueFile`, standing in for the filesystem. */

@@ -227,7 +227,7 @@ export class GithubProvider implements ProjectionProvider {
   /**
    * The `owner/repo` the API paths below need. `gh secret` resolves the repo
    * from the working directory on its own, but `gh api` takes a literal path —
-   * so when no `location` named one, ask `gh` once and keep the answer.
+   * so when no `repository` named one, ask `gh` once and keep the answer.
    */
   #targetRepo(): string {
     if (this.#repo !== undefined) {
@@ -244,7 +244,7 @@ export class GithubProvider implements ProjectionProvider {
       if (repo === "") {
         throw commandFailed(
           "resolve the repository this directory belongs to",
-          "gh reported no repository. Set `location` to `owner/repo` in the provider entry.",
+          "gh reported no repository. Set `repository` to `owner/repo` in the environment's entry.",
         );
       }
       this.#resolvedRepo = repo;

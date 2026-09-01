@@ -16,6 +16,7 @@ import {
   MANIFEST_PATH,
   OFFICIAL_SCOPE,
   PenvError,
+  RESERVED_ENTRY_FIELDS,
 } from "@penvhq/core";
 
 /** The command that materializes everything the manifest pins. */
@@ -491,6 +492,53 @@ export class DeclarationNotSelfContainedError extends PenvError {
       `The declaration ${name} ships at \`${file}\` imports \`${specifier}\``,
       `Report it to ${name}. What penv commits to ${EXTENSIONS_PATH} is types and nothing else, ` +
         "so it can only carry a declaration that stands on its own.",
+    );
+  }
+}
+
+/**
+ * The declaration a package ships names a field core owns on every entry.
+ *
+ * An environment entry carries the provider's own vocabulary beside core's four
+ * names, so a shape declaring one of them would shadow what penv writes there —
+ * the discriminant, or the key that seals the environment.
+ */
+export class DeclarationReservedFieldError extends PenvError {
+  override readonly name = "DeclarationReservedFieldError";
+
+  constructor(name: string, file: string, field: string) {
+    super(
+      "PENV_DECLARATION_RESERVED_FIELD",
+      `The declaration ${name} ships at \`${file}\` declares \`${field}\`, which penv owns on every environment entry`,
+      `Report it to ${name}. penv reserves ${RESERVED_ENTRY_FIELDS.map((reserved) => `\`${reserved}\``).join(", ")} ` +
+        "inside an `environments` entry, so a provider names its own fields in its own vocabulary — " +
+        "`project`, `path` — and leaves those four to penv.",
+    );
+  }
+}
+
+/**
+ * The declaration a package ships writes an entry shape penv cannot read.
+ *
+ * The reserved-field check is the whole of the enforcement, and it can only read
+ * a shape written where it stands. A member that names its shape through an
+ * alias or an intersection hides whatever it declares, and a hidden `keySource`
+ * makes every config entry for that provider uncompilable against a type error
+ * that names neither the field nor the collision.
+ */
+export class DeclarationShapeUnreadableError extends PenvError {
+  override readonly name = "DeclarationShapeUnreadableError";
+
+  constructor(name: string, file: string, member: string | undefined) {
+    super(
+      "PENV_DECLARATION_SHAPE_UNREADABLE",
+      member === undefined
+        ? `The declaration ${name} ships at \`${file}\` has a \`ProviderConfigMap\` member penv cannot read`
+        : `The declaration ${name} ships at \`${file}\` writes \`${member}\` as something other than an entry shape`,
+      `Report it to ${name}. Each \`ProviderConfigMap\` member is written as its own object ` +
+        'literal — `"@acme/provider-x": { readonly path: string }` — so penv can check it names ' +
+        `none of ${RESERVED_ENTRY_FIELDS.map((reserved) => `\`${reserved}\``).join(", ")}, ` +
+        "which it owns on every environment entry.",
     );
   }
 }
