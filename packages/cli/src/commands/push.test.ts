@@ -354,7 +354,11 @@ describe("runPush to a record-holding provider", () => {
   const VAULT_CONFIG = {
     environments: {
       development: "@penvhq/provider-filesystem",
-      production: { provider: "@penvhq/provider-vault", path: "penv/prod" },
+      production: {
+        provider: "@penvhq/provider-vault",
+        path: "penv/prod",
+        keySource: { source: "env", id: "prod" },
+      },
     },
   };
 

@@ -601,7 +601,8 @@ describe("the preflight", () => {
 
     expect(error.code).toBe("INIT_ENVIRONMENT_UNDECLARED");
     expect(error.remedy).toBe(
-      "Add `production` to `environments` in penv.config.ts, with a provider for it, then run `penv init` again. Nothing was changed.",
+      'Add `production: "@penvhq/provider-filesystem"` to `environments` in penv.config.ts, ' +
+        "or name the backend that holds it, then run `penv init` again. Nothing was changed.",
     );
   });
 });
