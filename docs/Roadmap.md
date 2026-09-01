@@ -35,9 +35,13 @@ Everything below describes the *finished* design (see docs). This table says whe
 | `penv upgrade [version]` — moving the pinned engine and the runtime dependency together | Yes | v0.9 |
 | Two-module scaffold — `penv.schema.ts` shape + `.penv/env.ts` loader, tooling `load(schema.pick({…}))`, stray-code-file diagnosis | Yes | v0.8 (npm 0.8.0) |
 | Embedded snapshot — `penv snapshot`, `penv.snapshot.ts`, `source` pinning, digest staleness | No longer | shipped v0.8 (npm 0.8.0); **retired v0.9** |
-| Fully-qualified provider `type`, declaration-merged config types, `location` | Yes | v0.7 (npm 0.5.0) |
+| Fully-qualified provider package names, declaration-merged config types | Yes | v0.7 (npm 0.5.0), under `providers.*.type`; the field becomes `environments.*.provider` at v0.14 |
+| Generic `location` address field | No longer | shipped v0.7 (npm 0.5.0); **retired v0.14** — each provider declares its own field names |
+| One `environments` record — the provider, its own fields, and `keySource` in one entry per environment | Yes | v0.14 (npm 0.14.0) |
+| Singular `target` on a Vercel entry, defaulting to the environment's name | Yes | v0.14 (npm 0.14.0) |
 | Install-what-you-use providers — Vault, SSM, Kubernetes, GitHub external to the CLI | Yes | v0.7 (npm 0.5.0) |
-| `--destination` one-shot push, environment shorthand flags, `ensureTarget` create-on-approval | Yes | v0.7 (npm 0.5.0) |
+| Environment shorthand flags, `ensureTarget` create-on-approval | Yes | v0.7 (npm 0.5.0) |
+| `--destination` / `--location` one-shot push | No longer | shipped v0.7 (npm 0.5.0); **retired v0.14** — a push goes where the environment's entry says |
 | Global launcher + pinned engine — `.penv/state/manifest.json`, `$PENV_HOME`, one visible version | Yes | v0.9 |
 | One runtime dependency — `@penvhq/penv` alone, extensions installed by the launcher | Yes | v0.9 |
 | `.penv/state/` layout and `penv migrate` | Yes | v0.9 |
@@ -170,9 +174,9 @@ This is a real cost, stated plainly: v0.3 no longer retires the rotation risk, a
 Decided 2026-07-19; the [provider unification plan](./provider-unification-plan.md) owns *how*, and the RFC's two new sections ("Everything the config names is a provider" and "A provider is named by its package") own *why*, including what they supersede. In brief:
 
 - `sinks` is deleted; `@penvhq/sink-github` becomes `@penvhq/provider-github`; `penv push` and `penv pull` work against every provider. What distinguished a sink moves into the contract as declared capabilities (`holds: "records" | "projection"`, `readsValues`) — the record-holding contract suite is untouched.
-- `providers.<env>.type` becomes the provider package's fully-qualified name, typed via a declaration-merged `ProviderConfigMap`; `location` replaces `path`/`repo`; one provider per environment.
+- `providers.<env>.type` becomes the provider package's fully-qualified name, typed via a declaration-merged `ProviderConfigMap`; `location` replaces `path`/`repo`; one provider per environment. The package name and its typing survive; the field it lives on and the generic `location` beside it are superseded at v0.14, where the entry moves to `environments.<env>` and each provider takes its own field names back.
 - The CLI pre-installs only the filesystem and mock providers; Vault, SSM, Kubernetes, and GitHub are installed by the projects that use them.
-- `penv push --destination <package> --location <place>` as a one-shot, unpersisted target; `ensureTarget` with a CLI prompt (and `--yes`) when a push's destination does not exist yet; whitelisted environments usable as bare flags (`--production`).
+- `penv push --destination <package> --location <place>` as a one-shot, unpersisted target — **retired at v0.14**, which leaves no generic slot for a place and no destination but the one the environment declares; `ensureTarget` with a CLI prompt (and `--yes`) when a push's destination does not exist yet; whitelisted environments usable as bare flags (`--production`).
 
 Shipped on npm as **0.5.0** — a breaking release: configs naming short provider types or a `sinks` key are refused with the exact rewrite named in the error.
 
@@ -186,7 +190,7 @@ Decided 2026-07-19; the [v0.8 plan](./v0.8-plan.md) owns *how*, the RFC's "The a
 
 - `load(schema, { inject: true })`, called from `.penv/env.ts`, is the blessed ambient surface: it validates before writing, writes generated (`override`-bent) names, and is exclusive over the schema — a declared parameter is written when it resolves and deleted when it does not, so nothing configures an SDK behind `@env`'s back. The bare `import "@penvhq/penv/config"` stays the schemaless compat path, because it never sees the schema.
 - `penv init` scaffolds the import at the detected framework's guaranteed pre-app seam (Next `instrumentation.ts`, Nitro plugin, SvelteKit `hooks.server.ts`, `node --import`), plus the build-time seam for client-inlined variables. Halves scaffolded only where they exist; unknown frameworks are asked, never guessed.
-- `names` becomes `override`, with schema-typed keys: the scaffolded `penv.schema.ts` registers the schema's shape on `PenvSchemaShape` (a type-only `declare module`, erased at runtime), and `override` keys narrow to the parameters the schema declares. Breaking; rides the 0.5.0 release train.
+- `names` becomes `override`, with schema-typed keys: the scaffolded `penv.schema.ts` registers the schema's shape on `PenvSchemaShape` (a type-only `declare module`, erased at runtime), and `override` keys narrow to the parameters the schema declares. Breaking; rides the 0.5.0 release train. One release, one migration error that names the rewrite, no compat shim — the precedent v0.14 applies to the config's spine.
 - The schema splits into two scaffolded modules: `penv.schema.ts` at the project root holds the *shape* (the `z.object` plus the `PenvSchemaShape` registration) and loads nothing, and `.penv/env.ts` becomes the thin loader that imports it, re-exports `schema`, and calls `load()`. Making the one schema importable without side effects is what lets a tooling config — `drizzle.config.ts`, a `playwright.config.ts`, a CI script — `load(schema.pick({ … }))` the same schema instead of hand-inlining a second `z.object` that drifts. This is the fourth config consumer (tooling evaluated outside the app runtime), joining `@env`, `inject`, and the client bundle.
 - Stray-code-file diagnosis: a `.ts`/`.js` module dropped into `.penv/` that is not the file `schemaFile` declares is reported as a stray code module (`STRAY_CODE_FILE`) rather than misparsed as a value file — the safeguard that comes with the shape moving to the root, where the parameter tree has nothing to exclude.
 
@@ -213,6 +217,22 @@ Ships as one breaking release: the launcher (`penv`), the engine (`@penvhq/cli`)
 **Gate to advance:** the PRD's first-user journey runs end to end on a real project — `penv init` adopts a detected dotenv cascade with no partial state, the first `penv run -- pnpm dev` after cutover starts the app with zero edits to the drafted `penv.schema.ts`, and a container release built by `penv artifact build` starts from the artifact alone, with no `penv.config.ts`, no `.penv/` tree, no provider adapter, and no network.
 
 **Accepted cost, carried from the PRD's friction review.** Retiring the committed snapshot means a clone no longer deploys by itself: CI must build the sealed artifact. Copy-paste artifact recipes for the major CI systems and platform-native delivery guides for Vercel and Cloudflare ship with this milestone, not after it.
+
+## v0.14 — One environments record
+
+**Retires:** the translation layer in penv's own config — three top-level structures describing one environment, and a generic address field that made every store answer to penv's vocabulary instead of its own.
+
+Decided 2026-09-01; the [v0.14 plan](./v0.14-plan.md) owns *how*, and the RFC's dated decision under "A provider is named by its package, and brings its own config types" owns *why*, including what it supersedes. In brief:
+
+- `environments: string[]`, `providers`, and `keys` merge into one `environments: Record<string, string | EnvironmentEntry>`. The record's keys are the whitelist, unchanged — a key is a declaration, not an inference.
+- `type` becomes `provider`, always a plain package specifier so the config stays data-only in a checkout that installs no adapter. A provider needing no fields is written as its package name alone.
+- `location` is gone. Each provider declares its own flat fields: Vercel's `project` and `target`, Vault's and SSM's `path`, Kubernetes' `secret` and `namespace`, GitHub's `repository`. Vercel's `targets` record becomes a singular `target` defaulting to the environment's own name, refusing loudly when that name is no target Vercel has.
+- `keys.<env>` becomes the entry's own `keySource`, whose id defaults to the environment name — so a config migrated one-for-one seals under the same key and stamps artifacts with the same `env:production` identifier it did before.
+- One breaking release, no compat shim: an `environments` array or a top-level `providers` or `keys` key fails at load with `CONFIG_ENVIRONMENTS_MERGED`, naming each move and printing the rewritten entry.
+
+Ships on npm as **0.14.0** across the whole `@penvhq/*` group.
+
+**Gate:** penv-cloud — the project whose config made the case — migrates to one `environments` record, pushes to Vercel with `target` defaulted rather than mapped, and its sealed artifacts come out byte-identical to the ones the old config produced. Every provider passes the contract suite unchanged: field names are config surface, and this milestone does not touch the contract.
 
 ## v1.0 — Stable SDK
 
