@@ -216,8 +216,8 @@ describe("the published artifact", () => {
        declare module "@penvhq/core" {
          interface ProviderConfigMap {
            "@penvhq/provider-vercel": {
-             readonly location: string;
-             readonly targets: Readonly<Record<string, "production" | "preview" | "development">>;
+             readonly project: string;
+             readonly target?: "production" | "preview" | "development";
              readonly teamId?: string;
            };
          }
@@ -233,8 +233,7 @@ describe("the published artifact", () => {
         `import { defineConfig } from "@penvhq/penv";
 
          export default defineConfig({
-           environments: ["production"],
-           providers: { production: ${entry} },
+           environments: { production: ${entry} },
          });`,
       );
       writeFileSync(
@@ -261,9 +260,9 @@ describe("the published artifact", () => {
     const wellTyped = compile(
       "config-bound",
       `{
-         type: "@penvhq/provider-vercel",
-         location: "penv-cloud",
-         targets: { production: "production" },
+         provider: "@penvhq/provider-vercel",
+         project: "penv-cloud",
+         target: "production",
        }`,
     );
     expect(wellTyped.out).toBe("");
@@ -271,9 +270,9 @@ describe("the published artifact", () => {
     const typo = compile(
       "config-typo",
       `{
-         type: "@penvhq/provider-vercel",
-         location: "penv-cloud",
-         targets: { production: "producton" },
+         provider: "@penvhq/provider-vercel",
+         project: "penv-cloud",
+         target: "producton",
        }`,
     );
     expect(typo.ok).toBe(false);
@@ -282,9 +281,9 @@ describe("the published artifact", () => {
     const undeclared = compile(
       "config-undeclared-field",
       `{
-         type: "@penvhq/provider-vercel",
-         location: "penv-cloud",
-         targets: { production: "production" },
+         provider: "@penvhq/provider-vercel",
+         project: "penv-cloud",
+         target: "production",
          bogusFieldThatDoesNotExist: 123,
        }`,
     );

@@ -99,11 +99,10 @@ b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB
 `;
 
 const CONFIG = `export default {
-  environments: ["development", "test", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    test: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-filesystem" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    test: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
   },
 };
 `;
