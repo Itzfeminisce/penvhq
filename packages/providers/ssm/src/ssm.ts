@@ -78,8 +78,8 @@ export interface SsmValue {
 export interface SsmProviderOptions {
   /**
    * The `/`-prefixed base path penv maps records under; the plugin factory
-   * fills it from `providers.*.location`. Defaults to `/penv`. Every parameter
-   * name is `<path>/<value-filename>`.
+   * fills it from the environment entry's `path`. Defaults to `/penv`. Every
+   * parameter name is `<path>/<value-filename>`.
    */
   readonly path?: string;
   /** The transport. Defaults to shelling out to the `aws` CLI; injected in tests. */

@@ -1,9 +1,8 @@
 /**
- * The plugin seam: what the penv CLI calls when a `providers.*.type` names this
- * package. The factory owns the translation from the config's provider-agnostic
- * surface (`location`) to this provider's own options — including the
- * `namespace/secretName` split, which is this package's business and nobody
- * else's: `ProviderConfig` has no namespace field, and must not grow one.
+ * The plugin seam: what the penv CLI calls when an `environments.*.provider`
+ * names this package. The entry is written in Kubernetes' own vocabulary — the
+ * Secret and the cluster namespace are two facts in two fields — so the factory
+ * reads them straight through, with nothing packed into one string.
  */
 
 import type { Provider, ProviderFactoryContext } from "@penvhq/core";
@@ -12,24 +11,16 @@ import { createKubernetesProvider } from "./kubernetes.js";
 // The config shape this factory reads is declared once, in `penv.d.ts` — the
 // file `penv.types` ships and `penv add` commits into the project.
 
-/**
- * Splits `location` into the provider's own options. `team-ns/penv-secrets`
- * addresses a Secret in a non-default namespace; a bare `penv-secrets` leaves
- * the namespace to the current `kubectl` context.
- */
-function kubernetesOptions(location: string | undefined): {
-  namespace?: string;
-  secretName: string;
-} {
-  const path = location ?? "penv";
-  const slash = path.indexOf("/");
-  if (slash === -1) return { secretName: path };
-  const namespace = path.slice(0, slash);
-  const secretName = path.slice(slash + 1) || "penv";
-  return namespace === "" ? { secretName } : { namespace, secretName };
+function text(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
 }
 
 /** Builds the Kubernetes provider for one environment's declared source of truth. */
 export function penvProviderFactory(context: ProviderFactoryContext): Provider {
-  return createKubernetesProvider(kubernetesOptions(context.providerConfig?.location));
+  const namespace = text(context.providerConfig?.namespace);
+  return createKubernetesProvider({
+    secretName: text(context.providerConfig?.secret) ?? "penv",
+    // Left off entirely when undeclared, so `kubectl` uses the current context's namespace.
+    ...(namespace === undefined ? {} : { namespace }),
+  });
 }
