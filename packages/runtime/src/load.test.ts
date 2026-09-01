@@ -279,8 +279,7 @@ describe("load", () => {
       writeFileSync(
         join(root, "penv.config.ts"),
         `export default ${JSON.stringify({
-          environments: ["development"],
-          providers: { development: { type: "@penvhq/provider-filesystem" } },
+          environments: { development: "@penvhq/provider-filesystem" },
         })};\n`,
         "utf8",
       );

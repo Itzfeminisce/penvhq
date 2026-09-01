@@ -49,17 +49,15 @@ vi.mock("@penvhq/provider-mock", async (importOriginal) => {
 const FIXTURE_PARENT = fileURLToPath(new URL("../../node_modules/.penv-test/", import.meta.url));
 
 const CONFIG = {
-  environments: ["development", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-filesystem" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
   },
 };
 
 /** Development's values live in a provider, so there is something to pull from. */
 const REMOTE_CONFIG = {
-  ...CONFIG,
-  providers: { ...CONFIG.providers, development: { type: "@penvhq/provider-mock" } },
+  environments: { ...CONFIG.environments, development: "@penvhq/provider-mock" },
 };
 
 const SCHEMA =
@@ -372,10 +370,9 @@ describe("the environment the child gets", () => {
  */
 describe("an extension's credentials", () => {
   const CONSUL_CONFIG = {
-    environments: ["development", "production"],
-    providers: {
-      development: { type: "@penvhq/provider-filesystem" },
-      production: { type: "@acme/provider-consul" },
+    environments: {
+      development: "@penvhq/provider-filesystem",
+      production: "@acme/provider-consul",
     },
   };
 
@@ -441,10 +438,9 @@ describe("an extension's credentials", () => {
   it("are known without a declaration for the providers penv ships", async () => {
     const root = makeProject({
       config: {
-        ...CONFIG,
-        providers: {
-          ...CONFIG.providers,
-          production: { type: "@penvhq/provider-vault", location: "secret/app" },
+        environments: {
+          ...CONFIG.environments,
+          production: { provider: "@penvhq/provider-vault", path: "secret/app" },
         },
       },
     });
@@ -520,8 +516,13 @@ describe("--source snapshot", () => {
   const KEY = Buffer.alloc(KEY_BYTES, 7).toString("base64");
 
   const SEALED_CONFIG = {
-    ...CONFIG,
-    keys: { production: { source: "env", id: KEY_ID } },
+    environments: {
+      ...CONFIG.environments,
+      production: {
+        provider: "@penvhq/provider-filesystem",
+        keySource: { source: "env", id: KEY_ID },
+      },
+    },
   };
 
   const DATABASE_URL_ENC: ValueFile = {

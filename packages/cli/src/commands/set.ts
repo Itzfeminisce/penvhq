@@ -10,6 +10,7 @@
 
 import type { ParameterRef, Provider, Scope, ValueFile } from "@penvhq/core";
 import {
+  environmentNames,
   formatValueFile,
   isSecret,
   PenvError,
@@ -78,7 +79,7 @@ export function scopeFrom(options: ScopeOptions): Scope {
  *
  * `resolveEnvironment` trims before it checks the whitelist, so the validated
  * name and the raw flag are two different strings and only the returned one has
- * been checked against `config.environments`. Passing the raw one to
+ * been checked against the declared environments. Passing the raw one to
  * `formatValueFile` is what let `--env "production "` write `api-key.production `
  * — a file the filename grammar refuses to read (invariant 10), so every later
  * `list`/`get`/`generate`/`validate`/`remove` throws and the tree is repairable
@@ -99,7 +100,7 @@ export function targetScope(project: Project, options: ScopeOptions, key: string
     throw new PenvError(
       "ENVIRONMENT_FLAG_EMPTY",
       `\`--env\` for parameter ${key} names no environment`,
-      `Pass a declared environment — ${project.config.environments.map((e) => `\`${e}\``).join(", ")} — ` +
+      `Pass a declared environment — ${environmentNames(project.config).map((e) => `\`${e}\``).join(", ")} — ` +
         "e.g. `--env production`, or drop `--env` to write the scope that has no environment.",
     );
   }
@@ -141,7 +142,7 @@ function sealFor(
     throw new PenvError(
       "SECRET_SCOPE_AMBIGUOUS",
       `Parameter ${parameter} is a secret, and ${recordPath(formatValueFile(file))} names no environment`,
-      "Keys are declared per environment in the `keys` block of penv.config.ts, so penv cannot " +
+      "A key is declared by its environment's `keySource` in penv.config.ts, so penv cannot " +
         "tell which key should seal a file that every environment reads. Write it at an " +
         "environment scope — add `--env <environment>` — or drop `secret` from the parameter's meta.",
     );

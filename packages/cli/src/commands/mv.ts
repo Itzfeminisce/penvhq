@@ -115,7 +115,7 @@ async function planFile(
     throw new PenvError(
       "SECRET_SCOPE_AMBIGUOUS",
       `${recordPath(formatValueFile(source))} is encrypted at a scope that names no environment, so penv cannot tell which key would re-seal it`,
-      "Keys are declared per environment in the `keys` block of penv.config.ts. Decrypt it with " +
+      "A key is declared by its environment's `keySource` in penv.config.ts. Decrypt it with " +
         "`penv decrypt`, move the parameter, then encrypt it again at its new address.",
     );
   }

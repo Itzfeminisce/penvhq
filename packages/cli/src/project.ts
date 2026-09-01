@@ -18,6 +18,7 @@ import type {
 import {
   assertMigrated,
   candidatesFor,
+  environmentEntry,
   formatValueFile,
   isCanonicalSegment,
   isReservedToken,
@@ -146,16 +147,16 @@ export function schemaShapeFileOf(project: Project): string {
  * filesystem tree every command edits.
  *
  * `pull` and cross-provider `doctor` read here: they compare or copy against what
- * the config says the environment's values live in. An environment with no
- * `providers` entry has no separate source of truth, so this falls back to the
- * local tree — the two coincide, and there is nothing to pull from elsewhere.
- * `openProject` is untouched: the working copy stays filesystem regardless.
+ * the config says the environment's values live in. An undeclared environment has
+ * no separate source of truth, so this falls back to the local tree — the two
+ * coincide, and there is nothing to pull from elsewhere. `openProject` is
+ * untouched: the working copy stays filesystem regardless.
  */
 export async function sourceProviderFor(
   project: Project,
   environment: string,
 ): Promise<AnyProvider> {
-  const providerConfig = project.config.providers[environment];
+  const providerConfig = environmentEntry(project.config, environment);
   if (providerConfig === undefined) {
     return createProvider(LOCAL_TREE_TYPE, { root: project.root, config: project.config });
   }
@@ -165,7 +166,7 @@ export async function sourceProviderFor(
   // The result may hold records or a projection — callers narrow through
   // `holdsRecords`/`holdsProjection` and never call a method the capability
   // declaration did not promise.
-  return createSourceProvider(providerConfig.type, {
+  return createSourceProvider(providerConfig.provider, {
     root: project.root,
     config: project.config,
     providerConfig,
@@ -199,7 +200,7 @@ const KEY_SEPARATOR = /[./\\]/;
  * and nothing else. Environments are a config whitelist (invariant 10), so a
  * caller without a config cannot know which environment names are reserved.
  */
-const NO_ENVIRONMENTS: PenvConfig = { environments: [], providers: {} };
+const NO_ENVIRONMENTS: PenvConfig = { environments: {} };
 
 /**
  * The parameter a CLI key names — `redis/password` and `redis.password` are one.

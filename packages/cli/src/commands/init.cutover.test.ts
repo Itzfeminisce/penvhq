@@ -354,7 +354,7 @@ describe("what the cutover writes", () => {
     const config = readFileSync(join(root, "penv.config.ts"), "utf8");
 
     expect(result.plan.environments).toEqual(["development"]);
-    expect(config).toContain('environments: ["development"],');
+    expect(config).toContain('development: "@penvhq/provider-filesystem",');
     expect(config).not.toContain("production");
     expect(config).not.toContain("staging");
   });
@@ -450,7 +450,7 @@ describe("what the cutover writes", () => {
 
     expect(records.every((name) => !name.endsWith(".enc"))).toBe(true);
     expect(existsSync(join(root, "penv.snapshot.ts"))).toBe(false);
-    expect(readFileSync(join(root, "penv.config.ts"), "utf8")).not.toContain("keys:");
+    expect(readFileSync(join(root, "penv.config.ts"), "utf8")).not.toContain("keySource");
   });
 });
 
@@ -1198,10 +1198,9 @@ describe("a cutover narrower than the whitelist", () => {
     writeFileSync(
       join(root, "penv.config.ts"),
       `export default ${JSON.stringify({
-        environments: ["development", "production"],
-        providers: {
-          development: { type: "@penvhq/provider-filesystem" },
-          production: { type: "@penvhq/provider-filesystem" },
+        environments: {
+          development: "@penvhq/provider-filesystem",
+          production: "@penvhq/provider-filesystem",
         },
         defaultEnvironment: "development",
       })};\n`,

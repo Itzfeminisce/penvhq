@@ -22,7 +22,7 @@
  */
 
 import type { PenvConfig } from "@penvhq/core";
-import { PenvError } from "@penvhq/core";
+import { environmentNames, PenvError } from "@penvhq/core";
 
 /** Flags every penv invocation owns regardless of command. */
 const BASE_RESERVED = ["help", "version", "h", "v", "_", "--"] as const;
@@ -33,24 +33,12 @@ const BASE_RESERVED = ["help", "version", "h", "v", "_", "--"] as const;
  * {@link shadowedEnvironments} so the user hears it once, calmly, rather than
  * discovering a flag that silently means something else.
  */
-const COMMAND_FLAGS = [
-  ...BASE_RESERVED,
-  "env",
-  "out",
-  "allow-decrypt",
-  "destination",
-  "dest",
-  "d",
-  "location",
-  "l",
-  "yes",
-  "y",
-] as const;
+const COMMAND_FLAGS = [...BASE_RESERVED, "env", "out", "allow-decrypt", "yes", "y"] as const;
 
 /** The declared environments whose names a real flag shadows — no shorthand for these. */
 export function shadowedEnvironments(config: PenvConfig): string[] {
   const flags = new Set<string>(COMMAND_FLAGS);
-  return config.environments.filter((environment) => flags.has(environment));
+  return environmentNames(config).filter((environment) => flags.has(environment));
 }
 
 /**
@@ -84,14 +72,15 @@ export function environmentFromShorthand(
   if (candidates.length === 0) {
     return undefined;
   }
-  const hits = candidates.filter((candidate) => config.environments.includes(candidate));
-  const strangers = candidates.filter((candidate) => !config.environments.includes(candidate));
+  const declared = environmentNames(config);
+  const hits = candidates.filter((candidate) => declared.includes(candidate));
+  const strangers = candidates.filter((candidate) => !declared.includes(candidate));
 
   if (strangers.length > 0) {
     throw new PenvError(
       "UNKNOWN_FLAG",
       `${quoteList(strangers)} ${strangers.length === 1 ? "is not a flag" : "are not flags"} this command takes, and ${strangers.length === 1 ? "names" : "name"} no declared environment`,
-      `Declared environments work as bare flags: ${quoteList(config.environments)}. Anything else needs \`--env <name>\`.`,
+      `Declared environments work as bare flags: ${quoteList(declared)}. Anything else needs \`--env <name>\`.`,
     );
   }
   if (hits.length > 1) {

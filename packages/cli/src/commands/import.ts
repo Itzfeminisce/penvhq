@@ -27,6 +27,7 @@ import { basename, isAbsolute, relative, resolve } from "node:path";
 import type { PenvConfig, Scope } from "@penvhq/core";
 import {
   assertNever,
+  environmentNames,
   FilenameGrammarError,
   findConfigFile,
   loadConfigFrom,
@@ -106,10 +107,11 @@ const LOCAL = "local";
  * never declared `staging` would become the value every environment reads.
  */
 function assertDeclared(segment: string, config: PenvConfig): string {
-  if (config.environments.includes(segment)) {
+  const declared = environmentNames(config);
+  if (declared.includes(segment)) {
     return segment;
   }
-  throw new UnknownEnvironmentError(segment, config.environments);
+  throw new UnknownEnvironmentError(segment, declared);
 }
 
 /**
@@ -237,7 +239,7 @@ function explicitEnvironment(options: ImportOptions, source: string, config: Pen
   throw new PenvError(
     "IMPORT_ENV_FLAG_EMPTY",
     `\`--env\` for the import of ${source} names no environment`,
-    `Pass a declared environment — ${config.environments.map((e) => `\`${e}\``).join(", ")} — e.g. ` +
+    `Pass a declared environment — ${environmentNames(config).map((e) => `\`${e}\``).join(", ")} — e.g. ` +
       `\`--env production\`, or drop \`--env\` to import ${source} as the scope that has no ` +
       `environment. Nothing was imported.`,
   );
@@ -338,7 +340,7 @@ interface Adoption {
 /** The decisions a config already records. The alias is read from the files that resolve it. */
 function decisionsOf(config: PenvConfig, cwd: string): InitDecisions {
   return {
-    environments: config.environments,
+    environments: environmentNames(config),
     // `import` re-scaffolds env.ts for an existing project; injection is an init
     // choice, so it is not turned on here.
     inject: false,
@@ -446,7 +448,7 @@ export function importDotenv(options: ImportOptions): ImportReport {
     backup,
     scope,
     environment,
-    environments: config.environments,
+    environments: environmentNames(config),
     variables: parsed.entries.length,
     orphanComments: parsed.orphanComments,
     steps,

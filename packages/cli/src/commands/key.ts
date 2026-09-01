@@ -17,7 +17,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { Keychain } from "@penvhq/core";
-import { KEY_BYTES, KEYCHAIN_SERVICE, PenvError } from "@penvhq/core";
+import { KEY_BYTES, KEYCHAIN_SERVICE, keyConfigFor, PenvError } from "@penvhq/core";
 import { defineCommand } from "citty";
 import { defaultKeychain } from "../keychain.js";
 import { openProject, targetEnvironment } from "../project.js";
@@ -52,13 +52,14 @@ export function runKeyCreate(options: KeyCreateOptions): KeyCreateResult {
   const project = openProject(options.cwd);
   const environment = targetEnvironment(project, options.environment);
 
-  const declared = project.config.keys?.[environment];
+  const declared = keyConfigFor(project.config, environment);
   if (declared === undefined) {
     throw new PenvError(
       "KEY_SOURCE_UNDECLARED",
       `Environment ${environment} declares no key source, so penv does not know what a key for it would be`,
-      "Add a `keys` entry to penv.config.ts — e.g. " +
-        `\`keys: { ${environment}: { source: "env", id: "${environment}" } }\` — then run this again.`,
+      `Give its entry in penv.config.ts a \`keySource\` — e.g. \`${environment}: { provider: ` +
+        `"@penvhq/provider-filesystem", keySource: "env" }\` — then run this again. The key is named ` +
+        "after the environment unless the object form names another.",
     );
   }
 
