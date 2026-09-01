@@ -98,6 +98,16 @@ Run `pnpm typecheck && pnpm test && pnpm lint` before proposing a change as done
 - `import { env } from "@env"` is the blessed runtime path; `import { schema } from` `penv.schema.ts` is the blessed types-and-tooling path. Type-only consumers and tooling configs import `schema`, not `env`, to avoid triggering eager load — a tooling config (drizzle-kit, a CI script) calls `load(schema.pick({ ... }))`, **never a second `z.object` over the same store**. A second shape is the drift these invariants exist to prevent, rebuilt in tooling; a rename must break the tooling config at compile time, which `pick` guarantees and a hand-written duplicate does not. The `import "@penvhq/penv/config"` form is compat-only and carries an ESM ordering caveat.
 - Every new `doctor` check needs a test that fires (true positive) *and* stays quiet when it should (no false positive). Stuck-rotation-vs-atomic-cutover is the canonical reason the negative test matters.
 
+## Changesets — patch is the default, minor is the breaking slot
+
+Every `@penvhq/*` package is one `fixed` group, so the release takes the highest bump any changeset in it asks for and moves all thirteen packages to it. A bump type is therefore a claim about the whole workspace, not about the file you edited.
+
+- **`patch`** — bug fixes, docs, error-message wording, internal refactors. This is the default, and most releases should be one.
+- **`minor`** — new surface, or anything breaking. On 0.x this *is* the breaking slot: `^0.15.0` resolves only `0.15.x`, so a minor invalidates every caret range in every adopting repo and every dependent's pin has to be rewritten. Spend it deliberately.
+- **`major`** — not until 1.0.
+
+The failure to avoid is marking a bug fix `minor` out of habit. Six consecutive releases (0.10.0 through 0.15.0) did exactly that, and a launcher-only fix dragged core, the runtime, and every provider to a new minor they had no changes in. `0.9.5` is the shape to copy: a real adoption found five bugs, and they shipped as a patch.
+
 ## Definition of done
 
 1. `pnpm typecheck && pnpm test && pnpm lint` pass.
