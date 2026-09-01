@@ -204,6 +204,57 @@ export async function runLauncher(options: LauncherOptions): Promise<number> {
   }
 }
 
+/** `0.9.0` against `0.10.0`, numerically. Undefined when either is not `x.y.z`. */
+function isBehind(own: string, pinned: string): boolean | undefined {
+  const parse = (text: string): number[] | undefined => {
+    const parts = text.split(".").map((part) => Number(part));
+    return parts.length === 3 && parts.every((part) => Number.isInteger(part) && part >= 0)
+      ? parts
+      : undefined;
+  };
+  const a = parse(own);
+  const b = parse(pinned);
+  if (a === undefined || b === undefined) {
+    return undefined;
+  }
+  for (const [index, part] of a.entries()) {
+    const other = b[index] as number;
+    if (part !== other) {
+      return part < other;
+    }
+  }
+  return false;
+}
+
+/**
+ * The launcher's own version, named only when it is behind the pin.
+ *
+ * `penv --version` answers with the engine, which is what runs almost
+ * everything — but `add` and `upgrade` live in the launcher, so one that trails
+ * the pin runs old code for them while the single number on screen says
+ * otherwise. A launcher *ahead* of the pin is the ordinary shape and says
+ * nothing: running a project's older pinned engine is the whole model.
+ *
+ * The launcher ships the engine as a dependency and moves with it, so that
+ * engine's version is the launcher's own.
+ */
+function reportLauncherVersion(options: LauncherOptions, pinned: string): void {
+  let own: string;
+  try {
+    own = options.bundledEngine().version;
+  } catch {
+    // A launcher missing its own engine has a louder problem than `--version`.
+    return;
+  }
+  if (isBehind(own, pinned) !== true) {
+    return;
+  }
+  options.io.out(
+    `launcher ${own} — \`penv add\` and \`penv upgrade\` run from the launcher, not the pinned ` +
+      `engine. Move it with \`npm install -g @penvhq/launcher@${pinned}\`.`,
+  );
+}
+
 async function launch(options: LauncherOptions): Promise<number> {
   const { argv, cwd, env, io } = options;
   const { noDownload, forwarded } = splitLauncherFlags(argv);
@@ -258,6 +309,7 @@ async function launch(options: LauncherOptions): Promise<number> {
   const manifest = readManifest(project.manifestFile, home, argv);
   if (first !== undefined && VERSION_FLAGS.has(first)) {
     io.out(`penv ${manifest.engine.version}`);
+    reportLauncherVersion(options, manifest.engine.version);
     return 0;
   }
 

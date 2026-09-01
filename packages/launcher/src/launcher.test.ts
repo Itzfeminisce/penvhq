@@ -507,6 +507,7 @@ describe("the manifest an adoption leaves behind", () => {
 });
 
 describe("one visible version", () => {
+  /** The bundled 0.10.0 launcher is ahead of this project's 0.9.0 pin — the ordinary shape. */
   it("prints the version the project pins, installed or not", async () => {
     const test = harness({
       argv: ["--version"],
@@ -518,6 +519,24 @@ describe("one visible version", () => {
     expect(test.out).toEqual(["penv 0.9.0"]);
     expect(test.spawned).toEqual([]);
     expect(test.asked).toEqual([]);
+  });
+
+  /**
+   * `add` and `upgrade` run from the launcher, so one behind the pin runs old
+   * code for them while the engine number on screen says otherwise.
+   */
+  it("names a launcher behind the pin, because add and upgrade run from it", async () => {
+    const ahead = manifestText().replace(`"${ENGINE_PIN.version}"`, '"0.11.0"');
+    const test = harness({
+      argv: ["--version"],
+      cwd: projectAt(ahead),
+      home: scratch("penv-home-"),
+    });
+
+    expect(await runLauncher(test.options)).toBe(0);
+    expect(test.out[0]).toBe("penv 0.11.0");
+    expect(test.out[1]).toContain(`launcher ${BUNDLED_VERSION}`);
+    expect(test.out[1]).toContain("npm install -g @penvhq/launcher@0.11.0");
   });
 });
 

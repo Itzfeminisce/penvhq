@@ -482,9 +482,12 @@ export function planInstall(root: string, version: string = engineVersion()): In
     name: TYPES_PACKAGE,
     version,
     ...(types === undefined ? {} : { declared: types.version }),
-    // Any declared version counts, for zod's reason: the augmentation binds on
-    // the module resolving, not on which release of it a project pinned.
-    satisfied: types !== undefined,
+    // Held to the pin, exactly as a workspace member's copy is. The augmentation
+    // binds on the module resolving, but what it binds to is whatever release
+    // resolved: a core behind the pin checks `penv.config.ts` against a shape the
+    // engine no longer has, and the committed declarations augment interfaces
+    // that moved under them.
+    satisfied: types?.version === version,
   };
 
   // The block a package chose is the block penv writes back to — but only when

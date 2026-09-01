@@ -288,7 +288,7 @@ describe("moving the pin", () => {
   });
 
   it("moves the dependency to the same exact version as the pin", async () => {
-    const test = harness({ argv: [LATEST], consent: true });
+    const test = harness({ argv: [LATEST], types: LATEST, consent: true });
     await upgrade(test.options);
 
     expect(test.installs).toHaveLength(1);
@@ -333,6 +333,7 @@ describe("moving the pin", () => {
       argv: [LATEST],
       manifest: manifestFor(LATEST),
       declared: LATEST,
+      types: LATEST,
       consent: true,
     });
     const before = manifestTextIn(test.root);
@@ -394,13 +395,32 @@ describe("the one consent", () => {
     );
   });
 
-  /** The quiet half: a project that already declares it is not told about it again. */
-  it("says nothing about @penvhq/core when the project already declares it", async () => {
+  /**
+   * Declaring it is not enough: what the committed declarations augment is
+   * whichever `@penvhq/core` resolved, so one left behind checks the config
+   * against a shape the engine no longer has. The root moves with the pin, as
+   * every workspace member's copy already did.
+   */
+  it("moves an @penvhq/core the root left behind the pin", async () => {
     const test = harness({ argv: [LATEST], consent: true });
 
     await upgrade(test.options);
 
-    expect(test.out.join("\n")).not.toContain("@penvhq/core");
+    expect(test.out).toContain(
+      `✓ package.json depends on @penvhq/penv ${LATEST} and @penvhq/core ${LATEST}`,
+    );
+  });
+
+  /** The quiet half: one already at the version asked for is reported, never moved. */
+  it("moves no @penvhq/core that is already at the pin", async () => {
+    const test = harness({ argv: [LATEST], declared: LATEST, types: LATEST, consent: true });
+
+    await upgrade(test.options);
+
+    expect(test.out.join("\n")).toContain("nothing to install");
+    expect(test.out).not.toContain(
+      `✓ package.json depends on @penvhq/penv ${LATEST} and @penvhq/core ${LATEST}`,
+    );
   });
 
   it("leaves both files untouched when it is declined", async () => {
@@ -455,6 +475,7 @@ describe("a workspace whose packages declare the dependency too", () => {
   it("moves every one of them, and names each in the one diff", async () => {
     const test = harness({
       argv: [LATEST],
+      types: LATEST,
       consent: true,
       workspace: { db: "^0.8.0", worker: "^0.9.0" },
     });
@@ -489,6 +510,7 @@ describe("a workspace whose packages declare the dependency too", () => {
   it("moves a package's own @penvhq/core too, in the same one diff", async () => {
     const test = harness({
       argv: [LATEST],
+      types: LATEST,
       consent: true,
       workspace: {
         integrations: { dependencies: { "@penvhq/core": "^0.8.0" } },
@@ -536,7 +558,12 @@ describe("a workspace whose packages declare the dependency too", () => {
 
   /** The quiet half: a workspace package that declared neither is given neither. */
   it("says nothing about a package that declares neither of them", async () => {
-    const test = harness({ argv: [LATEST], consent: true, workspace: { db: "^0.8.0" } });
+    const test = harness({
+      argv: [LATEST],
+      types: LATEST,
+      consent: true,
+      workspace: { db: "^0.8.0" },
+    });
     mkdirSync(join(test.root, "packages", "ui"), { recursive: true });
     writeFileSync(
       join(test.root, "packages", "ui", "package.json"),

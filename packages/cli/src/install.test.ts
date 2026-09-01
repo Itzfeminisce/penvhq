@@ -129,9 +129,23 @@ describe("the install plan", () => {
     expect(step.dev).toBe(true);
   });
 
-  /** The quiet half: a project that already declares it is left exactly as it is. */
-  it("leaves an already-declared @penvhq/core where the project put it", () => {
+  /**
+   * A core behind the pin is moved, exactly as a workspace member's copy is:
+   * what the committed declarations augment is whichever release resolved, so a
+   * stale one checks `penv.config.ts` against a shape the engine no longer has.
+   */
+  it("moves an @penvhq/core left behind the pin", () => {
     const root = makeProject(manifest({ dependencies: { "@penvhq/core": "^0.11.0" } }));
+
+    const plan = planInstall(root, "1.2.3");
+
+    expect(plan.steps[1]?.satisfied).toBe(false);
+    expect(renderInstallPlan(plan).join("\n")).toContain("@penvhq/core");
+  });
+
+  /** The quiet half: one already at the pin is left exactly where the project put it. */
+  it("leaves an @penvhq/core already at the pin alone", () => {
+    const root = makeProject(manifest({ dependencies: { "@penvhq/core": "1.2.3" } }));
 
     const plan = planInstall(root, "1.2.3");
 
