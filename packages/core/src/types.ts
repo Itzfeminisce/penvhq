@@ -122,8 +122,8 @@ export interface Meta extends MetaBlock {
  * ```
  *
  * — so the compile-time union is exactly the set of providers the project has
- * installed, and {@link defineConfig} can hold a known `type`'s fields to the
- * provider's own declaration while leaving an unknown `type` the open base shape.
+ * installed, and {@link defineConfig} can hold a known `provider`'s fields to the
+ * provider's own declaration while leaving an unknown one the open base shape.
  */
 // biome-ignore lint/suspicious/noEmptyInterface: augmentation target — see docblock.
 export interface ProviderConfigMap {}
@@ -131,24 +131,47 @@ export interface ProviderConfigMap {}
 /** The provider package names whose config types are installed and merged in. */
 export type KnownProviderType = keyof ProviderConfigMap & string;
 
+/**
+ * The field names core owns inside an environment entry, and which no provider's
+ * declared shape may reuse. Enforced where a shape enters the system — `penv add`
+ * refuses a `penv.types` file declaring one — so a collision is impossible by
+ * construction rather than checked on every load.
+ */
+export const RESERVED_ENTRY_FIELDS = ["provider", "keySource", "key", "keyId"] as const;
+export type ReservedEntryField = (typeof RESERVED_ENTRY_FIELDS)[number];
+
 export interface ProviderConfig {
   /**
    * The provider package's fully-qualified name — `"@penvhq/provider-vault"`.
-   * The name is the import specifier: penv resolves it from the project's own
-   * `node_modules`, so declaring a provider and installing its package are the
-   * same decision stated twice, and the config never needs a second field to
-   * say where the implementation lives.
+   * Always a plain package specifier, never a factory import: provider packages
+   * are integrity-pinned CLI extensions recorded in the manifest, not necessarily
+   * installed dependencies, so the config stays data-only and importable in a
+   * repo where no adapter code exists.
    */
-  readonly type: KnownProviderType | (string & {});
+  readonly provider: KnownProviderType | (string & {});
   /**
-   * The place inside the provider that penv maps the tree onto. The format is
-   * the provider's own — a Vault KV base path, a Kubernetes
-   * `namespace/secretName` — and its package's config type documents it; the
-   * field name never changes between providers.
+   * Everything else an entry carries is the provider's own vocabulary — vercel's
+   * `project`, ssm's `path` — declared by its package's config type. Core owns no
+   * generic address field: a name the developer has to translate is a name that
+   * belongs to penv rather than to the store.
    */
-  readonly location?: string;
-  /** Fields beyond `location` belong to the provider's own config type. */
   readonly [key: string]: unknown;
+}
+
+/**
+ * One environment's complete declaration: which provider holds it, addressed in
+ * that provider's own words, and which key seals it. Nothing about an environment
+ * lives anywhere else in the config.
+ *
+ * The bare package-specifier string is the shorthand for an entry that needs no
+ * fields — filesystem, mock — and {@link environmentEntry} expands it.
+ */
+export interface EnvironmentEntry extends ProviderConfig {
+  /**
+   * Where this environment's encryption key comes from. Omitted means no sealing
+   * key here, which is not the same as having no key — see `keys.ts`.
+   */
+  readonly keySource?: KeySourceDeclaration;
 }
 
 /**
@@ -171,9 +194,9 @@ export interface ProviderFactoryContext {
    */
   readonly config: PenvConfig;
   /**
-   * The one environment's own `providers.*` entry, when building its declared
-   * source of truth. Carries provider-side settings — the `location` above all —
-   * that the config authored, never inferred.
+   * The one environment's own `environments.*` entry, when building its declared
+   * source of truth. Carries the fields the provider itself declared — vercel's
+   * `project`, ssm's `path` — that the config authored, never inferred.
    */
   readonly providerConfig?: ProviderConfig;
   /**
@@ -252,20 +275,49 @@ export type OverrideKey = [RegisteredShape] extends [never]
 /** The `override` block: parameter id → the exact variable a consumer expects. */
 export type OverrideBlock = Readonly<Partial<Record<OverrideKey, string>>>;
 
-/** The fields a provider entry carries that its declared config type does not. */
+/** The fields an environment entry carries that its provider's config type does not. */
 type UnknownProviderFields<E, T extends KnownProviderType> = Exclude<
   keyof E,
-  keyof ProviderConfigMap[T] | "type"
+  keyof ProviderConfigMap[T] | ReservedEntryField
 >;
 
+/** What core contributes to every entry, whatever the provider declares. */
+type EntryBase<T extends string> = {
+  readonly provider: T;
+  readonly keySource?: KeySourceDeclaration;
+};
+
+/** A provider's declared shape with core's own field names taken out of it. */
+type DeclaredFields<T extends KnownProviderType> = Omit<ProviderConfigMap[T], ReservedEntryField>;
+
 /**
- * What `defineConfig` holds one `providers.<env>` entry to. A `type` that names
- * an installed provider package is checked against that package's own config
- * declaration — wrong field types fail, and a field the provider never declared
- * is mapped to a shape the entry cannot satisfy so the config cannot carry it. A
- * `type` core has no declaration for (a provider penv has not seen installed, or
- * a third-party package) keeps the open base shape: the compile-time answer and
- * the runtime `UNKNOWN_PROVIDER` answer are the same — install the package.
+ * True when a shape has no required fields — the condition the string shorthand
+ * is legal under. `Partial<S> extends S` is the `{}`-free spelling of it: making
+ * every field optional changes nothing exactly when none of them was required.
+ */
+type NeedsNoFields<S> = Partial<S> extends S ? true : false;
+
+/**
+ * What the string shorthand becomes. A provider whose declared shape has required
+ * fields cannot be named by a bare string, so the arm maps to a shape no string
+ * satisfies — the sentence as the key, so TypeScript prints it.
+ */
+type ValidatedShorthand<T extends string> = T extends KnownProviderType
+  ? NeedsNoFields<DeclaredFields<T>> extends true
+    ? T
+    : {
+        readonly [_ in `${T} declares required fields, so this environment needs the object form`]: never;
+      }
+  : T;
+
+/**
+ * What `defineConfig` holds one `environments.<env>` entry to. A `provider` that
+ * names an installed provider package is checked against that package's own
+ * config declaration — wrong field types fail, and a field the provider never
+ * declared is mapped to a shape the entry cannot satisfy so the config cannot
+ * carry it. A package core has no declaration for (one penv has not seen
+ * installed, or a third-party) keeps the open base shape: the compile-time answer
+ * and the runtime `UNKNOWN_PROVIDER` answer are the same — install the package.
  *
  * The unknown field maps to an object whose single key *is* the sentence, so
  * TypeScript prints it: `Type '3' is not assignable to type '3 & { readonly
@@ -276,21 +328,23 @@ type UnknownProviderFields<E, T extends KnownProviderType> = Exclude<
  * `defineConfig`'s contextual type circular, and every field of the entry then
  * reports against `never` instead of the one that is wrong.
  */
-export type ValidatedProviderEntry<E> = E extends { readonly type: infer T extends string }
-  ? T extends KnownProviderType
-    ? UnknownProviderFields<E, T> extends never
-      ? ProviderConfigMap[T] & { readonly type: T }
-      : {
-          readonly [K in UnknownProviderFields<E, T>]: {
-            readonly [_ in `${K & string} is not a field ${T} declares`]: never;
-          };
-        }
-    : E
-  : E;
+export type ValidatedEnvironmentEntry<E> = E extends string
+  ? ValidatedShorthand<E>
+  : E extends { readonly provider: infer T extends string }
+    ? T extends KnownProviderType
+      ? UnknownProviderFields<E, T> extends never
+        ? ProviderConfigMap[T] & EntryBase<T>
+        : {
+            readonly [K in UnknownProviderFields<E, T>]: {
+              readonly [_ in `${K & string} is not a field ${T} declares`]: never;
+            };
+          }
+      : E
+    : E;
 
-/** The `providers` block with every entry validated — see {@link ValidatedProviderEntry}. */
-export type ValidatedProviders<P> = {
-  readonly [E in keyof P]: ValidatedProviderEntry<P[E]>;
+/** The `environments` record with every entry validated — see {@link ValidatedEnvironmentEntry}. */
+export type ValidatedEnvironments<E> = {
+  readonly [K in keyof E]: ValidatedEnvironmentEntry<E[K]>;
 };
 
 /**
@@ -317,12 +371,15 @@ export interface ProviderCapabilities {
   readonly readsValues: boolean;
 }
 
+/** The places penv can read a key from. Never widened by a fallback (invariant 15). */
+export type KeySourceName = "env" | "keychain";
+
 /**
  * Where one environment's encryption key comes from. Declared, never guessed: a
  * key source penv picked for you is a key you did not choose.
  */
 export interface KeyConfig {
-  readonly source: "env" | "keychain";
+  readonly source: KeySourceName;
   /**
    * Names the key. Written into every value file sealed under it, so it must
    * outlive any one machine — and cannot contain `:`, which separates the
@@ -331,14 +388,25 @@ export interface KeyConfig {
   readonly id: string;
 }
 
+/**
+ * How an environment declares its key. The id defaults to the environment's own
+ * name, so the bare source name is the whole declaration until a rotation gives
+ * the key a name of its own.
+ */
+export type KeySourceDeclaration =
+  | KeySourceName
+  | { readonly source: KeySourceName; readonly id?: string };
+
 export interface PenvConfig {
   /**
-   * The whitelist of valid environment names — the only source of truth for
-   * what counts as an environment. Segments are matched against this list,
-   * never inferred from folders or filenames.
+   * Every environment this project has, each mapped to its complete declaration.
+   *
+   * The record's keys *are* the whitelist (invariant 10) — a key is a
+   * declaration, not an inference, so segments are matched against these names
+   * and never read out of a folder or a filename. Read them through
+   * {@link environmentNames} and {@link environmentEntry} rather than by hand.
    */
-  readonly environments: readonly string[];
-  readonly providers: Readonly<Record<string, ProviderConfig>>;
+  readonly environments: Readonly<Record<string, string | EnvironmentEntry>>;
   /**
    * The environment a command acts on when `--env` is absent and nothing in the
    * environment says otherwise. It must be one of {@link environments}.
@@ -385,11 +453,31 @@ export interface PenvConfig {
    * error instead of an override that silently never applies.
    */
   readonly override?: OverrideBlock;
-  /**
-   * Where each environment's encryption key lives. An environment with no entry
-   * has no key source, which is not the same as having no key — see `keys.ts`.
-   */
-  readonly keys?: Readonly<Record<string, KeyConfig>>;
+}
+
+/**
+ * The declared environment names, in declaration order — the whitelist itself.
+ * The one way anything reads it, so no caller re-derives the list from a shape
+ * that may change under it.
+ */
+export function environmentNames(config: PenvConfig): readonly string[] {
+  return Object.keys(config.environments);
+}
+
+/**
+ * One environment's entry, with the string shorthand expanded to `{ provider }`.
+ * `undefined` when the environment is not declared, which is the answer every
+ * caller needs before it can treat a name as an environment at all.
+ */
+export function environmentEntry(
+  config: PenvConfig,
+  environment: string,
+): EnvironmentEntry | undefined {
+  const declared = own(config.environments, environment);
+  if (declared === undefined) {
+    return undefined;
+  }
+  return typeof declared === "string" ? { provider: declared } : declared;
 }
 
 /**

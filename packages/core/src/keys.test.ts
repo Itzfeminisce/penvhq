@@ -7,6 +7,7 @@ import {
   createEnvKeySource,
   createKeychainKeySource,
   KEY_BYTES,
+  keyConfigFor,
   keySourceFrom,
   keySourceIdentifier,
   NO_KEY_SOURCE,
@@ -81,12 +82,22 @@ function exportedKey(length: number): string {
 const prod: KeyConfig = { source: "env", id: "prod" };
 
 const config: PenvConfig = {
-  environments: ["development", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    production: { type: "@penvhq/provider-filesystem" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
   },
 };
+
+/** The same config with one environment's `keySource` declared. */
+function keyed(environment: string, keySource: unknown): PenvConfig {
+  return {
+    ...config,
+    environments: {
+      ...config.environments,
+      [environment]: { provider: "@penvhq/provider-filesystem", keySource },
+    },
+  } as PenvConfig;
+}
 
 describe("createEnvKeySource", () => {
   it("finds a 32-byte key exported under its variable", () => {
@@ -227,29 +238,51 @@ describe("nullKeySource", () => {
     expect(nullKeySource("production").current().kind).toBe("unavailable");
   });
 
-  it("names the environment and the `keys` block in its detail", () => {
+  it("names the environment and `keySource` in its detail", () => {
     const lookup = nullKeySource("production").lookup("prod");
 
     expect(lookup.kind === "unavailable" && lookup.detail).toContain("production");
-    expect(lookup.kind === "unavailable" && lookup.detail).toContain("`keys` block");
+    expect(lookup.kind === "unavailable" && lookup.detail).toContain("`keySource`");
   });
 });
 
 describe("resolveKeySource", () => {
-  it("returns the null source for an environment with no keys block", () => {
+  it("returns the null source for an environment that declares no keySource", () => {
     expect(resolveKeySource(config, "production").type).toBe("none");
   });
 
-  it("returns the null source for an environment absent from a keys block that exists", () => {
-    const withKeys: PenvConfig = { ...config, keys: { development: prod } };
-
-    expect(resolveKeySource(withKeys, "production").type).toBe("none");
+  it("returns the null source for an environment beside one that declares a key", () => {
+    expect(resolveKeySource(keyed("development", prod), "production").type).toBe("none");
   });
 
   it("returns an env source for a declared env key", () => {
-    const withKeys: PenvConfig = { ...config, keys: { production: prod } };
+    expect(resolveKeySource(keyed("production", prod), "production").type).toBe("env");
+  });
 
-    expect(resolveKeySource(withKeys, "production").type).toBe("env");
+  /*
+   * The shorthand's whole contract: `keySource: "env"` is the key named after the
+   * environment. A defaulted id that differed from the environment's name would
+   * change the identifier every existing artifact carries.
+   */
+  it("defaults the key id to the environment's own name for the string shorthand", () => {
+    setEnv("PENV_KEY_PRODUCTION", exportedKey(KEY_BYTES));
+    const shorthand = keyed("production", "env");
+
+    expect(keyConfigFor(shorthand, "production")).toEqual({ source: "env", id: "production" });
+    expect(resolveKeySource(shorthand, "production").current()).toMatchObject({ kind: "found" });
+  });
+
+  it("defaults the id for an object form that names only a source", () => {
+    expect(keyConfigFor(keyed("production", { source: "keychain" }), "production")).toEqual({
+      source: "keychain",
+      id: "production",
+    });
+  });
+
+  it("takes the id from the object form, so a rotated key can be named", () => {
+    expect(
+      keyConfigFor(keyed("production", { source: "env", id: "prod-2026" }), "production"),
+    ).toEqual({ source: "env", id: "prod-2026" });
   });
 
   /*
@@ -261,12 +294,11 @@ describe("resolveKeySource", () => {
    */
   it("resolves `keychain` to a keychain source, never downgrading to env", () => {
     setEnv("PENV_KEY_PROD", exportedKey(KEY_BYTES));
-    const withKeys: PenvConfig = {
-      ...config,
-      keys: { production: { source: "keychain", id: "prod" } },
-    };
 
-    const source = resolveKeySource(withKeys, "production");
+    const source = resolveKeySource(
+      keyed("production", { source: "keychain", id: "prod" }),
+      "production",
+    );
 
     expect(source.type).toBe("keychain");
     // With no keychain backend registered it answers `unavailable` — never the
@@ -292,10 +324,7 @@ describe("resolveKeySource", () => {
     // Exported under the name an env source reads, so a downgrade would succeed
     // and nothing would ever say penv had chosen the key itself.
     setEnv("PENV_KEY_PROD", exportedKey(KEY_BYTES));
-    const withKeys = {
-      ...config,
-      keys: { production: { source: "vault", id: "prod" } },
-    } as unknown as PenvConfig;
+    const withKeys = keyed("production", { source: "vault", id: "prod" });
 
     const error = ((): unknown => {
       try {
@@ -321,7 +350,7 @@ describe("resolveKeySource", () => {
     expect(error.remedy).toContain("`vault` is not a key source penv knows");
     // The remedy points at the source that does work, and at the variable the
     // key must be exported under — the two facts that unblock the user.
-    expect(error.remedy).toContain('source: "env"');
+    expect(error.remedy).toContain('keySource: "env"');
     expect(error.remedy).toContain("PENV_KEY_PROD");
   });
 
@@ -337,10 +366,7 @@ describe("resolveKeySource", () => {
     ["the empty string", ""],
   ])("throws KEY_SOURCE_UNSUPPORTED for %s", (_label, source) => {
     setEnv("PENV_KEY_PROD", exportedKey(KEY_BYTES));
-    const withKeys = {
-      ...config,
-      keys: { production: { source, id: "prod" } },
-    } as unknown as PenvConfig;
+    const withKeys = keyed("production", { source, id: "prod" });
 
     const error = ((): unknown => {
       try {
@@ -362,9 +388,8 @@ describe("resolveKeySource", () => {
    */
   it("still returns an env source for the one source that works", () => {
     setEnv("PENV_KEY_PROD", exportedKey(KEY_BYTES));
-    const withKeys: PenvConfig = { ...config, keys: { production: prod } };
 
-    const source = resolveKeySource(withKeys, "production");
+    const source = resolveKeySource(keyed("production", prod), "production");
 
     expect(source.type).toBe("env");
     expect(source.current().kind).toBe("found");
@@ -372,10 +397,12 @@ describe("resolveKeySource", () => {
 
   it("resolves each declared source independently — env and keychain side by side", () => {
     const withKeys: PenvConfig = {
-      ...config,
-      keys: {
-        development: { source: "env", id: "dev" },
-        production: { source: "keychain", id: "prod" },
+      environments: {
+        development: { provider: "@penvhq/provider-filesystem", keySource: "env" },
+        production: {
+          provider: "@penvhq/provider-filesystem",
+          keySource: { source: "keychain", id: "prod" },
+        },
       },
     };
 
@@ -454,18 +481,28 @@ describe("createKeychainKeySource", () => {
  */
 /**
  * The identifier a deployment artifact carries. It names *where the key lives*
- * and nothing else, because the `keys` block does not travel with a release —
+ * and nothing else, because the declaration does not travel with a release —
  * and it never falls back to a source penv happens to support (invariant 15).
  */
 describe("the key-source identifier", () => {
-  const keyed: PenvConfig = { ...config, keys: { production: prod } };
-
   it("names the source and the id, and reads back as the same source", () => {
     setEnv("PENV_KEY_PROD", exportedKey(KEY_BYTES));
-    const identifier = keySourceIdentifier(keyed, "production");
+    const identifier = keySourceIdentifier(keyed("production", prod), "production");
 
     expect(identifier).toBe("env:prod");
     expect(keySourceFrom(identifier, "production").lookup("prod")).toMatchObject({ kind: "found" });
+  });
+
+  /*
+   * Byte-for-byte across the merge: the shorthand's defaulted id *is* the
+   * environment's name, so a config migrated 1:1 stamps the same identifier it
+   * always did. A different default would orphan every artifact already built.
+   */
+  it("stamps `env:production` for the shorthand, exactly as the object form did", () => {
+    expect(keySourceIdentifier(keyed("production", "env"), "production")).toBe("env:production");
+    expect(
+      keySourceIdentifier(keyed("production", { source: "env", id: "production" }), "production"),
+    ).toBe("env:production");
   });
 
   it("says `none` for an environment that declares no keys, and reads back as no source", () => {
@@ -479,7 +516,7 @@ describe("the key-source identifier", () => {
 
   it("carries a keychain source across without turning it into an env one", () => {
     const identifier = keySourceIdentifier(
-      { ...config, keys: { production: { source: "keychain", id: "prod" } } },
+      keyed("production", { source: "keychain", id: "prod" }),
       "production",
     );
 
@@ -511,14 +548,9 @@ describe("the native-free invariant core depends on", () => {
 
 describe("a name that is also an Object.prototype member", () => {
   it("resolves no key source rather than reading the prototype", () => {
-    // `keys` is a plain object, so a bare index for an environment called
-    // `constructor` answers with `Object` — a key source penv never declared.
-    const withKeys: PenvConfig = {
-      ...config,
-      environments: [...config.environments, "constructor"],
-      keys: { production: prod },
-    };
-
-    expect(resolveKeySource(withKeys, "constructor").type).toBe("none");
+    // `environments` is a plain object, so a bare index for an environment called
+    // `constructor` answers with `Object` — an entry penv never declared, whose
+    // `keySource` penv would then go looking for.
+    expect(resolveKeySource(keyed("production", prod), "constructor").type).toBe("none");
   });
 });

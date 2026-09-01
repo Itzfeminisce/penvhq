@@ -22,8 +22,8 @@ import {
 import { isLegalEnvironmentName, validateEnvironmentNames } from "./grammar.js";
 import { validateKeys } from "./keys.js";
 import { validatePublicPrefixes, validateSchemaFile } from "./schema-file.js";
-import type { PenvConfig, ValidatedProviders } from "./types.js";
-import { own } from "./types.js";
+import type { PenvConfig, ValidatedEnvironments } from "./types.js";
+import { environmentNames, own } from "./types.js";
 
 const CONFIG_FILENAMES = ["penv.config.ts", "penv.config.js", "penv.config.mjs"] as const;
 
@@ -112,7 +112,7 @@ export function jitiFor(file: string) {
 
 const EXPORT_REMEDY =
   "penv reads its configuration from the default export: " +
-  "`export default defineConfig({ environments: [...], providers: { ... } })`.";
+  '`export default defineConfig({ environments: { development: "@penvhq/provider-filesystem" } })`.';
 
 function describeValue(value: unknown): string {
   if (value === null) {
@@ -138,12 +138,13 @@ function causeMessage(cause: unknown): string {
 /**
  * Identity at runtime; the type is where it earns its keep. Each installed
  * provider package merges its config shape into `ProviderConfigMap`, and the
- * generic holds every `providers.<env>` entry to the declaration its `type`
- * names — exact fields for a known provider, the open base shape for one core
- * has no declaration for. See {@link ValidatedProviders}.
+ * generic holds every `environments.<env>` entry to the declaration its
+ * `provider` names — exact fields for a known provider, the open base shape for
+ * one core has no declaration for, and the bare-string shorthand only where that
+ * provider needs no fields. See {@link ValidatedEnvironments}.
  */
 export function defineConfig<const C extends PenvConfig>(
-  config: C & { readonly providers: ValidatedProviders<C["providers"]> },
+  config: C & { readonly environments: ValidatedEnvironments<C["environments"]> },
 ): PenvConfig {
   return config;
 }
@@ -286,7 +287,7 @@ export function loadConfig(cwd: string = process.cwd()): { config: PenvConfig; f
 }
 
 /**
- * The short names providers went by before `type` became the package name.
+ * The short names providers went by before `provider` became the package name.
  * Recognised only to name the exact rewrite: a config carrying one is a config
  * written against the old surface, and "install `@penvhq/provider-vault` and
  * name it" is a better answer than "not a package specifier".
@@ -301,28 +302,28 @@ const LEGACY_PROVIDER_TYPES: Readonly<Record<string, string>> = {
 };
 
 /**
- * The npm package-name grammar, scoped or bare. `type` is an import specifier,
- * so anything npm would refuse as a name, penv refuses as a `type` — before the
- * registry ever tries to resolve it.
+ * The npm package-name grammar, scoped or bare. `provider` is an import
+ * specifier, so anything npm would refuse as a name, penv refuses here — before
+ * the registry ever tries to resolve it.
  */
 const PACKAGE_NAME = /^(@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/;
 
-function validateProviderType(environment: string, type: string): PenvError | undefined {
-  const legacy = own(LEGACY_PROVIDER_TYPES, type);
+function validateProviderName(environment: string, provider: string): PenvError | undefined {
+  const legacy = own(LEGACY_PROVIDER_TYPES, provider);
   if (legacy !== undefined) {
     return new PenvError(
-      "PROVIDER_TYPE_LEGACY",
-      `The provider type \`${type}\` for environment ${environment} is a short name, and provider types are package names`,
-      `Write \`${environment}: { type: "${legacy}" }\` and make sure the package is installed. ` +
-        "A provider's `type` is the package penv imports, so the config and the dependency tree name the same thing.",
+      "PROVIDER_LEGACY",
+      `The provider \`${provider}\` for environment ${environment} is a short name, and a provider is a package name`,
+      `Write \`${environment}: { provider: "${legacy}" }\` and make sure the package is installed. ` +
+        "A provider is the package penv imports, so the config and the dependency tree name the same thing.",
     );
   }
-  if (!PACKAGE_NAME.test(type)) {
+  if (!PACKAGE_NAME.test(provider)) {
     return new PenvError(
-      "PROVIDER_TYPE_INVALID",
-      `The provider type \`${type}\` for environment ${environment} is not a package name`,
-      `Name the provider's package, e.g. \`${environment}: { type: "@penvhq/provider-filesystem" }\`. ` +
-        "penv imports the package the `type` names from this project's node_modules.",
+      "PROVIDER_INVALID",
+      `The provider \`${provider}\` for environment ${environment} is not a package name`,
+      `Name the provider's package, e.g. \`${environment}: "@penvhq/provider-filesystem"\`. ` +
+        "penv imports the package the `provider` names from this project's node_modules.",
     );
   }
   return undefined;
@@ -352,29 +353,49 @@ function validateDefaultEnvironment(
     ];
   }
   if (!declared.has(value)) {
-    return [new UnknownEnvironmentError(value, config.environments)];
+    return [new UnknownEnvironmentError(value, [...declared])];
   }
   return [];
 }
 
 /**
- * The `sinks` key is gone — everything it declared is a provider now — but a
- * config still carrying one deserves the exact rewrite, not a silent ignore
- * that would quietly stop pushing what it used to push.
+ * The old spine: three parallel structures — `environments` the list, `providers`
+ * the record, `keys` the record — describing one thing. A config still carrying
+ * any of them is refused with the whole move named, because a silent ignore would
+ * drop the providers and the keys and leave the tree unreadable.
+ *
+ * The `names` → `override` precedent (see {@link legacyNamesBlock}), applied to
+ * the config's spine.
  */
-function legacySinksBlock(config: PenvConfig): PenvError[] {
-  const sinks = (config as unknown as Readonly<Record<string, unknown>>).sinks;
-  if (sinks === undefined) {
+function mergedEnvironmentsBlock(config: PenvConfig): PenvError[] {
+  const raw = config as unknown as Readonly<Record<string, unknown>>;
+  const carried: string[] = [];
+  if (Array.isArray(config.environments)) {
+    carried.push("`environments` as a list");
+  }
+  if (raw.providers !== undefined) {
+    carried.push("a `providers` block");
+  }
+  if (raw.keys !== undefined) {
+    carried.push("a `keys` block");
+  }
+  if (carried.length === 0) {
     return [];
   }
   return [
     new PenvError(
-      "CONFIG_SINKS_REMOVED",
-      "`sinks` in penv.config.ts is no longer a config key — everything is a provider now",
-      "Move each entry into `providers` as that environment's provider: " +
-        '`sinks: { production: { type: "github", repo: "acme/api" } }` becomes ' +
-        '`providers: { production: { type: "@penvhq/provider-github", location: "acme/api" } }`, ' +
-        "with `npm i -D @penvhq/provider-github`. `penv push` and `penv pull` work against it directly.",
+      "CONFIG_ENVIRONMENTS_MERGED",
+      `penv.config.ts declares ${carried.join(" and ")}, and one \`environments\` record now holds all three`,
+      "Give each environment one entry, in its provider's own words: `type` becomes `provider`, " +
+        "`location` becomes the field that provider declares (`project` for vercel, `path` for " +
+        "ssm and vault), `targets` becomes a single `target` defaulting to the environment's " +
+        "name, and `keys.<env>` becomes that entry's `keySource`. So " +
+        '`environments: ["production"], providers: { production: { type: "@penvhq/provider-vercel", ' +
+        'location: "penv-cloud", targets: { production: "production" } } }, keys: { production: ' +
+        '{ source: "env", id: "production" } }` becomes `environments: { production: { provider: ' +
+        '"@penvhq/provider-vercel", project: "penv-cloud", keySource: "env" } }`. An environment ' +
+        "whose provider needs no fields is just the package name: `development: " +
+        '"@penvhq/provider-filesystem"`.',
     ),
   ];
 }
@@ -386,47 +407,47 @@ function legacySinksBlock(config: PenvConfig): PenvError[] {
 export function validateConfig(config: PenvConfig): PenvError[] {
   const errors: PenvError[] = [];
 
-  const environments: readonly string[] = config.environments;
-  if (!Array.isArray(environments)) {
+  // Nothing after this point can read the old spine, so the migration is the
+  // whole answer rather than the first of a page of consequences.
+  const merged = mergedEnvironmentsBlock(config);
+  if (merged.length > 0) {
+    return merged;
+  }
+
+  const environments: unknown = config.environments;
+  if (environments === null || typeof environments !== "object") {
     errors.push(
       new PenvError(
         "CONFIG_ENVIRONMENTS_INVALID",
-        "`environments` in penv.config.ts is not an array",
-        'Declare the whitelist as an array of names, e.g. `environments: ["development", "production"]`.',
+        "`environments` in penv.config.ts is not an object",
+        'Declare one entry per environment, e.g. `environments: { development: "@penvhq/provider-filesystem" }`.',
       ),
     );
     return errors;
   }
 
-  if (environments.length === 0) {
+  const entries = environments as Readonly<Record<string, unknown>>;
+  const names = Object.keys(entries);
+
+  if (names.length === 0) {
     errors.push(
       new PenvError(
         "CONFIG_ENVIRONMENTS_EMPTY",
         "`environments` in penv.config.ts is empty, so no environment can ever be loaded",
-        'Declare at least one environment, e.g. `environments: ["development", "production"]`. ' +
+        'Declare at least one, e.g. `environments: { development: "@penvhq/provider-filesystem" }`. ' +
           "Environments are a whitelist — penv never infers one from a folder or a filename.",
       ),
     );
   }
 
   const declared = new Set<string>();
-  for (const environment of environments) {
-    if (typeof environment !== "string" || environment.trim().length === 0) {
+  for (const environment of names) {
+    if (environment.trim().length === 0) {
       errors.push(
         new PenvError(
           "CONFIG_ENVIRONMENT_INVALID",
-          `The environment \`${String(environment)}\` in penv.config.ts is not a non-empty name`,
-          'Every entry in `environments` is a non-empty string, e.g. `"production"`.',
-        ),
-      );
-      continue;
-    }
-    if (declared.has(environment)) {
-      errors.push(
-        new PenvError(
-          "CONFIG_ENVIRONMENT_DUPLICATE",
-          `The environment \`${environment}\` is declared twice in penv.config.ts`,
-          "Each environment is declared once. Remove the duplicate.",
+          `The environment \`${environment}\` in penv.config.ts is not a non-empty name`,
+          'Every key in `environments` is a non-empty name, e.g. `"production"`.',
         ),
       );
       continue;
@@ -437,70 +458,45 @@ export function validateConfig(config: PenvConfig): PenvError[] {
   errors.push(...validateEnvironmentNames(config));
   errors.push(...validateDefaultEnvironment(config, declared));
 
-  const providers: unknown = config.providers;
-  if (providers === null || typeof providers !== "object" || Array.isArray(providers)) {
-    errors.push(
-      new PenvError(
-        "CONFIG_PROVIDERS_INVALID",
-        "`providers` in penv.config.ts is not an object",
-        'Declare one provider per environment, e.g. `providers: { production: { type: "@penvhq/provider-filesystem" } }`.',
-      ),
-    );
-    return errors;
-  }
-
-  const providerEntries = providers as Readonly<Record<string, unknown>>;
-
   for (const environment of declared) {
-    const provider = own(providerEntries, environment);
-    if (provider === undefined) {
+    const entry = own(entries, environment);
+    if (typeof entry === "string") {
+      const nameError = validateProviderName(environment, entry);
+      if (nameError !== undefined) {
+        errors.push(nameError);
+      }
+      continue;
+    }
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      errors.push(
+        new PenvError(
+          "ENVIRONMENT_ENTRY_INVALID",
+          `The entry for environment ${environment} is ${describeValue(entry)}, not a provider package name or an entry object`,
+          `Declare it as \`${environment}: "@penvhq/provider-filesystem"\`, or as ` +
+            `\`${environment}: { provider: "@penvhq/provider-vercel", project: "acme-web" }\` when the provider needs fields.`,
+        ),
+      );
+      continue;
+    }
+    const provider: unknown = (entry as Readonly<Record<string, unknown>>).provider;
+    if (typeof provider !== "string" || provider.trim().length === 0) {
       errors.push(
         new PenvError(
           "PROVIDER_MISSING",
-          `Environment ${environment} has no entry in \`providers\` in penv.config.ts`,
-          `Add \`${environment}: { type: "@penvhq/provider-filesystem" }\` to the \`providers\` block, or remove ` +
-            `\`${environment}\` from \`environments\`.`,
-        ),
-      );
-      continue;
-    }
-    if (provider === null || typeof provider !== "object" || Array.isArray(provider)) {
-      errors.push(
-        new PenvError(
-          "PROVIDER_INVALID",
-          `The provider for environment ${environment} is ${describeValue(provider)}, not a provider object`,
-          `Declare it as \`${environment}: { type: "@penvhq/provider-filesystem" }\`, adding a \`location\` when the ` +
-            "backend needs one.",
-        ),
-      );
-      continue;
-    }
-    const type: unknown = (provider as Readonly<Record<string, unknown>>).type;
-    if (typeof type !== "string" || type.trim().length === 0) {
-      errors.push(
-        new PenvError(
-          "PROVIDER_TYPE_MISSING",
-          `The provider for environment ${environment} declares no \`type\``,
+          `The entry for environment ${environment} declares no \`provider\``,
           `Name the package of the backend that holds this environment's values, e.g. ` +
-            `\`${environment}: { type: "@penvhq/provider-filesystem" }\`.`,
+            `\`${environment}: { provider: "@penvhq/provider-filesystem" }\`.`,
         ),
       );
       continue;
     }
-    const typeError = validateProviderType(environment, type);
-    if (typeError !== undefined) {
-      errors.push(typeError);
-    }
-  }
-
-  for (const environment of Object.keys(providerEntries)) {
-    if (!declared.has(environment)) {
-      errors.push(new UnknownEnvironmentError(environment, environments));
+    const nameError = validateProviderName(environment, provider);
+    if (nameError !== undefined) {
+      errors.push(nameError);
     }
   }
 
   errors.push(...validateKeys(config, declared));
-  errors.push(...legacySinksBlock(config));
   errors.push(...validateSchemaFile(config));
   errors.push(...validatePublicPrefixes(config));
 
@@ -594,8 +590,9 @@ function legacyNamesBlock(config: PenvConfig): PenvError[] {
  * typo and an unreadable tree.
  */
 export function assertEnvironment(environment: string, config: PenvConfig): void {
-  if (!config.environments.includes(environment)) {
-    throw new UnknownEnvironmentError(environment, config.environments);
+  const declared = environmentNames(config);
+  if (!declared.includes(environment)) {
+    throw new UnknownEnvironmentError(environment, declared);
   }
   if (!isLegalEnvironmentName(environment)) {
     throw new IllegalEnvironmentNameError(environment);
@@ -683,7 +680,7 @@ export function resolveEnvironment(config: PenvConfig, explicit?: string): strin
   if (environment === undefined) {
     throw new ConfigError(
       "No environment is set, so penv cannot tell which environment to load",
-      `Pass \`--env <environment>\` — one of ${quoteList(config.environments)} — or declare ` +
+      `Pass \`--env <environment>\` — one of ${quoteList(environmentNames(config))} — or declare ` +
         "`defaultEnvironment` in penv.config.ts so every command has one.",
     );
   }

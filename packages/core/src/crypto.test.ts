@@ -443,7 +443,7 @@ describe("UndecryptableValueError", () => {
     expect(error.remedy).toContain("PENV_KEY_PROD is not set");
   });
 
-  it("tells a key-source-unavailable reader to declare a keys block, not to find a key", () => {
+  it("tells a key-source-unavailable reader to declare a keySource, not to find a key", () => {
     // The remedies differ per reason because the fixes are not the same fix.
     const error = new UndecryptableValueError(
       "redis.password",
@@ -451,17 +451,18 @@ describe("UndecryptableValueError", () => {
       "redis/password.enc",
       {
         reason: "key-source-unavailable",
-        detail: "no `keys` block",
+        detail: "no `keySource`",
       },
     );
 
-    expect(error.remedy).toContain("`keys` block");
+    expect(error.remedy).toContain("`keySource`");
   });
 
   it("points a locked-keychain reader at unlocking, not at editing a correct config", () => {
     // A declared, correct keychain source that is merely locked reaches the same
-    // reason as an undeclared one, but its fix is to unlock — not to edit a `keys`
-    // block that is already right. The remedy names both, and the detail says which.
+    // reason as an undeclared one, but its fix is to unlock — not to edit a
+    // `keySource` that is already right. The remedy names both, and the detail
+    // says which.
     const error = new UndecryptableValueError(
       "redis.password",
       "production",

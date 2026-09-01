@@ -21,8 +21,10 @@ import {
 import type { PenvConfig } from "./types.js";
 
 const config: PenvConfig = {
-  environments: ["development", "production"],
-  providers: {},
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    production: "@penvhq/provider-filesystem",
+  },
 };
 
 const created: string[] = [];

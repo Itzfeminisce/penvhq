@@ -13,6 +13,7 @@ import {
 } from "./config.js";
 import { ConfigError, UnknownEnvironmentError } from "./errors.js";
 import type { PenvConfig } from "./types.js";
+import { environmentEntry } from "./types.js";
 
 const created: string[] = [];
 const originalPenvEnv = process.env.PENV_ENV;
@@ -40,11 +41,10 @@ function makeProject(source: string, filename = "penv.config.ts"): string {
 }
 
 const valid: PenvConfig = {
-  environments: ["development", "staging", "production"],
-  providers: {
-    development: { type: "@penvhq/provider-filesystem" },
-    staging: { type: "@penvhq/provider-vault", location: "secret/staging" },
-    production: { type: "@penvhq/provider-ssm", location: "/prod/app" },
+  environments: {
+    development: "@penvhq/provider-filesystem",
+    staging: { provider: "@penvhq/provider-vault", path: "secret/staging" },
+    production: { provider: "@penvhq/provider-ssm", path: "/prod/app" },
   },
   override: { "database-url": "DATABASE_URL" },
 };
@@ -141,15 +141,20 @@ describe("findConfigFile", () => {
 });
 
 describe("an environment named after an Object.prototype member", () => {
-  it("is reported as having no provider, not as having an invalid one", () => {
-    // A bare index into `providers` for `constructor` answers with `Object` — a
-    // provider penv was never given, diagnosed as the wrong problem.
-    const config: PenvConfig = {
-      environments: ["constructor"],
-      providers: {},
-    };
+  it("is a declared environment when the record declares it", () => {
+    const config: PenvConfig = { environments: { constructor: "@penvhq/provider-filesystem" } };
 
-    expect(codesFor(config)).toContain("PROVIDER_MISSING");
+    expect(codesFor(config)).toEqual([]);
+    expect(environmentEntry(config, "constructor")).toEqual({
+      provider: "@penvhq/provider-filesystem",
+    });
+  });
+
+  it("is undeclared when nothing declares it, rather than answering with `Object`", () => {
+    // A bare index for `constructor` answers with `Object` — an entry penv was
+    // never given, read as a provider it would then try to build.
+    expect(environmentEntry(valid, "constructor")).toBeUndefined();
+    expect(() => assertEnvironment("constructor", valid)).toThrow(UnknownEnvironmentError);
   });
 });
 
@@ -157,10 +162,12 @@ describe("loadConfigFrom", () => {
   it("loads a TypeScript config through jiti", () => {
     const root = makeProject(
       [
-        "interface Config { environments: string[]; providers: Record<string, { type: string }> }",
+        "interface Config { environments: Record<string, string | { provider: string }> }",
         "const config: Config = {",
-        '  environments: ["development", "production"],',
-        '  providers: { development: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-filesystem" } },',
+        "  environments: {",
+        '    development: "@penvhq/provider-filesystem",',
+        '    production: { provider: "@penvhq/provider-ssm" },',
+        "  },",
         "};",
         "export default config;",
         "",
@@ -169,13 +176,18 @@ describe("loadConfigFrom", () => {
 
     const config = loadConfigFrom(resolve(root, "penv.config.ts"));
 
-    expect(config.environments).toEqual(["development", "production"]);
-    expect(config.providers.production).toEqual({ type: "@penvhq/provider-filesystem" });
+    expect(Object.keys(config.environments)).toEqual(["development", "production"]);
+    expect(environmentEntry(config, "production")).toEqual({ provider: "@penvhq/provider-ssm" });
+    expect(environmentEntry(config, "development")).toEqual({
+      provider: "@penvhq/provider-filesystem",
+    });
     expect(validateConfig(config)).toEqual([]);
   });
 
   it("throws ConfigError naming the file when there is no default export", () => {
-    const root = makeProject('export const config = { environments: ["production"] };\n');
+    const root = makeProject(
+      'export const config = { environments: { production: "@penvhq/provider-ssm" } };\n',
+    );
     const file = resolve(root, "penv.config.ts");
 
     expect(() => loadConfigFrom(file)).toThrow(ConfigError);
@@ -202,7 +214,7 @@ describe("loadConfig", () => {
     const { config, file } = loadConfig(nested);
 
     expect(file).toBe(resolve(root, "penv.config.ts"));
-    expect(config.environments).toEqual(["development", "staging", "production"]);
+    expect(Object.keys(config.environments)).toEqual(["development", "staging", "production"]);
     expect(config.override?.["database-url"]).toBe("DATABASE_URL");
   });
 
@@ -221,10 +233,9 @@ describe("validateConfig", () => {
 
   it("rejects an environment named `local`", () => {
     const config: PenvConfig = {
-      environments: ["local", "production"],
-      providers: {
-        local: { type: "@penvhq/provider-filesystem" },
-        production: { type: "@penvhq/provider-filesystem" },
+      environments: {
+        local: "@penvhq/provider-filesystem",
+        production: "@penvhq/provider-filesystem",
       },
     };
 
@@ -240,8 +251,10 @@ describe("validateConfig", () => {
     const root = makeProject(
       [
         "export default {",
-        '  environments: ["local", "production"],',
-        '  providers: { local: { type: "@penvhq/provider-filesystem" }, production: { type: "@penvhq/provider-filesystem" } },',
+        "  environments: {",
+        '    local: "@penvhq/provider-filesystem",',
+        '    production: "@penvhq/provider-filesystem",',
+        "  },",
         "};",
         "",
       ].join("\n"),
@@ -254,41 +267,46 @@ describe("validateConfig", () => {
 
   it("rejects every other reserved token as an environment name", () => {
     for (const token of ["enc", "json", "toml", "yml"]) {
-      const config: PenvConfig = {
-        environments: [token],
-        providers: { [token]: { type: "@penvhq/provider-filesystem" } },
-      };
+      const config: PenvConfig = { environments: { [token]: "@penvhq/provider-filesystem" } };
       expect(codesFor(config)).toContain("RESERVED_TOKEN");
     }
   });
 
   it("rejects empty environments", () => {
-    const config: PenvConfig = { environments: [], providers: {} };
+    const config: PenvConfig = { environments: {} };
 
     const errors = validateConfig(config);
 
     expect(errors.map((error) => error.code)).toContain("CONFIG_ENVIRONMENTS_EMPTY");
   });
 
-  it("rejects a blank or duplicated environment name", () => {
-    const blank: PenvConfig = {
-      environments: ["  "],
-      providers: { "  ": { type: "@penvhq/provider-filesystem" } },
-    };
-    expect(codesFor(blank)).toContain("CONFIG_ENVIRONMENT_INVALID");
+  it("rejects an `environments` that is not an object", () => {
+    const config = { environments: "production" } as unknown as PenvConfig;
 
-    const duplicated: PenvConfig = {
-      environments: ["production", "production"],
-      providers: { production: { type: "@penvhq/provider-filesystem" } },
-    };
-    expect(codesFor(duplicated)).toContain("CONFIG_ENVIRONMENT_DUPLICATE");
+    expect(codesFor(config)).toContain("CONFIG_ENVIRONMENTS_INVALID");
   });
 
-  it("rejects a declared environment with no providers entry", () => {
-    const config: PenvConfig = {
-      environments: ["development", "production"],
-      providers: { development: { type: "@penvhq/provider-filesystem" } },
-    };
+  it("rejects a blank environment name", () => {
+    const blank: PenvConfig = { environments: { "  ": "@penvhq/provider-filesystem" } };
+
+    expect(codesFor(blank)).toContain("CONFIG_ENVIRONMENT_INVALID");
+  });
+
+  it("rejects an entry that is neither a package name nor an entry object", () => {
+    const config = { environments: { production: 7 } } as unknown as PenvConfig;
+
+    const errors = validateConfig(config);
+    const invalid = errors.find((error) => error.code === "ENVIRONMENT_ENTRY_INVALID");
+
+    expect(invalid).toBeDefined();
+    expect(invalid?.message).toContain("production");
+    expect(invalid?.remedy).toContain("provider");
+  });
+
+  it("rejects an entry object with no provider", () => {
+    const config = {
+      environments: { production: { path: "secret/production" } },
+    } as unknown as PenvConfig;
 
     const errors = validateConfig(config);
     const missing = errors.find((error) => error.code === "PROVIDER_MISSING");
@@ -297,124 +315,55 @@ describe("validateConfig", () => {
     expect(missing?.message).toContain("production");
   });
 
-  it("rejects a providers entry naming an undeclared environment", () => {
-    const config: PenvConfig = {
-      environments: ["development"],
-      providers: {
-        development: { type: "@penvhq/provider-filesystem" },
-        staging: { type: "@penvhq/provider-vault" },
-      },
-    };
+  it("rejects a legacy short provider name, naming the exact package rewrite", () => {
+    const config = { environments: { production: "vault" } } as unknown as PenvConfig;
 
     const errors = validateConfig(config);
-    const unknown = errors.find((error) => error.code === "UNKNOWN_ENVIRONMENT");
-
-    expect(unknown).toBeInstanceOf(UnknownEnvironmentError);
-    expect(unknown?.message).toContain("staging");
-  });
-
-  it("reports both directions at once", () => {
-    const config: PenvConfig = {
-      environments: ["development", "production"],
-      providers: {
-        development: { type: "@penvhq/provider-filesystem" },
-        staging: { type: "@penvhq/provider-vault" },
-      },
-    };
-
-    expect(codesFor(config)).toEqual(
-      expect.arrayContaining(["PROVIDER_MISSING", "UNKNOWN_ENVIRONMENT"]),
-    );
-  });
-
-  it("rejects a provider with no type", () => {
-    const config = {
-      environments: ["production"],
-      providers: { production: { path: "secret/production" } },
-    } as unknown as PenvConfig;
-
-    const errors = validateConfig(config);
-    const typeError = errors.find((error) => error.code === "PROVIDER_TYPE_MISSING");
-
-    expect(typeError).toBeDefined();
-    expect(typeError?.message).toContain("production");
-  });
-
-  it("rejects a legacy short provider type, naming the exact package rewrite", () => {
-    const config: PenvConfig = {
-      environments: ["production"],
-      providers: { production: { type: "vault" } },
-    };
-
-    const errors = validateConfig(config);
-    const legacy = errors.find((error) => error.code === "PROVIDER_TYPE_LEGACY");
+    const legacy = errors.find((error) => error.code === "PROVIDER_LEGACY");
 
     expect(legacy).toBeDefined();
     expect(legacy?.message).toContain("vault");
     expect(legacy?.remedy).toContain("@penvhq/provider-vault");
   });
 
-  it("rejects a provider type that is not a package name", () => {
-    const config: PenvConfig = {
-      environments: ["production"],
-      providers: { production: { type: "Not A Package!" } },
-    };
+  it("rejects a provider that is not a package name", () => {
+    const config = {
+      environments: { production: { provider: "Not A Package!" } },
+    } as unknown as PenvConfig;
 
     const errors = validateConfig(config);
-    const invalid = errors.find((error) => error.code === "PROVIDER_TYPE_INVALID");
+    const invalid = errors.find((error) => error.code === "PROVIDER_INVALID");
 
     expect(invalid).toBeDefined();
     expect(invalid?.message).toContain("production");
   });
 
-  it("accepts scoped and bare package names as provider types", () => {
+  it("accepts scoped and bare package names, in both entry forms", () => {
     const config: PenvConfig = {
-      environments: ["development", "staging", "production"],
-      providers: {
-        development: { type: "@penvhq/provider-filesystem" },
-        staging: { type: "@acme/penv-provider-doppler", location: "apps/web" },
-        production: { type: "penv-provider-custom" },
+      environments: {
+        development: "@penvhq/provider-filesystem",
+        staging: { provider: "@acme/penv-provider-doppler", project: "apps/web" },
+        production: "penv-provider-custom",
       },
     };
 
     const codes = validateConfig(config).map((error) => error.code);
-    expect(codes).not.toContain("PROVIDER_TYPE_LEGACY");
-    expect(codes).not.toContain("PROVIDER_TYPE_INVALID");
+    expect(codes).not.toContain("PROVIDER_LEGACY");
+    expect(codes).not.toContain("PROVIDER_INVALID");
   });
 
-  it("refuses a config still carrying a `sinks` block, naming the provider rewrite", () => {
+  it("rewrites the legacy `github` short name to its package", () => {
     const config = {
-      environments: ["production"],
-      providers: { production: { type: "@penvhq/provider-filesystem" } },
-      sinks: { production: { type: "github", repo: "acme/api" } },
+      environments: { production: { provider: "github" } },
     } as unknown as PenvConfig;
 
-    const errors = validateConfig(config);
-    const removed = errors.find((error) => error.code === "CONFIG_SINKS_REMOVED");
-
-    expect(removed).toBeDefined();
-    expect(removed?.remedy).toContain("@penvhq/provider-github");
-    expect(removed?.remedy).toContain("location");
-  });
-
-  it("stays quiet about sinks for a config that never declared one", () => {
-    expect(codesFor(valid)).not.toContain("CONFIG_SINKS_REMOVED");
-  });
-
-  it("rewrites the legacy `github` short type to its package", () => {
-    const config: PenvConfig = {
-      environments: ["production"],
-      providers: { production: { type: "github" } },
-    };
-
-    const legacy = validateConfig(config).find((error) => error.code === "PROVIDER_TYPE_LEGACY");
+    const legacy = validateConfig(config).find((error) => error.code === "PROVIDER_LEGACY");
     expect(legacy?.remedy).toContain("@penvhq/provider-github");
   });
 
   it("refuses a config still carrying a `names` block, naming the rename", () => {
     const config = {
-      environments: ["production"],
-      providers: { production: { type: "@penvhq/provider-filesystem" } },
+      environments: { production: "@penvhq/provider-filesystem" },
       names: { "database-url": "DATABASE_URL" },
     } as unknown as PenvConfig;
 
@@ -450,39 +399,35 @@ describe("validateConfig", () => {
     expect(duplicate?.message).toContain("DATABASE_URL");
   });
 
-  it("accepts a keys block declaring an env source per environment", () => {
+  it("accepts a keySource in both its forms", () => {
     const config: PenvConfig = {
-      ...valid,
-      keys: {
-        staging: { source: "env", id: "staging-key" },
-        production: { source: "env", id: "prod.2024_key-a" },
+      environments: {
+        development: "@penvhq/provider-filesystem",
+        staging: { provider: "@penvhq/provider-vault", keySource: "env" },
+        production: {
+          provider: "@penvhq/provider-ssm",
+          keySource: { source: "env", id: "prod.2024_key-a" },
+        },
       },
     };
 
     expect(validateConfig(config)).toEqual([]);
   });
 
-  it("accepts a config with no keys block at all", () => {
-    // An environment with no entry has no key source, which is not the same as
+  it("accepts a config where no environment declares a keySource", () => {
+    // An environment with none has no key source, which is not the same as
     // having no key — and is not a misconfiguration to report.
     expect(validateConfig(valid)).toEqual([]);
   });
 
-  it("rejects a keys entry naming an undeclared environment", () => {
-    const config: PenvConfig = { ...valid, keys: { qa: { source: "env", id: "prod" } } };
-
-    const errors = validateConfig(config);
-    const unknown = errors.find((error) => error.message.includes("`keys` block"));
-
-    expect(unknown).toBeInstanceOf(ConfigError);
-    expect(unknown?.message).toContain("qa");
-    expect(unknown?.remedy).toContain("whitelist");
-  });
-
   it("rejects an id containing `:`, which separates the envelope's fields", () => {
     const config: PenvConfig = {
-      ...valid,
-      keys: { production: { source: "env", id: "prod:2024" } },
+      environments: {
+        production: {
+          provider: "@penvhq/provider-ssm",
+          keySource: { source: "env", id: "p:2024" },
+        },
+      },
     };
 
     const errors = validateConfig(config);
@@ -490,31 +435,36 @@ describe("validateConfig", () => {
 
     expect(badId).toBeInstanceOf(ConfigError);
     expect(badId?.message).toContain("production");
-    expect(badId?.message).toContain("prod:2024");
+    expect(badId?.message).toContain("p:2024");
     expect(badId?.remedy).toContain("`:`");
   });
 
   it("rejects an empty id", () => {
-    const config: PenvConfig = { ...valid, keys: { production: { source: "env", id: "" } } };
+    const config: PenvConfig = {
+      environments: {
+        production: { provider: "@penvhq/provider-ssm", keySource: { source: "env", id: "" } },
+      },
+    };
 
     expect(validateConfig(config).some((error) => error.message.includes("declares id"))).toBe(
       true,
     );
   });
 
-  it("rejects an unknown key source, naming the ones penv knows", () => {
-    const config = {
-      ...valid,
-      keys: { production: { source: "vault", id: "prod" } },
-    } as unknown as PenvConfig;
+  it("rejects an unknown key source in either form, naming the ones penv knows", () => {
+    for (const keySource of ["vault", { source: "vault", id: "prod" }]) {
+      const config = {
+        environments: { production: { provider: "@penvhq/provider-ssm", keySource } },
+      } as unknown as PenvConfig;
 
-    const errors = validateConfig(config);
-    const source = errors.find((error) => error.message.includes("declares source"));
+      const errors = validateConfig(config);
+      const source = errors.find((error) => error.message.includes("declares source"));
 
-    expect(source).toBeInstanceOf(ConfigError);
-    expect(source?.message).toContain("production");
-    expect(source?.message).toContain("vault");
-    expect(source?.remedy).toContain("`env`");
+      expect(source).toBeInstanceOf(ConfigError);
+      expect(source?.message).toContain("production");
+      expect(source?.message).toContain("vault");
+      expect(source?.remedy).toContain("`env`");
+    }
   });
 
   it("accepts `keychain` as a source — it is a config-grammar name, refused at use", () => {
@@ -522,35 +472,27 @@ describe("validateConfig", () => {
     // cannot read. `resolveKeySource` is what refuses it, loudly, so `validate`
     // must not also report a config that is spelled correctly.
     const config: PenvConfig = {
-      ...valid,
-      keys: { production: { source: "keychain", id: "prod" } },
+      environments: { production: { provider: "@penvhq/provider-ssm", keySource: "keychain" } },
     };
 
     expect(validateConfig(config)).toEqual([]);
   });
 
-  it("rejects a keys entry that is not a key-source object", () => {
-    const config = { ...valid, keys: { production: "prod" } } as unknown as PenvConfig;
-
-    const errors = validateConfig(config);
-
-    expect(errors.some((error) => error.message.includes("not a key-source object"))).toBe(true);
-  });
-
-  it("rejects a keys block that is not an object", () => {
-    const config = { ...valid, keys: ["prod"] } as unknown as PenvConfig;
-
-    const errors = validateConfig(config);
-
-    expect(errors.some((error) => error.message.includes("`keys` in penv.config.ts"))).toBe(true);
-  });
-
-  it("reports every bad keys entry in one pass", () => {
+  it("rejects a keySource that is neither a source name nor a source object", () => {
     const config = {
-      ...valid,
-      keys: {
-        qa: { source: "env", id: "qa" },
-        production: { source: "vault", id: "prod:2024" },
+      environments: { production: { provider: "@penvhq/provider-ssm", keySource: ["env"] } },
+    } as unknown as PenvConfig;
+
+    const errors = validateConfig(config);
+
+    expect(errors.some((error) => error.message.includes("is not a key source"))).toBe(true);
+  });
+
+  it("reports every bad keySource in one pass", () => {
+    const config = {
+      environments: {
+        staging: { provider: "@penvhq/provider-vault", keySource: "aws-kms" },
+        production: { provider: "@penvhq/provider-ssm", keySource: { source: "vault", id: "p:1" } },
       },
     } as unknown as PenvConfig;
 
@@ -558,10 +500,66 @@ describe("validateConfig", () => {
   });
 
   it("collects rather than throws", () => {
-    const config: PenvConfig = { environments: [], providers: { production: { type: "" } } };
+    const config = {
+      environments: { "  ": "@penvhq/provider-filesystem", production: { provider: "" } },
+    } as unknown as PenvConfig;
 
     expect(() => validateConfig(config)).not.toThrow();
     expect(validateConfig(config).length).toBeGreaterThan(1);
+  });
+});
+
+/**
+ * The old spine — three parallel structures for one fact — is refused with the
+ * whole move named. No compat shim: one release, one migration error.
+ */
+describe("the merged `environments` record", () => {
+  it("refuses a config whose `environments` is still a list", () => {
+    const config = {
+      environments: ["production"],
+      providers: { production: { type: "@penvhq/provider-vercel", location: "penv-cloud" } },
+    } as unknown as PenvConfig;
+
+    const errors = validateConfig(config);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("CONFIG_ENVIRONMENTS_MERGED");
+    expect(errors[0]?.message).toContain("`environments` as a list");
+    expect(errors[0]?.message).toContain("`providers` block");
+  });
+
+  it("refuses a top-level `keys` block, naming its new home", () => {
+    const config = {
+      environments: { production: "@penvhq/provider-filesystem" },
+      keys: { production: { source: "env", id: "production" } },
+    } as unknown as PenvConfig;
+
+    const errors = validateConfig(config);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("CONFIG_ENVIRONMENTS_MERGED");
+    expect(errors[0]?.message).toContain("`keys` block");
+  });
+
+  it("names every move, so one refusal is the whole migration", () => {
+    const config = {
+      environments: ["production"],
+      providers: {},
+      keys: {},
+    } as unknown as PenvConfig;
+
+    const remedy = validateConfig(config)[0]?.remedy ?? "";
+
+    for (const move of ["`provider`", "`project`", "`target`", "`keySource`"]) {
+      expect(remedy).toContain(move);
+    }
+    // Before and after, both spelled out — the config edit is a copy, not a guess.
+    expect(remedy).toContain('type: "@penvhq/provider-vercel"');
+    expect(remedy).toContain('provider: "@penvhq/provider-vercel"');
+  });
+
+  it("stays quiet for a config on the new shape", () => {
+    expect(codesFor(valid)).not.toContain("CONFIG_ENVIRONMENTS_MERGED");
   });
 });
 
