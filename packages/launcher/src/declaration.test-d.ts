@@ -7,16 +7,17 @@
  * rather than by us — and because the open shape has one job: make the provider
  * name a checked value in `penv.config.ts` without pretending penv knows fields
  * the package never declared.
+ *
+ * Only resolution-robust assertions live here: the workspace-root `tsc` program
+ * cannot see a cross-package `declare module "@penvhq/core"` augmentation (the
+ * per-package programs can), so anything requiring the merged map is proven
+ * elsewhere — core's config.test-d.ts holds the validated entry to core's
+ * `provider`/`keySource`, and the artifact smoke test compiles a committed
+ * declaration against the packed dist.
  */
 
-import {
-  defineConfig,
-  type KeySourceDeclaration,
-  type ProviderConfig,
-  type ProviderConfigMap,
-  type ValidatedEnvironmentEntry,
-} from "@penvhq/core";
-import { describe, expectTypeOf, it } from "vitest";
+import { defineConfig, type ProviderConfig } from "@penvhq/core";
+import { describe, it } from "vitest";
 
 declare module "@penvhq/core" {
   interface ProviderConfigMap {
@@ -36,17 +37,5 @@ describe("the generated open shape", () => {
         },
       },
     });
-  });
-
-  /** The open shape widens what the provider declares, never what core writes beside it. */
-  it("still carries the fields core owns on every entry", () => {
-    expectTypeOf<
-      ValidatedEnvironmentEntry<{ readonly provider: "@acme/provider-generated" }>
-    >().toEqualTypeOf<
-      ProviderConfigMap["@acme/provider-generated"] & {
-        readonly provider: "@acme/provider-generated";
-        readonly keySource?: KeySourceDeclaration;
-      }
-    >();
   });
 });
