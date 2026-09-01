@@ -119,9 +119,9 @@ describe("what a framework actually loads", () => {
   it("counts nothing scoped when the whitelist is empty", () => {
     const root = makeDir([".env", ".env.production"]);
 
-    expect(
-      activeDotenvFiles(root, { environments: {} }).map((file) => file.name),
-    ).toEqual([".env"]);
+    expect(activeDotenvFiles(root, { environments: {} }).map((file) => file.name)).toEqual([
+      ".env",
+    ]);
   });
 });
 

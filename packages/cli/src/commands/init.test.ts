@@ -1074,10 +1074,7 @@ describe("re-running init on a project that already decided", () => {
 
   it("stops announcing that a project with environments has none", () => {
     const root = makeProject(NEXT, { src: true });
-    configured(
-      root,
-      '{ environments: { production: "@penvhq/provider-filesystem" } }',
-    );
+    configured(root, '{ environments: { production: "@penvhq/provider-filesystem" } }');
 
     const plan = planInit(root);
 

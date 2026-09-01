@@ -100,7 +100,9 @@ export function targetScope(project: Project, options: ScopeOptions, key: string
     throw new PenvError(
       "ENVIRONMENT_FLAG_EMPTY",
       `\`--env\` for parameter ${key} names no environment`,
-      `Pass a declared environment — ${environmentNames(project.config).map((e) => `\`${e}\``).join(", ")} — ` +
+      `Pass a declared environment — ${environmentNames(project.config)
+        .map((e) => `\`${e}\``)
+        .join(", ")} — ` +
         "e.g. `--env production`, or drop `--env` to write the scope that has no environment.",
     );
   }

@@ -239,7 +239,9 @@ function explicitEnvironment(options: ImportOptions, source: string, config: Pen
   throw new PenvError(
     "IMPORT_ENV_FLAG_EMPTY",
     `\`--env\` for the import of ${source} names no environment`,
-    `Pass a declared environment — ${environmentNames(config).map((e) => `\`${e}\``).join(", ")} — e.g. ` +
+    `Pass a declared environment — ${environmentNames(config)
+      .map((e) => `\`${e}\``)
+      .join(", ")} — e.g. ` +
       `\`--env production\`, or drop \`--env\` to import ${source} as the scope that has no ` +
       `environment. Nothing was imported.`,
   );
